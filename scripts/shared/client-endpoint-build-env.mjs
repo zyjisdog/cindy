@@ -12,6 +12,31 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const CLIENT_BUILD_REGIONS = Object.freeze(['cn', 'global', 'dev']);
 
+/**
+ * 客户端发行版本白名单。与 region **正交**:region 选面向的市场(决定端点与系统
+ * 身份),edition 选这一版装了什么能力与哪套标识符。见
+ * `packages/maker-shared/src/cindyEdition.ts` 与 `docs/dev-rules/intranet-edition.md`。
+ */
+export const CLIENT_BUILD_EDITIONS = Object.freeze(['oss', 'intranet']);
+
+/**
+ * 归一化并校验构建 edition。空值 → 默认 oss。
+ *
+ * ⚠️ 与同文件 `resolveClientBuildRegion` **同口径**:只 trim,**不** lowercase ——
+ * 构建期身份宁可 fail closed 也不静默纠正拼写。TS 侧 `resolveCindyEdition`
+ * 更宽松(有 toLowerCase),两者是有意保留各自既有风格的既有差异(region 同理),
+ * 不要单方面“修”成第三种行为。
+ */
+export function resolveClientBuildEdition(cindyEdition) {
+  const edition = cindyEdition?.trim() || 'oss';
+  if (!CLIENT_BUILD_EDITIONS.includes(edition)) {
+    throw new Error(
+      `Invalid Cindy edition: ${edition}; expected ${CLIENT_BUILD_EDITIONS.join(' or ')}`,
+    );
+  }
+  return edition;
+}
+
 /** 规范化并校验构建 region。 */
 export function resolveClientBuildRegion(authRegion) {
   const region = authRegion?.trim() || 'global';
@@ -91,6 +116,10 @@ export function desktopClientBuildEnv({ allowEnvOverride = true, authRegion, rep
       process.env.CINDY_AUTH_REGION?.trim() ||
       (allowEnvOverride ? process.env.VITE_CINDY_AUTH_REGION?.trim() : ''),
   );
+  const edition = resolveClientBuildEdition(
+    process.env.CINDY_EDITION?.trim() ||
+      (allowEnvOverride ? process.env.VITE_CINDY_EDITION?.trim() : ''),
+  );
   const override = allowEnvOverride
     ? process.env.VITE_ENDPOINT_MANIFEST_BASE_URL?.trim()
     : '';
@@ -99,6 +128,7 @@ export function desktopClientBuildEnv({ allowEnvOverride = true, authRegion, rep
     : '';
   return {
     VITE_CINDY_AUTH_REGION: region,
+    VITE_CINDY_EDITION: edition,
     VITE_ENDPOINT_MANIFEST_BASE_URL:
       override || loadEndpointManifestBaseUrl({ authRegion: region, repoRoot }),
     VITE_ENDPOINT_MANIFEST_PEER_BASE_URL:

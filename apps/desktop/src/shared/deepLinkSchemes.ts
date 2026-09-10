@@ -1,10 +1,12 @@
 /**
  * deepLinkSchemes — 深链 scheme 的 main / renderer 共用单点。
  *
- * scheme 事实源在 `@cindy/maker-shared/brand-identity`(`BRAND_IDENTITY.primaryScheme`
- * + `legacySchemes`,2026-07 品牌翻转后为 cindy 主 + xdt-maker 历史);本模块把它
- * 派生成解析 / 生成两侧需要的形态,双端(src/main、src/renderer)只从这里取值,
- * 不再各自硬编码字面量:
+ * scheme 事实源在 `@cindy/maker-shared/brand-identity`(`primaryScheme` +
+ * `legacySchemes`,2026-07 品牌翻转后为 cindy 主 + xdt-maker 历史)。本模块**经
+ * `currentBrandIdentity`**取本构建(region × edition)的值:内网版主 scheme 是
+ * `cindy-intranet` 且不认领公开版的历史 scheme(见 currentBrandIdentity / brandIdentity.ts)。
+ * 本模块把它派生成解析 / 生成两侧需要的形态,双端(src/main、src/renderer)只从
+ * 这里取值,不再各自硬编码字面量:
  *  - **生成**:新链接一律用主 scheme(`buildDeepLink` / `DEEP_LINK_URL_PREFIX`);
  *  - **解析**:主 + 历史 scheme 都认(`matchDeepLinkPrefix` / 正则 scheme 组),
  *    存量消息里的 `xdt-maker://` 老链接永远可点。
@@ -14,10 +16,10 @@
  * 无关,不从这里派生。
  */
 
-import { BRAND_IDENTITY, allDeepLinkSchemes } from '@cindy/maker-shared/brand-identity';
+import { CURRENT_BRAND_IDENTITY, allDeepLinkSchemes } from './currentBrandIdentity.js';
 
 /** 深链主 scheme(生成侧唯一使用的 scheme)。 */
-export const DEEP_LINK_PRIMARY_SCHEME: string = BRAND_IDENTITY.primaryScheme;
+export const DEEP_LINK_PRIMARY_SCHEME: string = CURRENT_BRAND_IDENTITY.primaryScheme;
 
 /** 解析 / OS 注册需要认的全部 scheme(主 + 历史),主 scheme 恒为首位。 */
 export const DEEP_LINK_SCHEMES: readonly string[] = allDeepLinkSchemes();

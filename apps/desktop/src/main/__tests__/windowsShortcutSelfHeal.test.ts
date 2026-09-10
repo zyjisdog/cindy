@@ -20,11 +20,13 @@ vi.mock('../logger', () => ({
 }));
 
 import { healWindowsShortcuts, type ShortcutSelfHealDeps } from '../windowsShortcutSelfHeal';
-import { brandAppId, brandExecutableName } from '@cindy/maker-shared/brand-identity';
+import { CURRENT_BRAND_IDENTITY, brandAppId, brandExecutableName } from '../../shared/currentBrandIdentity.js';
 
 // 本文件专测 CN 产物的历史快捷方式修复，显式固定区域，避免继承宿主环境。
+// 期望值从**本构建身份档案**派生(不是公开版档案):实现的 SHORTCUT_BASENAME / AUMID
+// 都走 edition-bound 访问器，测试必须同源，否则 intranet 构建下会误报。
 const EXPECTED_APP_ID = brandAppId('cn');
-// 重建目标 .lnk 基名(与实现的 SHORTCUT_BASENAME 同源;cn = 'Cindy')。
+// 重建目标 .lnk 基名(与实现的 SHORTCUT_BASENAME 同源)。
 const NEW_SHORTCUT_NAME = brandExecutableName('cn');
 
 const EXE = 'C:\\Program Files\\xdt-maker\\xdt-maker.exe';

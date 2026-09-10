@@ -12,13 +12,14 @@ import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import type { ForgeArch, ForgeConfig, ForgePlatform } from '@electron-forge/shared-types';
 import {
-  BRAND_IDENTITY,
   allDeepLinkSchemes,
   brandAppId,
   brandBundleIdPrefix,
   brandExecutableName,
+  brandIdentityForEdition,
   resolveCindyRegion,
 } from '@cindy/maker-shared/brand-identity';
+import { resolveCindyEdition } from '@cindy/maker-shared/cindy-edition';
 import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 import { swiftTargetTriple, swiftTargetTriplesForForgeArch } from './src/main/remote-desktop/swiftTarget';
@@ -88,8 +89,17 @@ const CINDY_REGION = resolveCindyRegion(
 // process.env):防止「只设 CINDY_AUTH_REGION 直跑 forge」时 NSIS appId 用
 // global 而 main 烘焙的 CURRENT_APP_ID 落回 cn——AUMID 漂移 = toast 静默丢失。
 process.env.VITE_CINDY_AUTH_REGION = CINDY_REGION;
-const CINDY_APP_ID = brandAppId(CINDY_REGION);
-const CINDY_UTI_PREFIX = brandBundleIdPrefix(CINDY_REGION);
+// 发行版本(edition)与区域正交:区域选"面向哪个市场",edition 选"装了什么能力"
+// 与哪套标识符。默认 oss —— 公开构建的 appId / exe 名 / userData 与引入本维度前
+// 逐字节一致。回写理由同上:必须与 main 烘焙的 CURRENT_APP_ID 同源。
+const CINDY_EDITION = resolveCindyEdition(
+  process.env.CINDY_EDITION?.trim() || process.env.VITE_CINDY_EDITION,
+);
+process.env.VITE_CINDY_EDITION = CINDY_EDITION;
+/** 本构建的标识符身份档案(region 选字段值,edition 选档案)。 */
+const CINDY_IDENTITY = brandIdentityForEdition(CINDY_EDITION);
+const CINDY_APP_ID = brandAppId(CINDY_REGION, CINDY_IDENTITY);
+const CINDY_UTI_PREFIX = brandBundleIdPrefix(CINDY_REGION, CINDY_IDENTITY);
 /**
  * 可执行文件基名,按区域派生(cn/global 同值 'Cindy',dev 'CindyDev';
  * 2026-07-26 显示名统一决策,cn/global 文件层双装隔离随之放弃,见
@@ -97,9 +107,9 @@ const CINDY_UTI_PREFIX = brandBundleIdPrefix(CINDY_REGION);
  * 入口按同一区域切换(src/main/regionUserData.ts),两端从 brand-identity
  * 同源派生,cn/global 数据仍分库。
  */
-const CINDY_EXE = brandExecutableName(CINDY_REGION);
-/** 更新器二进制文件名(cindy-updater.exe)。 */
-const UPDATER_EXE = `${BRAND_IDENTITY.updaterName}.exe`;
+const CINDY_EXE = brandExecutableName(CINDY_REGION, CINDY_IDENTITY);
+/** 更新器二进制文件名(cindy-updater.exe)。两版同值，见 brandIdentity.ts 头注。 */
+const UPDATER_EXE = `${CINDY_IDENTITY.updaterName}.exe`;
 
 // discord.js is externalized from the main Vite bundle because its circular
 // CommonJS graph crashes when Rollup reorders it. Its dependency tree contains
@@ -1360,7 +1370,7 @@ const makers: ForgeConfig['makers'] = [
       categories: ['Development'],
       icon: path.join(__dirname, 'resources', 'icon.png'),
       // 双 scheme:cindy 主 + xdt-maker 兼容(老分享链接不死)。
-      mimeType: allDeepLinkSchemes().map((s) => `x-scheme-handler/${s}`),
+      mimeType: allDeepLinkSchemes(CINDY_IDENTITY).map((s) => `x-scheme-handler/${s}`),
       maintainer: 'Lizi <feedback@cindy.app>',
       // deb 包名规范要求小写;跟随区域 exe 名(cn/global cindy / dev cindydev)。
       name: CINDY_EXE.toLowerCase(),
@@ -1422,7 +1432,7 @@ if (isWin) {
         //
         // prepackaged 模式下 doPack 直接 return,extraMetadata 不会重写
         // 已由 electron-forge 打好的 app.asar 内 package.json。
-        extraMetadata: { description: BRAND_IDENTITY.displayName },
+        extraMetadata: { description: CINDY_IDENTITY.displayName },
         nsis: {
           oneClick: false,
           allowToChangeInstallationDirectory: true,
@@ -1478,13 +1488,13 @@ const config: ForgeConfig = {
     appBundleId: CINDY_APP_ID,
     // exe 资源元数据(任务管理器进程名、文件右键属性的显示层)。只影响展示,
     // 与 exe 文件名 / AUMID / userData 等标识符解耦;显示层两区共用 Cindy
-    // (与 mac 显示名口径一致)。FileDescription 走 BRAND_IDENTITY.displayName,
+    // (与 mac 显示名口径一致)。FileDescription 走 CINDY_IDENTITY.displayName,
     // 与 NSIS maker 的 extraMetadata.description 同一表达式——安装器/卸载器
     // 与主 exe 的「说明」字段必须同值,否则 dev 包会安装前后显示两个名字。
     win32metadata: {
       CompanyName: 'XD',
       ProductName: 'Cindy',
-      FileDescription: BRAND_IDENTITY.displayName,
+      FileDescription: CINDY_IDENTITY.displayName,
     },
     icon: 'resources/icon',
     // 自定义 URL scheme: xdt-maker://session/<id> | xdt-maker://project/<encoded-workingDir>
@@ -1494,7 +1504,7 @@ const config: ForgeConfig = {
     //          main/deepLink.ts registerDeepLinkProtocol()。
     protocols: [
       // 双 scheme 注册:cindy:// 主 + xdt-maker:// 永久兼容(存量分享链接不死)。
-      { name: 'Cindy Deep Link', schemes: [...allDeepLinkSchemes()] },
+      { name: 'Cindy Deep Link', schemes: [...allDeepLinkSchemes(CINDY_IDENTITY)] },
     ],
     // macOS 文件夹右键 "打开方式 → Cindy" 入口:
     //   声明 app 能接受 public.folder, Finder 自动把 Cindy 出现在 "打开方式" 列表。

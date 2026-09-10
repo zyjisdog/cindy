@@ -1,14 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
+import { CURRENT_BRAND_IDENTITY } from '../../shared/currentBrandIdentity.js';
 
 import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
 import { readModelVisibilityAdoption } from './modelVisibilityAdoption.js';
 
 /** The canonical local profile path, shared by its creator and the early preference IPC. */
 export function ownerDatabasePath(userDataDir: string, ownerId: string): string {
-  return path.join(userDataDir, `${BRAND_IDENTITY.dbFilePrefix}-${ownerId}.db`);
+  return path.join(userDataDir, `${CURRENT_BRAND_IDENTITY.dbFilePrefix}-${ownerId}.db`);
 }
 
 export type ModelDefaultsProfileOrigin = 'new' | 'existing' | 'pending' | 'adopted-local';

@@ -11,8 +11,15 @@
  * 停留在冻结渠道,待后续独立设计的自动迁移方案接走。
  *
  * ⚠️ 语义边界:
- *  - 这是**构建期单点,不是运行时开关**。区域(cn/global)是唯一的构建期维度,
- *    经打包命令的 CINDY_AUTH_REGION 选择,默认 global。appId / userData 目录名
+ *  - 这是**构建期单点,不是运行时开关**。构建期有**两个正交维度**:
+ *    ① 区域 region(cn/global/dev)—— "面向哪个市场",经 CINDY_AUTH_REGION 选择,
+ *       默认 global,受 docs/product-rules/region-and-editions.md 约束;
+ *    ② 发行版本 edition(oss/intranet)—— "这一版装了什么能力",见 cindyEdition.ts。
+ *    本文件按 region 派生**字段值**、按 edition 派生**身份档案**(`brandIdentityForEdition`)。
+ *    ⚠️ **不要把 intranet 做成 CindyRegion 的第四个值** —— 它不是一个面向用户的
+ *    发行区域,会给 region-and-editions.md §2.1 制造无解的第四值,并破坏
+ *    scripts/__tests__/brand-identity-sync.test.mjs 对区域映射键集(['cn','dev','global'])的断言。
+ *  - appId / userData 目录名
  *    按区域派生(cn 与 global 是两个可并存的系统身份,appId 与 mobile 的
  *    com.xd.cindycn / com.xd.cindy 同一套);exe 名 cn/global 同值 'Cindy'
  *    (2026-07-26 显示名统一决策,文件层双装隔离随之放弃,dev 仍独立)。
@@ -35,6 +42,10 @@
  *  - release / publish / smoke 脚本(产物名、OSS 前缀)
  */
 
+import {
+  DEFAULT_CINDY_EDITION,
+  type CindyEdition,
+} from './cindyEdition.js';
 import { BRAND_NAME } from './branding.js';
 
 /**
@@ -186,6 +197,86 @@ export const BRAND_IDENTITY: BrandIdentity = Object.freeze({
   dbFilePrefix: 'cindy',
   legacyDbFilePrefixes: Object.freeze(['xdt-maker']),
 });
+
+/**
+ * 内网个人版的标识符身份(edition = 'intranet')。
+ *
+ * 存在理由:内网版必须与公开发行版**在系统层完全不相干** —— 独立的 appId /
+ * exe 名 / userData 目录 / 深链 scheme，既避免两边争抢同一份用户数据，
+ * 也避免公开发行版的自更新覆盖内网版安装(反过来同样)。
+ *
+ * 取值上的三条规矩:
+ *  1) **不带任何与发行版重名的标识符**:公开版的裸值(`Cindy` / `com.xd.cindy` /
+ *     `CindyGlobal`)在本档案里一个都不出现，符合 region-and-editions.md §2.1
+ *     「无后缀的归 global」的精神——内网版永远带自己的限定，不占裸值。
+ *  2) **所有区域键取同值**:内网版没有 cn/global 市场分化(单一内网部署)，
+ *     但 `BrandIdentity` 的区域映射类型要求三键齐备。同值是**有意**的语义
+ *     ——它表达"本 edition 不随区域变化"，而不是"还没填完"。
+ *  3) **`updaterName` 与公开版同值(保持 `cindy-updater`)**。这不是疏忽:
+ *     `docs/dev-rules/cindy-updater.md` 规定任何更新链路改动必须先经仓库维护者
+ *     确认。内网版按 D7 关闭自动更新(`autoUpdate: false`)，更新器根本不会被
+ *     调用，因此改这个名对功能无收益、却会实打实地碰更新链路 —— 故**不改**。
+ *     将来若真要启用内网自更新，必须同时改这里与 updateService，并先过那道门。
+ *
+ * `displayName` 保持与公开版同源(`BRAND_NAME`)，这是有意的:身份层管 OS 注册与
+ * 磁盘/协议标识，展示名归 branding.ts。内网版在用户眼里仍是 Cindy，只是另一份
+ * 安装、另一份数据。见 branding.ts 头部的"展示名与标识符解耦"说明。
+ */
+export const INTRANET_BRAND_IDENTITY: BrandIdentity = Object.freeze({
+  displayName: BRAND_NAME,
+  executableName: 'CindyIntranet',
+  executableNameByRegion: Object.freeze({
+    cn: 'CindyIntranet',
+    global: 'CindyIntranet',
+    dev: 'CindyIntranet',
+  }),
+  appIdByRegion: Object.freeze({
+    cn: 'com.cindy.intranet',
+    global: 'com.cindy.intranet',
+    dev: 'com.cindy.intranet',
+  }),
+  primaryScheme: 'cindy-intranet',
+  // 空数组是有意的:内网版没有历史 scheme。绝不注册公开版的 `cindy` / `xdt-maker`
+  // —— 同机装两份时会把公开版的深链抢过来。
+  legacySchemes: Object.freeze([]),
+  userDataDirName: 'CindyIntranet',
+  userDataDirNameByRegion: Object.freeze({
+    cn: 'CindyIntranet',
+    global: 'CindyIntranet',
+    dev: 'CindyIntranet',
+  }),
+  legacyUserDataDirNames: Object.freeze([]),
+  legacyUserDataDirNamesByRegion: Object.freeze({
+    cn: Object.freeze([]),
+    global: Object.freeze([]),
+    dev: Object.freeze([]),
+  }),
+  legacyDialogueUserDataDirNamesByRegion: Object.freeze({
+    cn: Object.freeze([]),
+    global: Object.freeze([]),
+    dev: Object.freeze([]),
+  }),
+  cdnPrefix: 'cindy-intranet',
+  // 同公开版:见上方头注第 3 条，改它要过 cindy-updater.md 的门。
+  updaterName: 'cindy-updater',
+  dbFilePrefix: 'cindy-intranet',
+  legacyDbFilePrefixes: Object.freeze([]),
+});
+
+/**
+ * 按发行版本取标识符身份档案。
+ *
+ * 这是"edition → 身份"的**唯一**分派点:所有需要按 edition 切换 appId / exe 名 /
+ * userData 目录 / scheme 的消费方都从这里取档案，再交给 brandAppId / brandExecutableName
+ * / brandUserDataDirName 等按 region 取值，不要在调用点各自写 if (edition === ...)。
+ *
+ * 默认 `oss` = 与引入本维度之前完全一致的档案，保证公开构建零行为变化。
+ */
+export function brandIdentityForEdition(
+  edition: CindyEdition = DEFAULT_CINDY_EDITION,
+): BrandIdentity {
+  return edition === 'intranet' ? INTRANET_BRAND_IDENTITY : BRAND_IDENTITY;
+}
 
 /** 按区域取 appId(AUMID / bundle id);默认 global。 */
 export function brandAppId(

@@ -18,7 +18,7 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
+import { allUserDataDirNames } from '../../shared/currentBrandIdentity.js';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { classifyAgentCommandLine } from '../agent-process-priority.js';

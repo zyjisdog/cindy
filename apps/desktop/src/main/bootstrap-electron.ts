@@ -295,9 +295,9 @@ import {
 } from './file-browser/remote-file-cache';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
 import {
-  BRAND_IDENTITY,
+  CURRENT_BRAND_IDENTITY,
   legacyDialogueUserDataDirNames,
-} from '@cindy/maker-shared/brand-identity';
+} from '../shared/currentBrandIdentity.js';
 import * as videoCacheStore from './videoCacheStore';
 import { imageSchemePrivilege, registerImageProtocolHandler } from './imageProtocol';
 import { videoSchemePrivilege, registerVideoProtocolHandler } from './videoProtocol';
@@ -8544,7 +8544,7 @@ app.on('ready', async () => {
           user.id,
           createProductionLocalProfileDataMigrationDeps(
             app.getPath('userData'),
-            BRAND_IDENTITY.dbFilePrefix,
+            CURRENT_BRAND_IDENTITY.dbFilePrefix,
             () => hasExclusiveSharedLegacyUserDataAccess(),
           ),
         );
@@ -8568,13 +8568,13 @@ app.on('ready', async () => {
         user.id,
         createProductionLocalProfileDataMigrationDeps(
           app.getPath('userData'),
-          BRAND_IDENTITY.dbFilePrefix,
+          CURRENT_BRAND_IDENTITY.dbFilePrefix,
           () => hasExclusiveSharedLegacyUserDataAccess(),
           process.platform === 'win32'
             ? () =>
                 acquireWindowsPackagedInstanceBarrier({
                   userDataDir: app.getPath('userData'),
-                  programName: BRAND_IDENTITY.executableName,
+                  programName: CURRENT_BRAND_IDENTITY.executableName,
                 })
             : undefined,
         ),

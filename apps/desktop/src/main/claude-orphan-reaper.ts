@@ -27,7 +27,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
+import { allUserDataDirNames } from '../shared/currentBrandIdentity.js';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { createLogger } from './logger';
 

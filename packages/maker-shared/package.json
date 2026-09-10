@@ -13,6 +13,7 @@
     "./agent-task": "./src/agentTask.ts",
     "./branding": "./src/branding.ts",
     "./brand-identity": "./src/brandIdentity.ts",
+    "./cindy-edition": "./src/cindyEdition.ts",
     "./chat-quotes": "./src/chatQuotes.ts",
     "./command-display": "./src/commandDisplay.ts",
     "./client-endpoints": "./src/clientEndpoints.ts",

@@ -12,27 +12,35 @@ import {
   mobileClientBundleEnv,
   mobileClientBundleProcessEnv,
   mobileClientBuildEnv,
+  resolveClientBuildEdition,
 } from '../shared/client-endpoint-build-env.mjs';
 import { resolveReleaseCdnBaseUrl } from '../shared/release-env.mjs';
 
 const tempDirs = [];
 const originalReleaseCdn = process.env.XDT_CDN_BASE_URL;
 const originalCindyAuthRegion = process.env.CINDY_AUTH_REGION;
+const originalCindyEdition = process.env.CINDY_EDITION;
+
+function restoreEnv(key, value) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
 
 afterEach(() => {
-  if (originalReleaseCdn === undefined) delete process.env.XDT_CDN_BASE_URL;
-  else process.env.XDT_CDN_BASE_URL = originalReleaseCdn;
-  if (originalCindyAuthRegion === undefined) delete process.env.CINDY_AUTH_REGION;
-  else process.env.CINDY_AUTH_REGION = originalCindyAuthRegion;
+  restoreEnv('XDT_CDN_BASE_URL', originalReleaseCdn);
+  restoreEnv('CINDY_AUTH_REGION', originalCindyAuthRegion);
+  restoreEnv('CINDY_EDITION', originalCindyEdition);
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('desktop/mobile 构建从 region 清单的 cdnBaseUrl 生成自举环境变量', () => {
   const repoRoot = writeRepoFixtures();
   delete process.env.CINDY_AUTH_REGION;
+  delete process.env.CINDY_EDITION;
 
   assert.deepEqual(desktopClientBuildEnv({ allowEnvOverride: false, repoRoot }), {
     VITE_CINDY_AUTH_REGION: 'global',
+    VITE_CINDY_EDITION: 'oss',
     VITE_ENDPOINT_MANIFEST_BASE_URL: 'https://hotfix-global.example.invalid/app',
     VITE_ENDPOINT_MANIFEST_PEER_BASE_URL: 'https://hotfix-cn.example.invalid/app',
   });
@@ -177,6 +185,48 @@ test('发布 CDN 只接受显式 XDT_CDN_BASE_URL', () => {
   assert.throws(() => resolveReleaseCdnBaseUrl(), /XDT_CDN_BASE_URL/);
   process.env.XDT_CDN_BASE_URL = 'https://release.example.invalid/app///';
   assert.equal(resolveReleaseCdnBaseUrl(), 'https://release.example.invalid/app');
+});
+
+test('构建 edition 默认 oss 并接受 intranet,非法值 fail closed', () => {
+  const repoRoot = writeRepoFixtures();
+
+  // 未注入 → oss,且**不**落到 intranet(缺省方向必须落在公开发行版,
+  // 与 region 缺省落 global 同一取舍:误发错能力集的包比让人显式指定更糟)。
+  delete process.env.CINDY_EDITION;
+  assert.equal(resolveClientBuildEdition(''), 'oss');
+  assert.equal(resolveClientBuildEdition('   '), 'oss');
+  assert.equal(resolveClientBuildEdition(undefined), 'oss');
+  assert.equal(desktopClientBuildEnv({ allowEnvOverride: false, repoRoot }).VITE_CINDY_EDITION, 'oss');
+
+  assert.equal(resolveClientBuildEdition('intranet'), 'intranet');
+  process.env.CINDY_EDITION = 'intranet';
+  assert.equal(
+    desktopClientBuildEnv({ allowEnvOverride: false, repoRoot }).VITE_CINDY_EDITION,
+    'intranet',
+  );
+
+  // 空白归一(trim);大小写**不**归一 —— 与同文件 resolveClientBuildRegion 同口径,
+  // 构建期身份宁可 fail closed 也不静默纠正拼写。TS 侧 resolveCindyEdition 更宽松
+  // (带 toLowerCase),这是既有的 TS/.mjs 风格差异(region 也有),不在本 PR 收敛。
+  assert.equal(resolveClientBuildEdition(' intranet '), 'intranet');
+  assert.throws(() => resolveClientBuildEdition(' Intranet '), /Invalid Cindy edition/);
+
+  for (const invalid of ['0ss', 'personal', 'intranet2']) {
+    assert.throws(() => resolveClientBuildEdition(invalid), /Invalid Cindy edition/);
+  }
+
+  // edition 与 region 正交:改 edition 不得动 region 及其端点基址。
+  const withIntranet = desktopClientBuildEnv({
+    allowEnvOverride: false,
+    authRegion: 'cn',
+    repoRoot,
+  });
+  assert.equal(withIntranet.VITE_CINDY_AUTH_REGION, 'cn');
+  assert.equal(withIntranet.VITE_CINDY_EDITION, 'intranet');
+  assert.equal(
+    withIntranet.VITE_ENDPOINT_MANIFEST_BASE_URL,
+    'https://hotfix-cn.example.invalid/app',
+  );
 });
 
 function writeRepoFixtures() {

@@ -60,6 +60,12 @@
   UI 标注，或涉及两个版本关系的对外文案前，必须先读
   `docs/product-rules/region-and-editions.md`：**无限定词身份归 Global，未显式指定
   区域一律落在 `global`，只标注中国大陆版**。
+- 新增或修改发行版本（edition，`oss` / `intranet`）维度、构建身份与能力开关，或改动
+  内网版（`CINDY_EDITION=intranet`）相关逻辑、打包入口与端点来源前，必须先读
+  `docs/dev-rules/intranet-edition.md`：**edition 与 region 是两个正交维度**，
+  `intranet` 不是第四个区域值；引入 edition 不得改变公开发行版行为（`oss` 全开）；
+  内网版身份必须与公开版在系统层零碰撞，且**不得改更新器名**（要过
+  `cindy-updater.md` 的门）。
 - 新增或修改任何界面、组件、布局、样式、动效或 UI 文案前，必须先读权威设计规范
   `docs/design-rules/DESIGN.md`；设计文档索引见
   `docs/design-rules/cindy-design-system.md`。

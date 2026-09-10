@@ -40,6 +40,12 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_CINDY_AUTH_REGION': JSON.stringify(
         readViteEnv('VITE_CINDY_AUTH_REGION'),
       ),
+      // 发行版本(edition)。与 region 正交:region 选市场(端点/系统身份),
+      // edition 选能力集与标识符档案。烘焙成字面量后,shared/cindyEdition.ts
+      // 的 CURRENT_CINDY_EDITION 即构建期常量。
+      'import.meta.env.VITE_CINDY_EDITION': JSON.stringify(
+        readViteEnv('VITE_CINDY_EDITION'),
+      ),
       // 本区与对端的两份端点清单自举基址(业务端点已全部改走运行期清单,
       // 旧的 VITE_API_BASE_URL 等端点 define 随之退役)。dev 构建也注入 cn 值,
       // `--endpoints-cdn` 才能零配置直连线上清单。

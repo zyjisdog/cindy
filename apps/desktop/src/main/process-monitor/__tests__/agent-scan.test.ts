@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
+import { allUserDataDirNames } from '../../../shared/currentBrandIdentity.js';
 
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion.js';
 import {

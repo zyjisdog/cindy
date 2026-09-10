@@ -8,7 +8,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { brandExecutableName } from '@cindy/maker-shared/brand-identity';
+import { CURRENT_BRAND_IDENTITY, brandExecutableName } from '../../shared/currentBrandIdentity.js';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -21,16 +22,23 @@ import {
 } from '../installCliCommand';
 
 describe('CLI_COMMAND_NAME 跟随 edition 品牌', () => {
-  it('测试环境(未注入区域 → 默认 global)命令名为 cindy', () => {
-    expect(CLI_COMMAND_NAME).toBe('cindy');
-    expect(CLI_LINK_PATH).toBe('/usr/local/bin/cindy');
+  it('命令名 = 本构建身份档案中当前区域的可执行名,小写化', () => {
+    // 从**身份档案字段**而不是同一个 helper 取期望值:这才是真正的交叉校验
+    // (证明实现取的是区域档案值,而非某个写死的名字)。
+    const exeName = CURRENT_BRAND_IDENTITY.executableNameByRegion[CURRENT_CINDY_REGION];
+    expect(CLI_COMMAND_NAME).toBe(exeName.toLowerCase());
+    expect(CLI_LINK_PATH).toBe(`/usr/local/bin/${CLI_COMMAND_NAME}`);
   });
 
-  it('由区域可执行名小写化:global / cn → cindy,内部 dev → cindydev', () => {
-    // global 与 cn 展示名统一为 Cindy(2026-07-26 决策),故命令名同为 cindy。
-    expect(brandExecutableName('global').toLowerCase()).toBe('cindy');
-    expect(brandExecutableName('cn').toLowerCase()).toBe('cindy');
-    expect(brandExecutableName('dev').toLowerCase()).toBe('cindydev');
+  it('命令名随区域:cn / global 同值,内部 dev 独立', () => {
+    // global 与 cn 展示名统一为 Cindy(2026-07-26 决策)故同值;dev 保持独立名。
+    // 断言写成 identity 派生而非写死 'cindy',这样它在 oss / intranet 两版都成立
+    // (具体名字由 brandIdentity.test.ts 钉在身份层)。
+    const cn = brandExecutableName('cn').toLowerCase();
+    const global = brandExecutableName('global').toLowerCase();
+    const dev = brandExecutableName('dev').toLowerCase();
+    expect(cn).toBe(global);
+    expect(dev).not.toBe(cn);
   });
 });
 

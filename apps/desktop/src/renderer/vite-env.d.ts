@@ -2,6 +2,12 @@
 
 interface ImportMetaEnv {
   readonly VITE_CINDY_AUTH_REGION: 'cn' | 'global' | 'dev';
+  /**
+   * 发行版本(oss/intranet)。与 region 正交:region 选市场,edition 选能力集与
+   * 标识符档案。未注入时 vite define / Vite env 会给出空串,由
+   * `resolveCindyEdition` 归一为 `oss`(与 region 同一种处理)。
+   */
+  readonly VITE_CINDY_EDITION: 'oss' | 'intranet';
   /** 当前构建区域的端点清单自举基址；业务端点走 electronAPI.clientEndpoints。 */
   readonly VITE_ENDPOINT_MANIFEST_BASE_URL: string;
   /** 另一物理区域的受信任端点清单自举基址。 */

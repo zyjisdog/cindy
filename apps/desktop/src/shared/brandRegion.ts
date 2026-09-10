@@ -7,15 +7,24 @@
  * (com.xd.cindycn / com.xd.cindy,与 mobile 同一套命名)。
  *
  * ⚠️ AUMID 三位一体:本文件的 CURRENT_APP_ID 必须与 NSIS appId(forge.config
- * 按同一 region 从 brandAppId() 取值)、快捷方式 AUMID 逐字符一致,否则
+ * 按同一 region+edition 从 brandAppId() 取值)、快捷方式 AUMID 逐字符一致,否则
  * Windows toast 通知被静默丢弃。
+ *
+ * 本文件只负责 **region 解析** 与 `CURRENT_APP_ID`。identity 档案与其派生访问器
+ * 在 `currentBrandIdentity.ts`(那里把 edition 绑死,避免漏传 identity 退回公开版)。
+ * appId 的完整派生链是 `brandAppId(region) + CURRENT_BRAND_IDENTITY`,即
+ * `brandAppId(region, brandIdentityForEdition(edition))`;forge / main /
+ * 快捷方式三方必须同源。
  */
 
 import {
-  brandAppId,
   resolveCindyRegion,
   type CindyRegion,
 } from '@cindy/maker-shared/brand-identity';
+
+import { CURRENT_BRAND_IDENTITY, brandAppId } from './currentBrandIdentity.js';
+
+export { CURRENT_BRAND_IDENTITY };
 
 /** 本构建的区域(构建期烘焙;dev 默认 global)。 */
 export const CURRENT_CINDY_REGION: CindyRegion = resolveCindyRegion(

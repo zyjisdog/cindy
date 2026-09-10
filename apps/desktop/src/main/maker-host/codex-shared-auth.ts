@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { brandUserDataDirName } from '@cindy/maker-shared/brand-identity';
+import { brandUserDataDirName } from '../../shared/currentBrandIdentity.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { shouldSuppressLocalCodexAuth } from './codex-auth-invalidation.js';
 

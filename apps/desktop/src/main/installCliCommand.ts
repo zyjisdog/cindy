@@ -38,7 +38,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { brandExecutableName } from '@cindy/maker-shared/brand-identity';
+import { brandExecutableName } from '../shared/currentBrandIdentity.js';
 
 import { createLogger, maskPath } from './logger';
 import {

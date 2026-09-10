@@ -45,7 +45,7 @@ import {
 import { readReloginFlag, clearReloginFlag, enableUncustomizedBetaChannel } from './updateService';
 import { probeBetaManifest } from './manifestService';
 import { isEnableBetaUserCustomized, readUpdateChannelSettings } from './updateChannelStore';
-import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
+import { CURRENT_BRAND_IDENTITY } from '../shared/currentBrandIdentity.js';
 import * as canaryFlagStore from './canaryFlagStore';
 import { decodeAccessTokenOrgSlug } from './authTokenClaims';
 import { getProviderSecretStore } from './secrets/providerSecretStore.js';
@@ -2554,7 +2554,7 @@ function recoverCloudOwnerDataReservations(committedOwnerId: string | null): boo
   const profileRecovery = recoverPendingLocalProfileDataOwner(
     committedOwnerId,
     app.getPath('userData'),
-    BRAND_IDENTITY.dbFilePrefix,
+    CURRENT_BRAND_IDENTITY.dbFilePrefix,
   );
   const nativeRecovery = recoverPendingLegacyNativeProviderAuthOwner(committedOwnerId);
   return profileRecovery !== 'failed' && nativeRecovery !== 'failed';
@@ -2585,7 +2585,7 @@ function reserveCloudOwnerData(
     const profileReservation = reserveLocalProfileDataOwnerDetailed(
       profileReservationOwnerId,
       app.getPath('userData'),
-      BRAND_IDENTITY.dbFilePrefix,
+      CURRENT_BRAND_IDENTITY.dbFilePrefix,
     );
     if (profileReservation.status === 'failed') {
       throw new Error('local profile data reservation failed before cloud owner commit');
@@ -2595,7 +2595,7 @@ function reserveCloudOwnerData(
         releaseLocalProfileDataOwner(
           profileReservationOwnerId,
           app.getPath('userData'),
-          BRAND_IDENTITY.dbFilePrefix,
+          CURRENT_BRAND_IDENTITY.dbFilePrefix,
           profileReservation.claimToken!,
         );
       });
@@ -2658,7 +2658,7 @@ function repairStableCloudOwnerDataReservationsWhileLocked(ownerId: string): boo
     profileReservation = reserveCommittedLocalProfileDataOwnerDetailed(
       profileReservationOwnerId,
       app.getPath('userData'),
-      BRAND_IDENTITY.dbFilePrefix,
+      CURRENT_BRAND_IDENTITY.dbFilePrefix,
     );
   } catch (error) {
     log.warn('stable cloud owner local profile reservation repair failed', {

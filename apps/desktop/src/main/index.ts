@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { exit, stderr } from 'node:process';
-import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
+import { CURRENT_BRAND_IDENTITY } from '../shared/currentBrandIdentity.js';
 import { refreshBrowserRuntimeConfigDir } from '@cindy/browser-control-runtime/config-dir';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
@@ -246,7 +246,7 @@ const desktopDevInstanceOptions = (() => {
     : 'unknown';
   return {
     userDataDir: app.getPath('userData'),
-    dbFilePrefix: BRAND_IDENTITY.dbFilePrefix,
+    dbFilePrefix: CURRENT_BRAND_IDENTITY.dbFilePrefix,
     rootDir,
     commit,
     mode,

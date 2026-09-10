@@ -31,9 +31,9 @@ import originalFs from 'original-fs';
 import path from 'node:path';
 import { app, BrowserWindow, ipcMain } from 'electron';
 import {
-  BRAND_IDENTITY,
+  CURRENT_BRAND_IDENTITY,
   legacyBrandUserDataDirNames,
-} from '@cindy/maker-shared/brand-identity';
+} from '../shared/currentBrandIdentity.js';
 import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 
 import { createLogger } from './logger';
@@ -621,8 +621,8 @@ export async function runLegacyUserDataMigrationForUser(userId: string): Promise
   inFlight = runLegacyUserDataMigration(userId, {
     userDataDir: app.getPath('userData'),
     legacyDirNames: legacyBrandUserDataDirNames(),
-    legacyDbPrefixes: BRAND_IDENTITY.legacyDbFilePrefixes,
-    currentDbPrefix: BRAND_IDENTITY.dbFilePrefix,
+    legacyDbPrefixes: CURRENT_BRAND_IDENTITY.legacyDbFilePrefixes,
+    currentDbPrefix: CURRENT_BRAND_IDENTITY.dbFilePrefix,
     fs: realFsDeps,
     now: () => new Date(),
     log,

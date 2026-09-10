@@ -37,7 +37,7 @@ vi.mock('node:os', () => {
   };
 });
 
-import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
+import { allUserDataDirNames } from '../../shared/currentBrandIdentity.js';
 
 import {
   __testing,

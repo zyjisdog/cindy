@@ -21,10 +21,10 @@
  */
 
 import {
-  BRAND_IDENTITY,
   brandUserDataDirName,
-  type CindyRegion,
-} from '@cindy/maker-shared/brand-identity';
+  CURRENT_BRAND_IDENTITY,
+} from '../shared/currentBrandIdentity.js';
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 
 /** argv 里是否显式指定了 Chromium 原生 --user-data-dir(= 与空格两种形态)。 */
 function hasExplicitUserDataDir(argv: readonly string[]): boolean {
@@ -44,6 +44,6 @@ export function resolveRegionUserDataDirName(input: {
   if (hasExplicitUserDataDir(input.argv)) return null;
   const dirName = brandUserDataDirName(input.region);
   // 与 productName 默认派生目录同名(cn)→ 不覆写,走 Electron 原生路径。
-  if (dirName === BRAND_IDENTITY.userDataDirName) return null;
+  if (dirName === CURRENT_BRAND_IDENTITY.userDataDirName) return null;
   return dirName;
 }
