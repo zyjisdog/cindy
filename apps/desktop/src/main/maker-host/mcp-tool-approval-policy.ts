@@ -52,6 +52,8 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   // 接受的存在性披露，只读元数据不因此回退为逐次审批或统一成 NOT_FOUND。
   'cindy::ghost_info',
   'cindy::ghost_manual',
+  // Query stays local; market discovery fetches catalog metadata without reconciliation.
+  'cindy::ghost_market_search',
   'cindy::ghost_forge_guide',
   'cindy_browser::list_tools',
   'cindy_android::list_tools',
@@ -226,6 +228,7 @@ export function getDesktopMcpToolApprovalPolicy(
   if (toolName && READ_ONLY_MCP_TOOLS.has(`${serverName}::${toolName}`)) {
     return 'auto-approve';
   }
+  if (serverName === 'cindy' && toolName === 'ghost_market_install') return 'prompt-each-time';
   if (serverName === 'cindy_contacts') {
     return canAutoApproveContactsMcpTool({ toolName, toolParams })
       ? 'auto-approve'
@@ -233,6 +236,22 @@ export function getDesktopMcpToolApprovalPolicy(
   }
   if (canAutoApproveCindyArtGhostCall(context)) {
     return 'auto-approve';
+  }
+  // Choosing a new Worker root delegates filesystem access. Do not let the
+  // trusted-server shortcut or a cached server grant authorize another root.
+  // Full Access / Auto / Ask still use their existing permission flow.
+  if (serverName === 'cindy_orca') {
+    if (!toolName) return 'prompt-each-time';
+    if (toolName === 'create_worker' || toolName === 'create_workers') {
+      const params = readJsonObject(toolParams);
+      if (!params) return 'prompt-each-time';
+      const workers = toolName === 'create_worker' ? [params] : params.workers;
+      if (!Array.isArray(workers)) return 'prompt-each-time';
+      if (workers.some((worker) => {
+        const spec = readJsonObject(worker);
+        return !spec || Object.hasOwn(spec, 'working_dir');
+      })) return 'prompt-each-time';
+    }
   }
   const iosSimulatorCall = readIOSSimulatorInnerCall(context);
   if (iosSimulatorCall) {
