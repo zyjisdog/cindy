@@ -16609,9 +16609,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               ...(sessionContextWindowBudget !== null && targetContextWindow !== undefined
                 ? { contextWindowBudget: targetContextWindow }
                 : {}),
-              ...(runtimeAgentKind === 'pi' &&
-                runtimeRouteChanged &&
-                !piRouteChangeRetiresRuntime
+              ...(runtimeAgentKind === 'pi' && runtimeRouteChanged && !piRouteChangeRetiresRuntime
                 ? {
                     assertSessionCloseSupported: () => {
                       throwIpcError(
