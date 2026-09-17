@@ -34,7 +34,7 @@ import {
   type ModelFavoriteConfig,
   type ModelFavoriteItem,
 } from '@/state/modelFavorites';
-import { recordRecentModel } from '@/state/recentModels';
+import { getRecentModelsOwner, recordRecentModel } from '@/state/recentModels';
 
 import type { ModelMemoryAccessors } from './ModelSelector';
 import type { UnifiedSelectedRow } from './UnifiedModelPanel';
@@ -281,8 +281,12 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     config: UnifiedRowConfig,
   ): ActionResult => {
     if (!recordRecentUsage || !entry) return result;
+    // 归属代次在**发起选择时**捕获:选择可能是异步的(跨引擎事务、远程写),回调落地时用户
+    // 可能已经登出 / 切到本地模式。那种情况下绝不能把 A 的一条模型记录写进 B 的分区
+    // (2026-09-16 review P1:跨账号串写)。归属变了就整条丢弃 —— 少一条快捷方式远好于串号。
+    const ownerAtSelect = getRecentModelsOwner();
     const commit = (applied: void | boolean): void | boolean => {
-      if (applied !== false) {
+      if (applied !== false && getRecentModelsOwner() === ownerAtSelect) {
         recordRecentModel({
           providerId: entry.providerId,
           modelId: entry.modelId,
