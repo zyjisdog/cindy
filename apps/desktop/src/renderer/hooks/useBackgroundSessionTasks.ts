@@ -25,7 +25,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate } from '@/lib/makerChatStore';
-import { isRemoteSession, isRemoteSessionSticky } from '@/lib/makerTransport';
+import {
+  isRemoteSessionSticky,
+  listSessionBackgroundTasksFor,
+  stopAgentTaskFor,
+} from '@/lib/makerTransport';
 
 export interface RunningBackgroundTask {
   taskId: string;
@@ -128,43 +132,51 @@ export function useBackgroundSessionTasks(
   stopAll: () => Promise<void>;
 } {
   const [stopping, setStopping] = useState(false);
+  // 快照重拉信号:远程镜像会话的终态事件可能丢包(镜像事件流有设计内丢失窗口),
+  // 停止动作完成后用一次快照把「已不在跑」的对账回来 —— 本机会话走事件流 + 本地
+  // 对账即可,这里只是多一次幂等 seed(seed 仅补缺,不复活已终态任务)。
+  const [snapshotRefreshNonce, setSnapshotRefreshNonce] = useState(0);
 
-  // device-link 镜像会话:session 活在被控端,本地 main 拿不到 handle(快照返回
-  // 空、stop 假成功),且镜像事件有设计内丢失窗口 —— 与「远程会话豁免 running
-  // 折算」同口径,整个信号在控制端关闭,由被控端自己的 UI 承载。
-  const remoteMirror = Boolean(sessionId) && isRemoteSession(sessionId as string);
+  // device-link 镜像会话:任务真身在被控端,快照/停止都按粘滞归属隧道。粘滞判定
+  // (而非瞬时归属)保证 relay 瞬断窗口内不把远程会话误判成本机 —— 那条路径上本机
+  // 快照必空、本地 stop 会假成功。
+  const remoteSticky = Boolean(sessionId) && isRemoteSessionSticky(sessionId as string);
 
-  // 快照水合:挂载 / 切会话 / 历史重载完成后拉一次存量。maker 未 init 等瞬态失败
-  // 保持现状 —— 实时事件流仍会自然补上。
+  // 快照水合:挂载 / 切会话 / 历史重载完成后拉一次存量(远程走隧道,见
+  // listSessionBackgroundTasksFor)。maker 未 init 等瞬态失败保持现状 ——
+  // 实时事件流仍会自然补上。
   // 同一次快照兼做 stale running 对账:候选集必须在**发起请求前**捕获(时序论证
   // 见 store 的 reconcileStaleRunningTasks),空表 + 非空候选正是「全部已收口」
   // 的信号,不得 early-return。对账 gating 用**粘滞版**远程判定(与
-  // BackgroundTasksBody、Stop gating 同口径):relay 瞬断窗口 remoteMirror
-  // (非粘滞)会把远程会话误判成本机,本机空快照会把镜像里真实在跑的任务错误
-  // 收口 —— 粘滞判定命中远程时只 seed 不对账。
+  // BackgroundTasksBody、Stop gating 同口径):relay 瞬断窗口 remoteSticky
+  // 会把远程会话误判成本机,本机空快照会把镜像里真实在跑的任务错误收口 ——
+  // 粘滞判定命中远程时只 seed 不对账;老被控端无此 channel 降级空表时同理不可当
+  // 权威。
   useEffect(() => {
-    if (!sessionId || remoteMirror) return;
-    const api = window.electronAPI?.maker;
-    if (!api?.listSessionBackgroundTasks) return;
+    if (!sessionId) return;
+    if (!window.electronAPI?.maker?.listSessionBackgroundTasks) return;
     let disposed = false;
     const staleRunningCandidates = isRemoteSessionSticky(sessionId)
       ? undefined
       : makerChatStore.captureReconcilableRunningTaskIds(sessionId);
-    void api
-      .listSessionBackgroundTasks(sessionId)
+    void listSessionBackgroundTasksFor(sessionId)
       .then(({ tasks }) => {
         if (disposed || !Array.isArray(tasks)) return;
         // 响应落地前复查粘滞判定:请求在飞期间远程注册表才完成会话水合的话,
-        // 本机 main「查无此会话」的空表不可再套用(候选集是按本机误判捕获的,
-        // 套用会误收镜像里真实在跑的任务)。本 hook 不服务远程会话,整体丢弃。
-        if (isRemoteSessionSticky(sessionId)) return;
-        if (tasks.length === 0 && !(staleRunningCandidates && staleRunningCandidates.size > 0)) {
+        // 快照实际来自本机 main(路由在发起时已定),「查无此会话」的空表不可
+        // 用于收口 → 丢弃候选集;seed 保留(远程会话的常规水合不受影响,该
+        // 空表本就 seed 不出东西)。
+        const candidates =
+          staleRunningCandidates && !isRemoteSessionSticky(sessionId)
+            ? staleRunningCandidates
+            : undefined;
+        if (tasks.length === 0 && !(candidates && candidates.size > 0)) {
           return;
         }
         makerChatStore.seedBackgroundTaskSnapshots(
           sessionId,
           tasks,
-          staleRunningCandidates ? { staleRunningCandidates } : undefined,
+          candidates ? { staleRunningCandidates: candidates } : undefined,
         );
       })
       .catch(() => {
@@ -173,12 +185,9 @@ export function useBackgroundSessionTasks(
     return () => {
       disposed = true;
     };
-  }, [sessionId, remoteMirror, historyLoaded]);
+  }, [sessionId, historyLoaded, snapshotRefreshNonce]);
 
-  const tasks = useMemo(
-    () => (remoteMirror ? [] : listRunningBackgroundTasks(taskUpdates)),
-    [remoteMirror, taskUpdates],
-  );
+  const tasks = useMemo(() => listRunningBackgroundTasks(taskUpdates), [taskUpdates]);
   const bashCount = useMemo(() => tasks.filter((task) => task.kind === 'bash').length, [tasks]);
   const subagentCount = tasks.length - bashCount;
 
@@ -199,8 +208,7 @@ export function useBackgroundSessionTasks(
   stopAllSessionRef.current = sessionId;
 
   const stopAll = useCallback(async () => {
-    const api = window.electronAPI?.maker;
-    if (!sessionId || !api?.stopAgentTask) return;
+    if (!sessionId) return;
     const targets = tasksRef.current;
     if (targets.length === 0) return;
     const requestedSessionId = sessionId;
@@ -210,7 +218,7 @@ export function useBackgroundSessionTasks(
       // 逐个停,单个失败不拦其余;成功与否都交给 task_notification / durable status
       // 事件流收口,这里不改本地状态(单一事实源)。
       const results = await Promise.allSettled(
-        targets.map((t) => api.stopAgentTask(sessionId, t.taskId)),
+        targets.map((t) => stopAgentTaskFor(sessionId, t.taskId)),
       );
       // 失败(host 只在 SIGKILL 之后仍未确认退出时让 stop 失败)不能吞:否则用户以为
       // 「全部停止」生效了,而那条进程还在跑。失败的 taskId 交给状态栏提示,成功的
@@ -221,7 +229,13 @@ export function useBackgroundSessionTasks(
       setStopFailedIds(failed);
       // 无论成功几条都对一次账:全失败时同样是「僵尸行 + 顽固进程」混杂、最需要快照
       // 仲裁的情形(对账只收口快照里已经没有的行,对仍在跑的行是无害确认)。
-      makerChatStore.requestBackgroundTaskReconcile(requestedSessionId);
+      // 远程镜像会话没有本地 handle:本地对账是 no-op,改用重拉一次隧道快照
+      // (被控端可能已收口,而镜像事件丢了那条终态)。
+      if (isRemoteSessionSticky(requestedSessionId)) {
+        setSnapshotRefreshNonce((n) => n + 1);
+      } else {
+        makerChatStore.requestBackgroundTaskReconcile(requestedSessionId);
+      }
     } finally {
       if (stopAllSessionRef.current === requestedSessionId) setStopping(false);
     }
