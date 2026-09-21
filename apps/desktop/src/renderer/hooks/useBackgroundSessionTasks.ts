@@ -30,6 +30,7 @@ import {
   stopAgentTaskFor,
 } from '@/lib/makerTransport';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { knownOwnerTokenFor } from '@/features/device-link/mirrorCacheClient';
 
 type BackgroundTaskSnapshot = Awaited<
   ReturnType<typeof window.electronAPI.maker.listSessionBackgroundTasks>
@@ -49,6 +50,13 @@ async function readRoutedBackgroundTasks(sessionId: string): Promise<{
 }> {
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) {
+    // 归属不可解析、但已确认是镜像来源（受保护镜像读记下的 owner token；本机会话
+    // 永不经过那条路）→ **fail closed**，绝不回退本机读：控制端 main 对不属于自己
+    // 的会话会返回空表，而调用方会把它当权威快照去收口 stale running，把仍在被控端
+    // 运行的任务标成 stopped。与 stopRouteFor 的 unknown 态同口径：宁可漏收。
+    if (knownOwnerTokenFor(sessionId) !== undefined) {
+      return { tasks: [], source: null };
+    }
     try {
       const snapshot = await window.electronAPI.maker.listSessionBackgroundTasks(sessionId);
       return { tasks: snapshot.tasks, source: 'local' };

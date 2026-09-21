@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   seedBackgroundTaskSnapshots: vi.fn(),
   // 粘滞判定可独立标记:覆盖「非粘滞误判本机、粘滞仍认远程」的重连窗口分支。
   stickyRemoteIds: new Set<string>(),
+  // 镜像来源证据(owner token):归属不可解析时的 fail closed 分支。
+  mirrorOwnerTokenIds: new Set<string>(),
 }));
 
 vi.mock('@/lib/makerChatStore', () => ({
@@ -40,10 +42,14 @@ vi.mock('@/lib/makerTransport', () => ({
   stopAgentTaskFor: transport.stopAgentTaskFor,
 }));
 
-// 本地构建桥接 readRoutedBackgroundTasks 的依赖:粘滞归属解析 + 隧道调用。
+// 本地构建桥接 readRoutedBackgroundTasks 的依赖:粘滞归属解析 + 镜像来源证据 + 隧道调用。
 vi.mock('@/features/device-link/stickySessionOrigin', () => ({
   getStickySessionDeviceId: (sessionId: string) =>
     sessionId.startsWith('remote-') || mocks.stickyRemoteIds.has(sessionId) ? 'dev-1' : undefined,
+}));
+
+vi.mock('@/features/device-link/mirrorCacheClient', () => ({
+  knownOwnerTokenFor: (sessionId: string) => mocks.mirrorOwnerTokenIds.has(sessionId) ? 'tok' : undefined,
 }));
 
 import { useBackgroundSessionTasks } from '@/hooks/useBackgroundSessionTasks';
@@ -69,7 +75,20 @@ describe('useBackgroundSessionTasks 快照水合 + 对账接线', () => {
   afterEach(() => {
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
     mocks.stickyRemoteIds.clear();
+    mocks.mirrorOwnerTokenIds.clear();
     vi.clearAllMocks();
+  });
+
+  it('镜像来源但归属不可解析(unknown):fail closed,不回退本机读', async () => {
+    mocks.mirrorOwnerTokenIds.add('mirror-2');
+    mocks.captureReconcilableRunningTaskIds.mockReturnValue(new Set(['t-mirror']));
+    renderHook(() => useBackgroundSessionTasks('mirror-2', new Map(), true));
+    await Promise.resolve();
+    // 回退本机读的话，控制端 main 的空表会被当权威快照收口，把仍在被控端运行的
+    // 任务标成 stopped(任务从运行列表与停止入口消失)。
+    expect(listTasks).not.toHaveBeenCalled();
+    expect(invokeRemote).not.toHaveBeenCalled();
+    expect(mocks.seedBackgroundTaskSnapshots).not.toHaveBeenCalled();
   });
 
   it('候选集在发起 IPC 前捕获,空快照 + 非空候选仍触发 seed(对账信号)', async () => {
