@@ -27,9 +27,46 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate } from '@/lib/makerChatStore';
 import {
   isRemoteSessionSticky,
-  listSessionBackgroundTasksFor,
   stopAgentTaskFor,
 } from '@/lib/makerTransport';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+
+type BackgroundTaskSnapshot = Awaited<
+  ReturnType<typeof window.electronAPI.maker.listSessionBackgroundTasks>
+>;
+
+/**
+ * 本地构建桥接(待 #4804 合并上游后改用 makerTransport.readSessionBackgroundTasks):
+ * 按粘滞归属读一次后台任务快照,并标注来源 —— 'local' / 'remote' 是权威快照,
+ * null 是降级空表(老被控端无 channel / 隧道失败 / 本机 IPC 失败)。
+ *
+ * 收口 stale running 只允许用权威快照:降级空表与「确实没有任务」不可区分,
+ * 拿它收口会把镜像里真实在跑的任务错误停掉。
+ */
+async function readRoutedBackgroundTasks(sessionId: string): Promise<{
+  tasks: BackgroundTaskSnapshot['tasks'];
+  source: 'local' | 'remote' | null;
+}> {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  if (!deviceId) {
+    try {
+      const snapshot = await window.electronAPI.maker.listSessionBackgroundTasks(sessionId);
+      return { tasks: snapshot.tasks, source: 'local' };
+    } catch {
+      return { tasks: [], source: null };
+    }
+  }
+  try {
+    const snapshot = (await window.electronAPI.deviceLink.invoke(
+      deviceId,
+      'maker:session-background-tasks:list',
+      [sessionId],
+    )) as BackgroundTaskSnapshot;
+    return { tasks: snapshot.tasks, source: 'remote' };
+  } catch {
+    return { tasks: [], source: null };
+  }
+}
 
 export interface RunningBackgroundTask {
   taskId: string;
@@ -142,37 +179,33 @@ export function useBackgroundSessionTasks(
   // 快照必空、本地 stop 会假成功。
   const remoteSticky = Boolean(sessionId) && isRemoteSessionSticky(sessionId as string);
 
-  // 快照水合:挂载 / 切会话 / 历史重载完成后拉一次存量(远程走隧道,见
-  // listSessionBackgroundTasksFor)。maker 未 init 等瞬态失败保持现状 ——
-  // 实时事件流仍会自然补上。
+  // 快照水合:挂载 / 切会话 / 历史重载完成后拉一次存量(远程走隧道)。maker 未 init
+  // 等瞬态失败保持现状 —— 实时事件流仍会自然补上。
   // 同一次快照兼做 stale running 对账:候选集必须在**发起请求前**捕获(时序论证
-  // 见 store 的 reconcileStaleRunningTasks),空表 + 非空候选正是「全部已收口」
-  // 的信号,不得 early-return。对账 gating 用**粘滞版**远程判定(与
-  // BackgroundTasksBody、Stop gating 同口径):relay 瞬断窗口 remoteSticky
-  // 会把远程会话误判成本机,本机空快照会把镜像里真实在跑的任务错误收口 ——
-  // 粘滞判定命中远程时只 seed 不对账;老被控端无此 channel 降级空表时同理不可当
-  // 权威。
+  // 见 store 的 reconcileStaleRunningTasks)。候选集总是捕获:远程会话额外并入
+  // hook 当前运行集里的条目(store 的 capture 只覆盖 claude-code,而被控端自
+  // #4700 起也能停 PI 后台命令 —— 不收进候选集这些行就永远收口不掉)。
+  // 收口只允许用**权威快照**(source !== null):降级空表不可与「没有任务」区分;
+  // 响应来源与当下粘滞归属不符(归属在请求在飞期间才水合)时整体丢弃。
   useEffect(() => {
     if (!sessionId) return;
     if (!window.electronAPI?.maker?.listSessionBackgroundTasks) return;
     let disposed = false;
-    const staleRunningCandidates = isRemoteSessionSticky(sessionId)
-      ? undefined
-      : makerChatStore.captureReconcilableRunningTaskIds(sessionId);
-    void listSessionBackgroundTasksFor(sessionId)
-      .then(({ tasks }) => {
+    const staleRunningCandidates = new Set(
+      makerChatStore.captureReconcilableRunningTaskIds(sessionId),
+    );
+    if (isRemoteSessionSticky(sessionId)) {
+      for (const task of tasksRef.current) staleRunningCandidates.add(task.taskId);
+    }
+    void readRoutedBackgroundTasks(sessionId)
+      .then(({ tasks, source }) => {
         if (disposed || !Array.isArray(tasks)) return;
-        // 响应落地前复查粘滞判定:请求在飞期间远程注册表才完成会话水合的话,
-        // 快照实际来自本机 main(路由在发起时已定),「查无此会话」的空表不可
-        // 用于收口 → 丢弃候选集;seed 保留(远程会话的常规水合不受影响,该
-        // 空表本就 seed 不出东西)。
+        if ((source === 'remote') !== isRemoteSessionSticky(sessionId)) return;
         const candidates =
-          staleRunningCandidates && !isRemoteSessionSticky(sessionId)
-            ? staleRunningCandidates
-            : undefined;
-        if (tasks.length === 0 && !(candidates && candidates.size > 0)) {
-          return;
-        }
+          source === null || staleRunningCandidates.size === 0
+            ? undefined
+            : staleRunningCandidates;
+        if (tasks.length === 0 && !candidates) return;
         makerChatStore.seedBackgroundTaskSnapshots(
           sessionId,
           tasks,
