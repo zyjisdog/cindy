@@ -385,6 +385,10 @@ export function AgentTaskCard({
     if (!sessionId || !update?.taskId) return;
     setStopping(true);
     void stopBackgroundTask(sessionId, update.taskId)
+    // 重试先收掉上一次的失败提示:它描述的是上一次点击;这次再失败会在 catch 重新写上。
+    // (PR #4804 的行为；集成分支上被 rerere 的陈旧解法吃掉过一次，见 delta.fixes)
+    setStopFailed(false);
+    void stopAgentTaskFor(sessionId, update.taskId)
       .then(() => {
         // 停止对「main 侧其实已不在」的 id 是**静默成功**的(两套控制面都查无此任务,
         // 例如终态事件丢包)。点完立刻对一次账:行要么很快翻成已停止(它本就结束了),
