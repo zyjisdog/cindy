@@ -92,6 +92,12 @@ provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建
 （`x-cindy-pi-provider-id` 会变化）或 Orca worker 路由重建会退役旧 runtime（`runtimeRetired`）、
 目标 route 交给下一次发送懒创建；需要缩窗保护时，90% 固定压力线事务必须在退役关闭前完成。
 不允许保留旧进程只改 provider store —— 旧请求头与新来源不一致会被 proxy 以 403 拒绝。
+本地冷 Pi 会话没有 live runtime 时按两类情形处理：`sdk_session_id` 为空（如删消息 / clear 后的
+context rebuild 待重建态）时，没有当前窗口可核实，也没有旧窗口要保护：目标 route 直接落库，
+下一次发送按目标窗口重建全新 runtime，不因核实不到窗口拒绝切换；`sdk_session_id` 非空时，
+仅在目标窗口对 runtime 关闭时固化的 live 占用仍有富余（`shouldSkipColdPiWindowRehydration`
+预检通过）才跳过冷启动核实，占用已到 danger / overflow 或没有 live 读数时仍须核实。
+已有 live runtime 时仍须核验；冷远端即使没有原生会话仍拒绝切换。
 Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 `CINDY_PI_BACKGROUND_COMMANDS`（值是 Host 每会话签发的一次性 bearer，同时充当能力开关；
