@@ -56,9 +56,11 @@ import { getSessionDeviceId, useRemoteDevices } from '@/features/device-link/rem
 import { makerChatStore, EMPTY_TASK_UPDATES } from '@/lib/makerChatStore';
 import type { AgentTaskUpdate, ChatMessage } from '@/lib/makerChatStore';
 import {
+  canStopAgentTask,
   getWorkflowProgressFor,
   isRemoteSessionSticky,
   listSessionBackgroundTasksFor,
+  stopAgentTaskFor,
 } from '@/lib/makerTransport';
 import { formatCompactTokens } from '@/lib/usageFormat';
 import type { Message } from '@/lib/ccAgent.types';
@@ -197,12 +199,15 @@ function workflowAgentCounts(
   return total > 0 ? { done, total } : null;
 }
 
+
 /** 停止按钮 gating(与 AgentTaskCard 同口径):running + (claude-code 或可停的 PI 任务) +
  *  有 taskId + 非远程。远程判定用粘滞版:relay 瞬断窗口误判本机会放出假 Stop(本地调用假成功,
  *  任务在被控端继续跑),与水合的粘滞归属同口径。
  *
  *  PI 只开放有 durable 控制面的任务:后台命令(local_bash,host-owned 子进程)与
- *  async durable subagent(pi_subagent);普通前台 subagent 没有 stopBackgroundTask 路径。 */
+ *  async durable subagent(pi_subagent);普通前台 subagent 没有 stopBackgroundTask 路径。
+ *
+ *  可用性一律过 canStopAgentTask(sessionId):远程归属不可解析时 fail closed(不回退本机)。 */
 function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
   const providerCanStop =
     item.provider === 'claude-code'
@@ -212,10 +217,10 @@ function canStopItem(item: SessionTaskItem, sessionId: string | null): boolean {
     item.status === 'running' &&
     providerCanStop &&
     Boolean(item.update?.taskId) &&
-    Boolean(sessionId) &&
-    !(sessionId && isRemoteSessionSticky(sessionId))
+    canStopAgentTask(sessionId)
   );
 }
+
 
 /** 停止按钮:在飞防连点;失败**不静默** —— 回调给行使它把「停止未确认」显示出来
  *  (host 只会在 SIGKILL 之后仍未确认退出时让 stop 失败)。状态翻转仍由事件流收口。 */
@@ -234,11 +239,10 @@ function StopButton({
     (e: MouseEvent) => {
       // 行点击(进详情 / 聊天定位)不该被停止按钮触发。
       e.stopPropagation();
-      const api = window.electronAPI?.maker;
-      if (!api?.stopAgentTask || stopping) return;
+      if (!sessionId || stopping) return;
       setStopping(true);
-      void api
-        .stopAgentTask(sessionId, taskId)
+
+      void stopAgentTaskFor(sessionId, taskId)
         .then(() => {
           // 与卡片同口径:停止对「main 侧其实已不在」的 id 是静默成功,点完对一次账,
           // 让僵尸行很快翻成已停止,而不是留给下一次活动熄灭对账。
@@ -309,6 +313,7 @@ function TaskRow({
   const KindIcon = kindIcon(item.kind);
   const StatusIcon = statusIcon(item.status);
   const running = item.status === 'running';
+
   const [stopFailed, setStopFailed] = useState(false);
   const handleStopFailed = useCallback(() => setStopFailed(true), []);
   // 状态一变(真停了 / 这条行被换掉)就收掉提示:它描述的是上一次点击。
@@ -349,6 +354,7 @@ function TaskRow({
     if (typeof usage?.toolUses === 'number') {
       parts.push(t('chat.agentTask.toolUses', { count: usage.toolUses }));
     }
+
     if (stopFailed) parts.push(t('rightSidebar.backgroundTasks.stopUnconfirmed'));
     return parts;
   }, [item, t, stopFailed]);
@@ -446,6 +452,7 @@ function WorkflowDetail({
   const { t } = useTranslation();
   const taskId = item.update?.taskId ?? item.taskId ?? null;
   const [fileProgress, setFileProgress] = useState<WorkflowProgress | null>(null);
+
   // 与列表行同口径:停止失败(host 只会在 SIGKILL 后仍未确认退出时让 stop 失败)不静默。
   const [stopFailed, setStopFailed] = useState(false);
   const handleStopFailed = useCallback(() => setStopFailed(true), []);
@@ -532,6 +539,7 @@ function WorkflowDetail({
           />
         )}
       </div>
+
       {/* 与卡片同层级(secondary):这是需要用户注意的失败说明,不是元信息
           (列表行里嵌进 meta 是空间所限,那里保持 tertiary)。 */}
       {stopFailed && (
