@@ -8,6 +8,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: () => undefined },
   useTranslation: () => ({
     t: (key: string, vars?: Record<string, unknown>) =>
       vars && Object.keys(vars).length > 0 ? `${key}:${JSON.stringify(vars)}` : key,
