@@ -226,6 +226,7 @@ function createFlow(
   };
 
   const deps: MakerSendTransactionDeps = {
+    statDirectory: async () => ({ isDirectory: () => true }),
     getSession: vi.fn(() => state.liveSession),
     closeSession: vi.fn(async () => {}),
     preflightBotRuntimeResources: vi.fn(async () => {}),
