@@ -34,6 +34,7 @@ import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
 import { canManageBackgroundTasks, stopBackgroundTask } from '@/lib/backgroundTaskStop';
 import { reportBackgroundTaskStopFailure } from '@/lib/backgroundTaskStopFailure';
 import { getWorkflowProgressFor, isRemoteSessionSticky } from '@/lib/makerTransport';
+import { canStopAgentTask, getWorkflowProgressFor, isRemoteSessionSticky, stopAgentTaskFor } from '@/lib/makerTransport';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
