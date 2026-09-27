@@ -28,6 +28,7 @@ const { readTailMock, remoteState } = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/makerTransport', () => ({
   getWorkflowProgressFor: vi.fn(async () => null),
+  canStopAgentTask: (sessionId: string | null | undefined) => Boolean(sessionId),
   isRemoteSessionSticky: () => remoteState.value,
   readBackgroundTaskOutputTailFor: readTailMock,
 }));
