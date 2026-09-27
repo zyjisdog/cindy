@@ -28,6 +28,7 @@ const { readTailMock, remoteState } = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/makerTransport', () => ({
   getWorkflowProgressFor: vi.fn(async () => null),
+  canStopAgentTask: (sessionId: string | null | undefined) => Boolean(sessionId),
   isRemoteSessionSticky: () => remoteState.value,
   readBackgroundTaskOutputTailFor: readTailMock,
   // 卡片渲染时就会问「这次运行能不能停」，mock 缺这个导出会直接抛
