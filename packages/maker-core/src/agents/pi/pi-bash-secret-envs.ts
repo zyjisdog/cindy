@@ -17,6 +17,9 @@
 export const PI_BASH_STATIC_SECRET_ENV_NAMES = [
   'CINDY_PI_SECRET_ENV_NAMES',
   'CINDY_PI_PERMISSION_FILE',
+  // 上游新增:模型请求偏好文件与快速模型缓存同样由 bridge 写盘,不能进 bash 工具的可见面。
+  'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+  'CINDY_PI_FAST_MODELS',
   'CINDY_PI_TURN_TOOL_POLICY',
   'CINDY_PI_PACKAGE_MANAGEMENT',
   // 后台命令通道的 bearer:一次获批的 bash / 后台命令子进程拿到它就能伪造控制请求,
