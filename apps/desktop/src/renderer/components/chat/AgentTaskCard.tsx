@@ -28,7 +28,7 @@ import {
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
-import { canStopAgentTask, getWorkflowProgressFor, stopAgentTaskFor } from '@/lib/makerTransport';
+import { canStopAgentTask, getWorkflowProgressFor, isRemoteSessionSticky, stopAgentTaskFor } from '@/lib/makerTransport';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { openBackgroundTasksTab } from '@/features/right-sidebar/lib/openBackgroundTasksTab';
 import { openSubagentsTab } from '@/features/right-sidebar/lib/openSubagentsTab';
