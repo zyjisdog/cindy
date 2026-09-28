@@ -100,6 +100,8 @@ export interface RegisterLocalDbIpcOpts {
   lookupSessionWorktreeBinding?: (sessionId: string) => string | null;
   /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
+  /** Apply a persisted task-level context window budget to the live runtime. */
+  applyContextWindowBudget?: RegisterSessionIpcOpts['applyContextWindowBudget'];
   /** Reconcile persisted Host-owned task runtimes once the owner DB is readable. */
   reconcilePersistedSessionRuntimes?: () => Promise<void>;
   /** Serialize startup tombstone cleanup with task restore/start/send operations. */
@@ -261,6 +263,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
   registerSessionIpc(getCurrentDbClientUserId, {
     resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,
+    applyContextWindowBudget: opts.applyContextWindowBudget,
   });
   registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
