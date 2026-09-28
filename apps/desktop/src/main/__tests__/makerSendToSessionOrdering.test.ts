@@ -545,7 +545,7 @@ describe('sendToSession ordering', () => {
     );
     const directSendSwitchBlock = extractBetween(
       source,
-      'pendingAgentSwitchApplyHolder = async (sessionId, signal, selection) =>',
+      'pendingAgentSwitchApplyHolder = async (sessionId, signal, selection, beforeApply) =>',
       'ipcMain.handle(MAKER_INVOKE.MARK_ORCA_ROLE',
     );
 
@@ -620,7 +620,7 @@ describe('sendToSession ordering', () => {
       'restoreControlStores();',
       'throw persistenceError;',
     );
-    expect(preloadSource).toContain('selection?: { effort: string | null; fastMode: boolean },');
+    expect(preloadSource).toContain('selection?: { effort: string | null; fastMode: boolean; thinking?: boolean },');
     expectOrder(
       preloadSource,
       'expectedAgentSwitchRevision,',
