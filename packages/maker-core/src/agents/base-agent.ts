@@ -2361,6 +2361,7 @@ export interface AgentSessionHandle {
        * 触发重建，不走热切）。
        */
       contextWindowBudget?: number | null;
+      thinkingEnabled?: boolean;
     },
   ): Promise<void>;
 
