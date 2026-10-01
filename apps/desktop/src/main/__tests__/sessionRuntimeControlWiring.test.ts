@@ -1217,6 +1217,59 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('`Pi final-window context preparation failed: ${finalPreparation}`');
   });
 
+  it('defers the retired Pi route window verification to the next send', () => {
+    const setModel = handlerBody(
+      registerSource,
+      'const handleSetModel = async (',
+      'const recoverRemoteRuntimeAxisPersistence',
+    );
+
+    // 退役判定由 apply 自己给出（result.retiredRuntime，含 Pi previewModelSwitch 的
+    // rebuild），register 不再做预判——预判与实际关闭判定会分叉。
+    expect(registerSource).not.toContain('piRouteChangeRetiresRuntime');
+    expect(registerSource).not.toContain(
+      'Pi target route requires an unsupported runtime replacement',
+    );
+    const apply = setModel.indexOf('await applyRuntimeSetModelChange({');
+    expect(apply).toBeGreaterThan(-1);
+
+    // 需要缩窗保护的替换必须在关闭前（apply 之前）跑保护事务。
+    const preflightPreparation = setModel.indexOf(
+      'preparation = await contextOverflowRolloverHolder.prepareModelWindowSwitch(',
+    );
+    expect(preflightPreparation).toBeGreaterThan(-1);
+    expect(preflightPreparation).toBeLessThan(apply);
+    const skipLiveVerification = setModel.indexOf('result.retiredRuntime !== true &&');
+    const liveVerification = setModel.indexOf(
+      'const reportedPiWindow = piSessionAfterRouteChange.getUsageSnapshot?.().contextWindow;',
+    );
+    expect(skipLiveVerification).toBeGreaterThan(preflightPreparation);
+    expect(skipLiveVerification).toBeLessThan(liveVerification);
+
+    // 退役/冷跳过的 route 把「新进程实际窗口」核验挪到下一次发送：register 在 apply 之后
+    // 登记待核验，发送事务在懒创建之后、Session.send 之前核验（piRetiredRouteWindowGuard）。
+    expect(registerSource).toContain('createPiRetiredRouteWindowGuard({');
+    const recordPendingCheck = setModel.indexOf('piRetiredRouteWindowGuardHolder?.record(');
+    expect(recordPendingCheck).toBeGreaterThan(apply);
+    expect(recordPendingCheck).toBeLessThan(skipLiveVerification);
+    expect(setModel).toContain('(result.retiredRuntime === true || coldPiRouteWithoutLiveWindowCheck)');
+    expect(registerSource).toContain('verifyRetiredRouteWindowBeforeSend:');
+    const guardCall = makerSendSource.indexOf(
+      'await deps.verifyRetiredRouteWindowBeforeSend?.(sessionId);',
+    );
+    const vendorSend = makerSendSource.indexOf('const sendResult = await sess.send(');
+    expect(guardCall).toBeGreaterThan(-1);
+    expect(guardCall).toBeLessThan(vendorSend);
+    // 核验失败必须抛错（pre-accept 回滚 + 队列恢复），不能只记日志后照发。
+    expect(registerSource).toContain("verification.status === 'failed'");
+    // 关闭钩子不能清标记：缩窗保护先 close 旧进程再 commitRebuild，重建失败时若已清标记，
+    // 用户重试就会跳过实际窗口核验与保护（Greptile P1，2026-09-26）。
+    const closedSessionHook = registerSource
+      .slice(registerSource.indexOf('finalizeClosedSession: (session: WiredSession'))
+      .slice(0, 600);
+    expect(closedSessionHook).not.toContain('piRetiredRouteWindowGuardHolder?.clear(');
+  });
+
   it('refreshes model-only context snapshots against the retained target provider route', () => {
     const setModel = handlerBody(
       registerSource,
@@ -1302,7 +1355,7 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('deferSessionRuntimeAxisMutation({');
     expect(setModel).toContain('pendingPatch: pendingAxisPatch');
     expect(registerSource).toContain('routeExplicit: isPendingSessionRuntimeRouteExplicit(');
-    expect(setModel).toMatch(/const result(?::[^;\n]+)? = routeExplicit\s*\? await applyRuntimeSetModelChange\(/);
+    expect(setModel).toContain('const result: ApplyRuntimeSetModelChangeResult = routeExplicit');
     expect(setModel).toContain('acceptSessionRuntimeAxisMutation({');
     expect(setModel).toContain("runtimeAgentKind !== 'pi' &&");
     expect(setModel).toContain('(routeExplicit || internalOptions.effortExplicit === true)');

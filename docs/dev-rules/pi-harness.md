@@ -94,13 +94,20 @@ Pi 任务时冻结，并写入该任务 `settings.json` 的 `compaction.reserveT
 模型容量用于 Pi 原生请求长度裁剪，不能随小预算缩到 1K；工作预算只调整原生压缩阈值，
 并作为已应用预算进入 Cindy 的用量快照。
 大窗切小窗先由 Desktop 的统一目标窗口事务按目标窗口 90% 固定压力线评估（独立于 Pi
-日常自动压缩百分比），命中时复用既有上下文接续事务；未命中时保留当前原生会话，使用
-`set_compaction_reserve_tokens` 原地更新压缩保留量，再用原生 `set_model` 与 `get_state`
-确认 provider／model／contextWindow。同 ID 模型的目录资料或工作预算改变也属于这条路径。
-普通切模不得用 `switch_session` 或扩展 `/reload` 重读压缩配置：两者会重建会话或扩展状态，
-不能当成无损配置刷新。忙时选择必须在回合结束后走同一切换与容量事务，不能由延后服务
-直接关闭 Pi。原生校验完成前，子代理 route 保持 pending；确认并持久化目标路由后才放行
-排队消息。
+日常自动压缩百分比），命中时换干净原生窗口；未命中时 Pi 重写 settings 后调用
+`switch_session`，必须重新 `set_model` 并用 `get_state` 校验
+provider／model／contextWindow，因为 Pi 会用进程初始 CLI route 重建 runtime。校验完成前
+子代理 route 保持 pending，失败则终止该 live 任务。本地 Pi 跨 proxy 供应商身份切换来源
+（`x-cindy-pi-provider-id` 会变化）或 Orca worker 路由重建会退役旧 runtime（`retiredRuntime`）、
+目标 route 交给下一次发送懒创建；退役前能按目录窗口完成的 90% 固定压力线评估照旧在关闭前
+完成（保护口径不变）。但**目录窗口可能与新进程 `get_state` 回报的 contextWindow 不同**，
+所以下一次发送在消息真正发给模型之前必须用新进程的**实际窗口**重核一次：实际窗口更小且
+旧历史达到 90% 固定压力线时，先走同一目标窗口事务完成 bounded handoff + `context_rebuild`
+再发送（`piRetiredRouteWindowGuard`，接在发送事务的懒创建之后、`Session.send` 之前）。
+核验或保护失败时**不发送这条消息**、不静默改发旧供应商，把消息退回队列并给出可恢复的
+失败状态（用户重试会重新核验）；同一个失败意图不自动重试。冷 Pi 跳过启动期核实
+（`coldPiRouteWithoutLiveWindowCheck`）的 route 走同一套发送前核验。
+不允许保留旧进程只改 provider store —— 旧请求头与新来源不一致会被 proxy 以 403 拒绝。
 Claude Code 仍用独立百分比。env:`CINDY_PI_API_KEY`、
 `CINDY_PI_SESSION_ID`、`PI_CODING_AGENT_DIR`、`CINDY_PI_PERMISSION_FILE`、`CINDY_PI_MCP_BRIDGE`、
 外部 MCP 专用动态 env、`PI_OFFLINE=1`(关启动期联网)、`NO_PROXY` 兜底 loopback(防全局代理
