@@ -444,6 +444,11 @@ describe('applyRuntimeSetModelChange', () => {
         remoteHostId: null,
         model: 'local-model',
         setModel,
+        previewModelSwitch: vi.fn(async () => ({
+          action: 'hot' as const,
+          targetContextWindow: null,
+          windowVerified: false,
+        })),
       }),
       listActiveSessions: () => [],
       closeSession: vi.fn(async () => {}),
@@ -473,6 +478,11 @@ describe('applyRuntimeSetModelChange', () => {
         remoteHostId: null,
         model: 'local-model',
         setModel,
+        previewModelSwitch: vi.fn(async () => ({
+          action: 'hot' as const,
+          targetContextWindow: null,
+          windowVerified: false,
+        })),
       }),
       listActiveSessions: () => [],
       closeSession: vi.fn(async () => {}),
