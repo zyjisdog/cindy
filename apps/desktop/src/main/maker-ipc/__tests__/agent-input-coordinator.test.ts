@@ -11441,6 +11441,7 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
     };
     const transaction=createMakerSendTransaction({
       getSession:()=>session,closeSession:async()=>{},preflightBotRuntimeResources:async()=>{},
+      statDirectory:async()=>({isDirectory:()=>true}),
       getSessionMeta:async()=>({}),ensureRemoteReadyForSessionStart:async()=>{},checkWorkDirExists:async()=>true,
       isOrcaMcpHydrated:()=>true,buildCreateOptsWithStderr:x=>x,synthesizeOrcaVendorOptionsFromDb:async()=>false,
       readSessionExtraDirsFromDb:async()=>[],readSessionWorkingDirFromDb:async()=>'/answer',
