@@ -19884,16 +19884,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               ...(sessionContextWindowBudget !== null && targetContextWindow !== undefined
                 ? { contextWindowBudget: targetContextWindow }
                 : {}),
-              ...(runtimeAgentKind === 'pi' && runtimeRouteChanged
-                ? {
-                    assertSessionCloseSupported: () => {
-                      throwIpcError(
-                        'PRECONDITION_FAILED',
-                        'Pi target route requires an unsupported runtime replacement; runtime selection was not changed',
-                      );
-                    },
-                  }
-                : {}),
               isSessionInTurn,
               registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
               clearPendingCredentialSwitch: internalOptions.applyingPiCredentialPending
