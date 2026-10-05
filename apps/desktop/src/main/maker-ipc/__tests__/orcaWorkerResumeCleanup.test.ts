@@ -72,6 +72,12 @@ describe('resumeOrcaWorkerSessionIfMissing runtime cleanup', () => {
       readSessionExtraDirsFromDb: async () => [],
       readSessionWritableDirsFromDb: async () => [],
       buildCreateOptsWithStderr: (opts: Record<string, unknown>) => opts,
+      // #4598 的任务级窗口预算会在这条链里回调它；这里不校验预算，只保证闭包符号存在。
+      applySessionContextWindowBudgetToCreateOpts: async () => undefined,
+      getActiveCatalog: () => ({}),
+      // 同文件内的辅助函数，切源码时不会随 resume 函数一起被截取；这里给等价行为
+      // （读取会话状态，用测试自己的 readStatus 以保留 post-bootstrap 复核语义）。
+      isOrcaWorkerSessionResumable: async () => readStatus() === 'active',
       dbToMakerAgentKind: (value: unknown) => value,
       permissionModeOrAsk: (value: unknown) => value,
       directoryGrantsForRuntime: () => ({}),
