@@ -2417,7 +2417,7 @@ export interface AgentSessionHandle {
   /** Host tool approval uses the same live intent/model/scope as native tool approval. */
   reviewAutoPermissionAction?(action: ReviewableAction): Promise<AutoReviewDecision>;
 
-  /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
+  /** 运行时切换模型 —— 不支持时抛 NotSupportedError。thinkingEnabled = 目标模型的思考开关意图（Pi 用它收敛切模后的 thinking level）。 */
   setModel?(
     model: string,
     opts?: {
@@ -2429,6 +2429,7 @@ export interface AgentSessionHandle {
        * 触发重建，不走热切）。
        */
       contextWindowBudget?: number | null;
+      thinkingEnabled?: boolean
     },
   ): Promise<void>;
 
