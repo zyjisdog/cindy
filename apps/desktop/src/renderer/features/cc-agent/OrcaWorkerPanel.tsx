@@ -11,10 +11,12 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import { isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
+import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { toast } from '@/lib/toast';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { CCAgentSessionView } from './CCAgentSessionView';
 import { CreateWorkerPopover } from './CreateWorkerPopover';
+import { EditWorkerPopover } from './EditWorkerPopover';
 import { WorkerListToolbar } from './RolePillDropdown';
 import { useOrcaWorkerSelection } from './hooks/useOrcaWorkerSelection';
 import { subscribeNewWorkerShortcut } from './lib/newWorkerShortcut';
@@ -79,6 +81,10 @@ export function OrcaWorkerPanel({
     workerSessionId,
     createOpen,
     setCreateOpen,
+    editWorker,
+    handleCloseEditWorker,
+    handleOpenEditWorker,
+    handleUpdateWorker,
     handleCreateWorker,
     handleSwitchFocus,
     handleArchiveWorker,
@@ -93,6 +99,18 @@ export function OrcaWorkerPanel({
     onSelectionIntentCleared,
   });
   const lastAgentIslandPayloadRef = useRef<string | string[] | null>(null);
+
+  // 改名入口的远程兼容门:归属已确认本机时始终可编辑；device-link 被控端必须显式
+  // 声明支持 maker:worker:update(旧被控端 allowlist 不认该 channel)。
+  // 归属未解析(undefined)与「设置」入口同口径 fail closed。
+  const editingRemote = typeof deviceId === 'string';
+  const editCapabilities = useAgentCapabilities(
+    (selectedWorkerRecord ?? focusedWorker)?.agent ?? 'codex',
+    editingRemote ? deviceId : undefined,
+  );
+  const canEditWorker =
+    deviceId !== undefined &&
+    (!editingRemote || editCapabilities.capabilities?.supportsOrcaWorkerUpdate === true);
 
   const handleOpenCreate = useCallback(async () => {
     const result = await refreshCreationState();
@@ -181,6 +199,7 @@ export function OrcaWorkerPanel({
           onOpenCreate={() => void handleOpenCreate()}
           onOpenSettings={isSidebarWindow() || deviceId !== null ? undefined : handleOpenSettings}
           onArchiveWorker={handleArchiveWorker}
+          onEditWorker={canEditWorker ? handleOpenEditWorker : undefined}
           clearAttentionWhenVisible={viewVisible}
         />
       </div>
@@ -211,6 +230,12 @@ export function OrcaWorkerPanel({
         onCreate={handleCreateWorker}
         deviceId={deviceId ?? undefined}
         sshRemote={sshRemote}
+      />
+      <EditWorkerPopover
+        open={!!editWorker}
+        worker={editWorker}
+        onClose={handleCloseEditWorker}
+        onSave={handleUpdateWorker}
       />
     </div>
   );

@@ -1,4 +1,5 @@
 import type { AgentKind } from '@cindy/maker-core';
+import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole, orcaWorkerSessionTitle } from '@cindy/maker-shared/orca-team';
 import type { AuthStrategy } from '@cindy/model-providers';
 import path from 'node:path';
 
@@ -298,28 +299,6 @@ function toInternalFailure(err: unknown): Extract<OrcaWorkerCreationResult, { ok
     errorCode: 'INTERNAL',
     message: err instanceof Error ? err.message : String(err),
   };
-}
-
-function normalizeRequiredText(value: string, field: string): { ok: true; value: string } | { ok: false; message: string } {
-  const trimmed = value.trim();
-  if (!trimmed) return { ok: false, message: `${field} required` };
-  return { ok: true, value: trimmed };
-}
-
-const ORCA_WORKER_LABEL_MAX_LENGTH = 32;
-const ORCA_WORKER_LABEL_PATTERN = /^[a-z0-9_-]+$/i;
-
-/** worker label 是 switch_focus 的稳定定位键，所有创建入口都走同一组 slug 约束。 */
-export function normalizeOrcaWorkerLabel(value: string): { ok: true; value: string } | { ok: false; message: string } {
-  const label = normalizeRequiredText(value, 'label');
-  if (!label.ok) return label;
-  if (label.value.length > ORCA_WORKER_LABEL_MAX_LENGTH) {
-    return { ok: false, message: 'label must be 1-32 chars' };
-  }
-  if (!ORCA_WORKER_LABEL_PATTERN.test(label.value)) {
-    return { ok: false, message: 'label may only contain letters, numbers, hyphens and underscores' };
-  }
-  return { ok: true, value: label.value.toLowerCase() };
 }
 
 const ORCA_WORKER_CREATION_RESERVATION_LEASE_MS = 5 * 60 * 1000;
@@ -622,11 +601,8 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
   async function createWorkerInTeam(params: OrcaWorkerCreateInTeamParams, assertCurrent?: () => Promise<void>,
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void): Promise<OrcaWorkerCreationResult> {
-    const role = normalizeRequiredText(params.role, 'role');
+    const role = normalizeOrcaWorkerRole(params.role);
     if (!role.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: role.message };
-    if (role.value.length > 32) {
-      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'role must be 1-32 chars' };
-    }
     const label = normalizeOrcaWorkerLabel(params.label);
     if (!label.ok) return { ok: false, errorCode: 'INVALID_PARAMS', message: label.message };
     params = { ...params, label: label.value };
@@ -1082,7 +1058,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         fastMode: resolved.fastMode,
         // 所有创建入口先解析 Worker 创建偏好，再统一透传到这里；不继承 Lead 权限。
         permissionMode: resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
-        title: `Worker · ${role.value} · ${label.value}`,
+        title: orcaWorkerSessionTitle(role.value, label.value),
         orcaRole: 'worker',
         vendorOptions: workerVendorOptions,
       });
