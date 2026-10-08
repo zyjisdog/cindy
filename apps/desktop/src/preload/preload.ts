@@ -27,6 +27,7 @@ import type { BotToolsetContext } from '../shared/botRemoteCapabilities';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { DESKTOP_LOCAL, type RemoteDesktopApi } from '../shared/remoteDesktop';
 import { DEVICE_LINK_PUSH } from '../shared/deviceLinkIpc';
+import { PROVIDER_SHARE_IPC, type ProviderShareCommand } from '../shared/providerShare';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
 import type { DialogueWorkspaceSettingsState } from '../shared/dialogueWorkspaceSettings';
@@ -823,6 +824,12 @@ const fanOutDeviceLinkControlledState = createIpcFanOut('device-link:controlled-
 const fanOutDeviceLinkAccessRevoked = createIpcFanOut('device-link:access-revoked');
 const fanOutDeviceLinkControlTargetChanged = createIpcFanOut('device-link:control-target-changed');
 const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake-changed');
+const fanOutProviderShareOwnedChanged = createIpcFanOut(PROVIDER_SHARE_IPC.OWNED_CHANGED);
+const fanOutProviderShareReceivedChanged = createIpcFanOut(PROVIDER_SHARE_IPC.RECEIVED_CHANGED);
+const fanOutProviderShareRequested = createIpcFanOut(PROVIDER_SHARE_IPC.REQUESTED);
+const fanOutProviderShareSettled = createIpcFanOut(PROVIDER_SHARE_IPC.SETTLED);
+const fanOutProviderShareOpenJoin = createIpcFanOut(PROVIDER_SHARE_IPC.OPEN_JOIN);
+const fanOutProviderShareOpenManage = createIpcFanOut(PROVIDER_SHARE_IPC.OPEN_MANAGE);
 const fanOutDeviceLinkOwnershipChanged = createIpcFanOut('device-link:ownership-changed');
 // 控制端:目标设备「无响应」熔断状态翻转(payload = { deviceId, unresponsive })
 const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:responsiveness-changed');
@@ -2862,6 +2869,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       mtimeMs: number;
       remoteHostId?: string | null;
       deviceId?: string | null;
+      requestId?: string;
     }): Promise<{ ok: true; cachePath: string; stale: boolean } | { ok: false; message: string }> =>
       ipcRenderer.invoke('maker:file-browser:fetch-remote', params),
     /** 读缓存副本内容(cached 态文本预览;32MB 显示上限,二进制回 kind:'binary')。 */
@@ -2890,13 +2898,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
         received: number;
         total: number;
         phase?: 'pack' | 'upload' | 'download' | 'extract';
-        /** chatDownload 发起时带的请求 id(其它取回不带)。 */
+        /** fetchRemote / chatFetch / chatDownload 发起时带的请求 id。 */
         requestId?: string;
       }) => void,
     ): (() => void) => fanOutFileBrowserTransfer(cb as IpcCallback),
     /**
      * 聊天流文件取回:远端绝对路径 → 本地缓存副本(fetch-到缓存-再操作)。
-     * 进度沿用 onTransferProgress,relPath 键 = 原始 absPath。失败按 code 分流:
+     * 进度沿用 onTransferProgress,按 requestId 关联请求。失败按 code 分流:
      * OUTSIDE_WORKDIR(SSH workdir 外,明确占位)/ NOT_FOUND / FETCH_FAILED。
      */
     previewHtml: (params: {
@@ -2911,6 +2919,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       origin: { kind: 'device'; deviceId: string } | { kind: 'ssh'; remoteHostId: string };
       workdir: string;
       absPath: string;
+      requestId?: string;
     }): Promise<
       | { ok: true; cachePath: string; stale: boolean; size: number }
       | {
@@ -2921,7 +2930,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     > => ipcRenderer.invoke('maker:chat-file:fetch', params),
     /**
      * 远程文件 / 文件夹下载到系统「下载」文件夹(重名自动加编号),返回最终路径。
-     * 进度沿用 onTransferProgress,relPath 键 = 原始 absPath。
+     * 进度沿用 onTransferProgress,按 requestId 关联请求。
      */
     chatDownload: (params: {
       origin: { kind: 'device'; deviceId: string } | { kind: 'ssh'; remoteHostId: string };
@@ -4509,6 +4518,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     account: (command: import('@cindy/device-link').SharedTaskAccountCommand): Promise<unknown> =>
       ipcRenderer.invoke('shared-task:account', command),
   },
+  // 供应商分享：分享者管理与受邀者申请走同一个命令通道(只接受本机应用窗口)。
+  providerShare: {
+    command: (command: ProviderShareCommand): Promise<unknown> =>
+      ipcRenderer.invoke(PROVIDER_SHARE_IPC.COMMAND, command),
+    onOwnedChanged: fanOutProviderShareOwnedChanged,
+    onReceivedChanged: fanOutProviderShareReceivedChanged,
+    onRequested: fanOutProviderShareRequested,
+    onSettled: fanOutProviderShareSettled,
+    onOpenJoin: fanOutProviderShareOpenJoin,
+    onOpenManage: fanOutProviderShareOpenManage,
+  },
   deviceLink: {
     taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest): Promise<import('@cindy/device-link').TaskMigrationView> =>
       ipcRenderer.invoke(TASK_MIGRATION_LOCAL_CHANNEL, deviceId, request),
@@ -6050,6 +6070,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       providers: import('@cindy/model-providers').ProviderView[];
       providerOrder: string[];
     }> => ipcRenderer.invoke('maker:provider:list'),
+    setProviderRemoteAccess: (input: { providerId: string; enabled: boolean }): Promise<{ ok: true; enabled: boolean }> =>
+      ipcRenderer.invoke('maker:provider:remote-access:set', input),
     /** Refresh one built-in provider through its existing main-process discovery source. */
     refreshBuiltinProviderModels: (
       providerId: import('../shared/providerModelRefresh').BuiltinRefreshableProviderId,
@@ -6904,6 +6926,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       providerId?: string | null,
       effort?: string,
       fastMode?: boolean,
+      // 远程 Agent:同时换 Agent 所在电脑(null = 任务所在电脑)。不传 = 位置不变。
+      options?: { agentDeviceId?: string | null },
     ): Promise<{
       switched: boolean;
       agentKind: 'claude-code' | 'codex' | 'pi';
@@ -6913,15 +6937,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sameEngineRevision?: number;
       sameEngineSuperseded?: boolean;
     }> =>
-      ipcRenderer.invoke(
-        'maker:switch-session-agent',
-        sessionId,
-        targetAgentKind,
-        model,
-        providerId,
-        effort,
-        fastMode,
-      ),
+      options
+        ? ipcRenderer.invoke(
+            'maker:switch-session-agent',
+            sessionId,
+            targetAgentKind,
+            model,
+            providerId,
+            effort,
+            fastMode,
+            options,
+          )
+        : ipcRenderer.invoke(
+            'maker:switch-session-agent',
+            sessionId,
+            targetAgentKind,
+            model,
+            providerId,
+            effort,
+            fastMode,
+          ),
     // 读 main 权威的 pending 切换意图(内存态,不落库)。重开视图 / 远程会话重连后
     // 用它恢复乐观显示——否则用户登记的意图在 UI 上凭空消失,下一条消息却按意图切换。
     getSessionAgentSwitchIntent: (
@@ -7424,6 +7459,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         opts?: { expectedClearBoundaryMs?: number | null },
       ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
         ipcRenderer.invoke('maker:input:clear-error', sessionId, opts),
+      cancelUsageLimitWait: (
+        sessionId: string,
+        opts?: { expectedClearBoundaryMs?: number | null },
+      ): Promise<import('../shared/agentInputQueue').AgentInputProjection> =>
+        ipcRenderer.invoke('maker:input:cancel-usage-limit-wait', sessionId, opts),
       persistTurnErrorDeferred: (
         sessionId: string,
         errData: Record<string, unknown> | null,
