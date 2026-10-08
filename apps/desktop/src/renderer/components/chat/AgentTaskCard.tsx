@@ -386,7 +386,7 @@ export function AgentTaskCard({
     setStopping(true);
     // 重试先收掉上一次的失败提示:它描述的是上一次点击;这次再失败会在 catch 重新写上。
     setStopFailed(false);
-    void stopAgentTaskFor(sessionId, update.taskId)
+    void stopBackgroundTask(sessionId, update.taskId)
       .then(() => {
         // 停止对「main 侧其实已不在」的 id 是**静默成功**的(两套控制面都查无此任务,
         // 例如终态事件丢包)。点完立刻对一次账:行要么很快翻成已停止(它本就结束了),
