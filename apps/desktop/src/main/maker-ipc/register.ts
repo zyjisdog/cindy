@@ -905,6 +905,10 @@ import {
   type ModelWindowSwitchPreparationResult,
 } from './contextOverflowRollover.js';
 import {
+  createPiRetiredRouteWindowGuard,
+  type PiRetiredRouteWindowGuard,
+} from './piRetiredRouteWindowGuard.js';
+import {
   classifyCodexHistoryOversized,
   reserveCodexForkCleanup,
 } from '../maker-host/codex-local-sessions.js';
@@ -1068,6 +1072,7 @@ import {
   refreshActiveModelContextSettings,
   closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
+  type ApplyRuntimeSetModelChangeResult,
 } from './runtimeSetModel.js';
 import { codexThreadTransferSourcePredicate, commitCodexThreadTransfer, relinkCodexProviderThread } from './codexProviderThreadRelink.js';
 import {
@@ -3550,6 +3555,11 @@ async function syncLibraryReadonlyExtraDir(
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
 let contextOverflowRolloverHolder: ReturnType<typeof createContextOverflowRollover> | null = null;
+/**
+ * 退役（或跳过启动期核实的冷 Pi）route 的「下一次发送前」窗口核验登记处；见
+ * piRetiredRouteWindowGuard.ts。
+ */
+let piRetiredRouteWindowGuardHolder: PiRetiredRouteWindowGuard | null = null;
 const overflowSuppressedBroadcasts = new Map<
   string,
   { sessionId: string; event: AgentEvent; persistId?: string; resolvedContent?: unknown }
@@ -4949,6 +4959,11 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     // 关闭前固化 live 用量（见 sessionLastLiveUsage.ts）：冷 Pi 切模的窗口核实
     // 预检用它代替可能低报的 DB 快照（Greptile P1）。
     rememberSessionLastLiveUsage(session.id, session.getUsageSnapshot?.());
+    // 注意：**不能**在这里清 piRetiredRouteWindowGuardHolder ——
+    // 缩窗保护事务会先 close 旧进程再 commitRebuild（contextOverflowRollover
+    // 的 prepareModelWindowSwitch），如果重建提交失败，这里清标记会让用户重试时
+    // 直接跳过实际窗口核验与保护。标记只由 guard 在核验+重建都成功后清除
+    // （Greptile P1，2026-09-26）。
     finalizeSessionClose(context.closedDirectAbortBoundary !== null, {
       clearTurnState: () => {
         sessionTurnActivityTracker.deleteSession(session.id);
@@ -14520,6 +14535,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }));
 
   const { sendToAgentAccepted: sendToAgentAcceptedUnlocked } = createMakerSendTransaction({
+    verifyRetiredRouteWindowBeforeSend: async (sessionId) => {
+      const guard = piRetiredRouteWindowGuardHolder;
+      if (!guard) return;
+      const verification = await guard.verifyBeforeSend(sessionId);
+      if (verification.status === 'failed') {
+        // 这条消息没有发送：抛出后由输入协调器退回队首并给出可恢复的失败提示。
+        throwIpcError(localModelWindowSwitchErrorCode(verification.code), verification.message);
+      }
+      // 缩窗保护会关掉刚懒创建的 runtime；调用方据此重新创建发送目标。
+      return verification.status === 'verified' ? { rebuilt: verification.rebuilt } : undefined;
+    },
     prepareProductTurn: (sessionId) => {
       const dispatch = prepareUpstreamMergeTurn(sessionId);
       return dispatch
@@ -14813,6 +14839,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         : withCindyMakeProjectUse(app.getPath('userData'), botInput?.workingDir, () => sendToAgentAcceptedUnlocked(...args));
     });
   };
+  piRetiredRouteWindowGuardHolder = createPiRetiredRouteWindowGuard({
+    prepareModelWindowSwitch: (sessionId, target) => {
+      const holder = contextOverflowRolloverHolder;
+      // 没有窗口事务 = 无法保护：抛出，由 guard 映射成 fail-closed 的失败码（绝不静默放行）。
+      if (!holder) throw new Error('model window switch protection is unavailable');
+      return holder.prepareModelWindowSwitch(sessionId, target);
+    },
+    readLiveContextWindow: (sessionId) => {
+      const reported = maker.getSession(sessionId)?.getUsageSnapshot?.().contextWindow;
+      return typeof reported === 'number' && Number.isFinite(reported) && reported > 0
+        ? reported
+        : undefined;
+    },
+    log,
+  });
   contextOverflowRolloverHolder = createContextOverflowRollover({
     hasExternalRecoveryOwner: (sessionId) =>
       isHeadlessGhostSetupTurn(sessionId) || !!bindingStore.findByTarget(sessionId),
@@ -19474,7 +19515,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
         };
         assertRuntimeOwnerCurrent();
-        const result: Awaited<ReturnType<typeof applyRuntimeSetModelChange>> = routeExplicit
+        const result: ApplyRuntimeSetModelChangeResult = routeExplicit
           ? await applyRuntimeSetModelChange({
               maker,
               beforeMutation: internalOptions.beforeMutation,
@@ -19533,12 +19574,43 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           markRemoteSettingPersistedInsideHandler(response);
         }
         const piSessionAfterRouteChange = maker.getSession(sessionId);
+        // apply 已按预期退役旧 runtime 时(本地 Pi 跨 proxy 身份等),没有 live runtime
+        // 可读终态窗口;目标 route 已提交,下一次发送按新来源懒创建。这里只跳过「活进程
+        // 快照核验」——退役前能按目录窗口做的缩窗保护照旧做;新进程实际窗口的核验由
+        // 下一次发送的 piRetiredRouteWindowGuard 在消息发给模型前补齐(见下面 record)。
+        // 退役（或跳过启动期核实的冷 Pi）把「新进程实际窗口」的核验推到下一次发送：
+        // 目录窗口可能与 Pi get_state 返回值不同，必须用真实进程的窗口重判 90% 压力线。
+        // apply 报出的 retiredRuntime 来自它自己的关闭判定（含 Pi previewModelSwitch 的
+        // rebuild），这里不再重复预判，避免与实际关闭判定分叉。
+        if (
+          runtimeAgentKind === 'pi' &&
+          (runtimeRouteChanged || coldPiRouteWithoutLiveWindowCheck) &&
+          result.status !== 'deferred' &&
+          (result.retiredRuntime === true || coldPiRouteWithoutLiveWindowCheck)
+        ) {
+          piRetiredRouteWindowGuardHolder?.record(sessionId, {
+            model,
+            providerId: targetRouteProviderId ?? null,
+            catalogTargetWindow:
+              typeof targetContextWindow === 'number' && targetContextWindow > 0
+                ? targetContextWindow
+                : null,
+            previousWindow:
+              typeof verifiedCurrentWindow === 'number' && verifiedCurrentWindow > 0
+                ? verifiedCurrentWindow
+                : null,
+            contextTokensFloor: getSessionLastLiveUsage(sessionId)?.contextTokens ?? null,
+          });
+        }
         if (
           runtimeAgentKind === 'pi' &&
           (runtimeRouteChanged || piConfigurationRefresh) &&
           result.status !== 'deferred' &&
           result.retiredRuntime !== true &&
           !modelWindowRebuilt &&
+          // 两个独立的「可跳过核实」理由，都保留：冷 Pi 已在预检时跳过窗口核实
+          // （#4735/#4835），或 apply 已把旧 runtime 退役（此时没有活进程可读）。
+          // !A && !B ≡ !(A || B)：任一理由成立就跳过核实；只留一侧会回归另一侧修过的 bug。
           !coldPiRouteWithoutLiveWindowCheck
         ) {
           if (!piSessionAfterRouteChange) {
