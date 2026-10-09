@@ -25,6 +25,8 @@ import { useRecentModels, type RecentModelItem } from '@/state/recentModels';
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { MORPH_CONTENT_RESIZE_EVENT } from '@/components/ui/morph-popover';
 
+import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
+
 import { ModelConfigFlyout, type ModelConfigFlyoutState } from './ModelConfigFlyout';
 // ModelSelector 反过来也 import 本文件 —— ESM 循环 import 在这里安全:两边用到的都是
 // **函数声明**(提升),且只在 render 时求值,不在模块求值期互相读值。
@@ -355,7 +357,8 @@ export function UnifiedModelPanel({
 }: UnifiedModelPanelProps) {
   const { t } = useTranslation();
   const storedFavorites = useModelFavorites();
-  const remoteFavorites = useRemoteModelFavorites(deviceId);
+  // 分享来的供应商(`share:<id>`)不是同账号的电脑，没有可同步的收藏：不去读，也不报同步失败。
+  const remoteFavorites = useRemoteModelFavorites(isProviderShareAgentDeviceId(deviceId) ? undefined : deviceId);
   const favorites = selectionPolicy === 'official' ? NO_FAVORITES : deviceId ? remoteFavorites.items : storedFavorites;
   const storedRecentModels = useRecentModels();
   // official 入口(设置页 / create-agent)刻意不展示「最近」:那里的选择动作不记录(见
