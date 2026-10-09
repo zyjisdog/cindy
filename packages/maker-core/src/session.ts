@@ -1760,7 +1760,7 @@ export class Session {
 
   async setModel(
     model: string,
-    opts?: { providerId?: string | null; effort?: Effort; contextWindowBudget?: number | null },
+    opts?: { providerId?: string | null; effort?: Effort; contextWindowBudget?: number | null; thinkingEnabled?: boolean },
   ): Promise<void> {
     if (!this.capabilities.switchModel.supported) {
       throw new NotSupportedError('switchModel', this.capabilities.switchModel);
