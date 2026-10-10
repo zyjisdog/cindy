@@ -177,9 +177,11 @@ describe.skipIf(!binaryPath)('Codex device-hosted guest with a real app-server',
       const enabledOutsideAllowlist = threadFeatures
         .filter((feature) => feature.enabled && feature.stage !== 'removed' && !CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES.has(feature.name))
         .map((feature) => feature.name);
-      if (guest)
- expect(enabledOutsideAllowlist).toEqual([]);
+      if (guest) expect(enabledOutsideAllowlist).toEqual([]);
       else expect(enabledOutsideAllowlist.length).toBeGreaterThan(0);
+      // 两种会话里干活要用的功能都开着(命令、shell 快照、看图、子代理)。
+      const enabled = new Set(threadFeatures.filter((feature) => feature.enabled).map((feature) => feature.name));
+      expect(['shell_tool', 'unified_exec', 'shell_snapshot', 'view_image', 'multi_agent'].filter((name) => !enabled.has(name))).toEqual([]);
       await handle.close();
 
       expect(bodies.length).toBeGreaterThan(0);

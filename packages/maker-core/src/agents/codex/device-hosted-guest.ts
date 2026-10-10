@@ -69,11 +69,12 @@ export const CODEX_DEVICE_HOSTED_GUEST_THREAD_CONFIG: Readonly<Record<string, un
  * 本机或项目配置打开的、Codex 升级新增的都一样。启动时从 app-server 取完整的功能清单
  * (experimentalFeature/list)，名单外的逐个关闭，见 codexGuestFeatureOverrides。
  *
- * 留下的：命令、补丁与看图(经执行环境在受邀者电脑上执行)，子代理，技能搜索，等待，审批与提问，
- * 目标与 Fast，以及连接、鉴权、上下文压缩本身需要的。生图不在内：它能按本机路径读参考图。
+ * 留下的：命令、补丁与看图(经执行环境在受邀者电脑上执行)，shell 快照(由执行环境在受邀者电脑上
+ * 按受邀者自己的 shell 配置生成，关掉会让命令缺少 .zshrc 等设置的 PATH)，子代理，技能搜索，等待，
+ * 审批与提问，目标与 Fast，以及连接、鉴权、上下文压缩本身需要的。生图不在内：它能按本机路径读参考图。
  */
 export const CODEX_DEVICE_HOSTED_GUEST_KEPT_FEATURES: ReadonlySet<string> = new Set([
-  'shell_tool', 'unified_exec', 'unified_exec_tty', 'write_stdin_approval', 'view_image',
+  'shell_tool', 'unified_exec', 'unified_exec_tty', 'write_stdin_approval', 'view_image', 'shell_snapshot',
   'multi_agent', 'multi_agent_v2', 'skill_search', 'sleep_tool', 'mentions_v2',
   'guardian_approval', 'guardian_reuse_parent_compaction', 'auth_elicitation', 'tool_call_mcp_elicitation',
   'goals', 'fast_mode',

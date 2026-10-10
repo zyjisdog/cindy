@@ -61,6 +61,7 @@ const FEATURE_PAGES: Record<string, { data: Array<{ name: string; stage: string;
     data: [
       { name: 'shell_tool', stage: 'stable', enabled: true },
       { name: 'view_image', stage: 'stable', enabled: true },
+      { name: 'shell_snapshot', stage: 'stable', enabled: true },
       { name: 'image_generation', stage: 'stable', enabled: true },
       { name: 'in_app_local_automation', stage: 'stable', enabled: true },
       { name: 'network_proxy', stage: 'beta', enabled: false },
@@ -304,7 +305,8 @@ describe('Codex device-hosted guest sessions', () => {
       'features.network_proxy': false,
       'features.future_local_tool': false,
     });
-    for (const key of ['features.shell_tool', 'features.view_image', 'features.item_ids', 'features.web_search_request']) {
+    // shell 快照由执行环境在受邀者电脑上生成，保持开启。
+    for (const key of ['features.shell_tool', 'features.view_image', 'features.shell_snapshot', 'features.item_ids', 'features.web_search_request']) {
       expect(config[key]).toBeUndefined();
     }
     expect(fixture.request.mock.calls.filter(([method]) => method === Method.ExperimentalFeatureList)
