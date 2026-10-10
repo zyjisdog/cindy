@@ -12,7 +12,10 @@ import {
 } from '../../../../shared/conversationSearchJump';
 import type { CreateWorkerForm } from '../CreateWorkerPopover';
 import type { EditWorkerForm } from '../EditWorkerPopover';
-import { getCollaborationStartErrorMessage } from '../collaborationErrors';
+import {
+  executionDeviceErrorMessage,
+  getCollaborationStartErrorMessage,
+} from '../collaborationErrors';
 import { createWorkerLabel } from '../workerLabel';
 import { useWorkers } from './useWorkers';
 import { clearWorkerAttention } from '../lib/workerAttentionStore';
@@ -319,6 +322,12 @@ export function useOrcaWorkerSelection({
             // null(未显式选来源)不传字段:IPC 侧只认非空 string 为显式来源。
             providerId: form.providerId ?? undefined,
             workerPermissionMode: form.workerPermissionMode,
+            ...(form.executionDeviceId
+              ? {
+                  executionDeviceId: form.executionDeviceId,
+                  ...(form.workingDir ? { workingDir: form.workingDir } : {}),
+                }
+              : {}),
             label,
             initialTask: form.initialTask || undefined,
           });
@@ -332,7 +341,9 @@ export function useOrcaWorkerSelection({
             continue;
           }
           toast.error(
-            getCollaborationStartErrorMessage(err, t, { remoteDevice: Boolean(deviceId) }),
+            (form.executionDeviceId &&
+              executionDeviceErrorMessage(err, t, form.executionDeviceName, Boolean(form.workingDir)))
+              || getCollaborationStartErrorMessage(err, t, { remoteDevice: Boolean(deviceId) }),
           );
           return;
         }

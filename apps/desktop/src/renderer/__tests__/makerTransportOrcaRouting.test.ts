@@ -70,6 +70,7 @@ describe('orcaWorkflowsFor 路由', () => {
     await orca.updateWorker({ leadSessionId: 'lead', workerId: 'w1', role: 'reviewer', label: 'reviewer-2' });
     await orca.endTeam('lead');
     await orca.getCollaborationSettings();
+    await orca.listExecutionDevices();
 
     expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:orca-workflows:list-workers-by-lead', ['lead']);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:orca-workflows:get-by-lead', ['lead']);
@@ -81,6 +82,7 @@ describe('orcaWorkflowsFor 路由', () => {
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:worker:update', [{ leadSessionId: 'lead', workerId: 'w1', role: 'reviewer', label: 'reviewer-2' }]);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:team:end', ['lead']);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:collaboration-settings:get', []);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:orca:execution-devices', []);
     // 注:setCollaborationSetting / create / addWorker / updateWorkerStatus 刻意不在远程可路由集
     // (channel 不在 allowlist、无远程调用方);本机走 window.electronAPI.localDb.orcaWorkflows。
   });
