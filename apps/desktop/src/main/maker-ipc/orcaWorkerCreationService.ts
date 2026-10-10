@@ -400,11 +400,9 @@ function toInternalFailure(err: unknown): Extract<OrcaWorkerCreationResult, { ok
 
 const ORCA_WORKER_CREATION_RESERVATION_LEASE_MS = 5 * 60 * 1000;
 
-/** Worker 任务标题：label 与角色名相同时只写一次(「Worker · reader」而非「Worker · reader · reader」)。 */
+/** Worker 任务标题：label 与角色名相同时只写一次(「Worker · reader」而非「Worker · reader · reader」)。单一实现走 maker-shared 的 orcaWorkerSessionTitle，创建与改名同源。 */
 export function orcaWorkerTitle(role: string, label: string): string {
-  return role.trim().toLowerCase() === label.trim().toLowerCase()
-    ? `Worker · ${role}`
-    : `Worker · ${role} · ${label}`;
+  return orcaWorkerSessionTitle(role, label);
 }
 
 function isWorkerLabelConstraintError(err: unknown): boolean {

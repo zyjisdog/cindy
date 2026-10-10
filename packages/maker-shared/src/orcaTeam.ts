@@ -65,9 +65,12 @@ export function normalizeOrcaWorkerRole(
 
 /**
  * Worker session 的生成标题。创建与改名共用同一形态;改名只在标题仍是这个形态时同步改写,不覆盖用户自定义标题。
+ * label 与角色名相同时只写一次(「Worker · reader」而非「Worker · reader · reader」),与 orcaWorkerTitle 同规则。
  */
 export function orcaWorkerSessionTitle(role: string, label: string): string {
-  return `Worker · ${role} · ${label}`;
+  return role.trim().toLowerCase() === label.trim().toLowerCase()
+    ? `Worker · ${role}`
+    : `Worker · ${role} · ${label}`;
 }
 
 /**
