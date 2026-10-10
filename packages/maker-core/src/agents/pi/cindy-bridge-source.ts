@@ -2880,6 +2880,9 @@ class CindyMcpGateway {
   private readonly tools = new Map<string, ConnectedMcpTool>();
   private readonly unavailableServers = new Map<string, string>();
   private readonly disclosedSchemas = new Set<string>();
+  private disclosureNotePending = false;
+  /** Catalog snapshot the in-memory keys were loaded and validated against. */
+  private disclosureCatalogAtLoad: string | undefined;
   private botMemoryFacadeEnabled = false;
   private botHelperFacadeEnabled = false;
   private readonly disclosureFile: string | null;
@@ -3042,6 +3045,17 @@ class CindyMcpGateway {
     return this.disclosedSchemas.has(mcpGatewayKey(call.tool.serverName, call.tool.name));
   }
 
+  /** Sorted, prompt-ready server/tool names of the persisted disclosure set. */
+  disclosedKeysForPrompt(limit = 48): string {
+    const all = Array.from(this.disclosedSchemas).sort();
+    const shown = all.slice(0, limit).map((key) => {
+      const sep = key.indexOf('\u0000');
+      return sep === -1 ? key : key.slice(0, sep) + '/' + key.slice(sep + 1);
+    });
+    if (all.length > limit) shown.push('… +' + (all.length - limit) + ' more');
+    return shown.join(', ');
+  }
+
   private loadDisclosedSchemas(): void {
     try {
       const parsed = JSON.parse(readFileSync(this.disclosureFile as string, 'utf8'));
@@ -3052,6 +3066,10 @@ class CindyMcpGateway {
       if (!parsed || typeof parsed !== 'object' || parsed.piVersion !== this.disclosureVersion) return;
       if (typeof parsed.catalog !== 'string' || parsed.catalog.length === 0) return;
       if (!Array.isArray(parsed.keys)) return;
+      // Remember which catalog the keys were validated against: register()'s
+      // reconcile must judge this snapshot (not a fresh file read — a parallel
+      // instance can rewrite the shared file in between) against the live catalog.
+      this.disclosureCatalogAtLoad = parsed.catalog;
       for (const key of parsed.keys) {
         if (typeof key === 'string' && key.length > 0 && key.length <= 512) this.disclosedSchemas.add(key);
       }
@@ -3069,20 +3087,18 @@ class CindyMcpGateway {
   }
 
   // Called once from register(), after this session's tool catalog is fully connected.
-  // MCP config is frozen per session (pi-harness §1), so a fingerprint mismatch means
-  // the persisted keys were written under a different catalog (e.g. fresh-session
-  // fallback after an MCP config change) and must not skip inspection.
+  // MCP config is frozen per session (pi-harness §1), so keys whose loaded catalog
+  // snapshot differs from the live fingerprint were written under a different
+  // catalog (e.g. fresh-session fallback after an MCP config change) and must not
+  // skip inspection. Judged against the load-time snapshot instead of re-reading
+  // the file: two instances can host the same session in parallel, and a fresh
+  // read would let the other instance's rewrite validate this instance's stale keys.
   private reconcileDisclosedSchemas(): void {
-    const fingerprint = this.disclosureCatalogFingerprint();
     if (!this.disclosureFile) return;
-    let stale = false;
-    try {
-      const parsed = JSON.parse(readFileSync(this.disclosureFile as string, 'utf8'));
-      stale = Boolean(parsed && typeof parsed === 'object'
-        && parsed.piVersion === this.disclosureVersion
-        && typeof parsed.catalog === 'string' && parsed.catalog !== fingerprint);
-    } catch { /* state unreadable: load path already started empty */ }
-    if (stale) {
+    const fingerprint = this.disclosureCatalogFingerprint();
+    const loadedAgainst = this.disclosureCatalogAtLoad;
+    this.disclosureCatalogAtLoad = fingerprint;
+    if (loadedAgainst !== undefined && loadedAgainst !== fingerprint) {
       this.disclosedSchemas.clear();
       this.writeDisclosedSchemas();
     }
@@ -3304,6 +3320,31 @@ class CindyMcpGateway {
     this.botMemoryFacadeEnabled = options.botMemoryFacade === true
       && this.tools.has(mcpGatewayKey('cindy_memory', 'call_tool'));
     this.reconcileDisclosedSchemas();
+    // Token hygiene: post-compaction the model loses the memory of which MCP tools
+    // it already inspected and re-runs cindy_mcp_list_tools "to be safe". Inject a
+    // one-shot custom message into the first run after each successful compaction
+    // instead of editing the system prompt every run; the message then lives in
+    // context like any other turn until the next compaction summarizes it away.
+    this.disclosureNotePending = false;
+    pi.on?.('session_compact', () => { this.disclosureNotePending = true; });
+    pi.on?.('before_agent_start', () => {
+      if (!this.disclosureNotePending) return undefined;
+      this.disclosureNotePending = false;
+      const keys = this.disclosedKeysForPrompt();
+      if (!keys) return undefined;
+      return {
+        message: {
+          customType: 'cindy-mcp-disclosure-state',
+          content: [{
+            type: 'text',
+            text: 'MCP tools whose schemas you already inspected for this session (persisted across restarts): '
+              + keys + '. Call them directly; do not re-run cindy_mcp_list_tools to re-inspect them '
+              + 'unless a call is rejected as uninspected. (One-shot reminder after context compaction.)',
+          }],
+          display: false,
+        },
+      };
+    });
 
     if (this.botMemoryFacadeEnabled) {
       pi.registerTool({
