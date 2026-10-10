@@ -6,7 +6,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { DeviceHostedSession } from '../base-agent.js';
 import {
+  DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS,
+  DEVICE_HOSTED_GUEST_CLAUDE_TOOLS,
   deviceHostedEnvironmentNote,
+  deviceHostedGuestAgentDenial,
   deviceHostedGuestClaudeMdExcludes,
   deviceHostedGuestSessionRoot,
   deviceHostedPiEnvValue,
@@ -222,5 +225,35 @@ describe('deviceHostedSubagentAllows', () => {
   it('lets a custom definition override a built-in name', () => {
     const rules = new Map<string, DeviceHostedAgentToolRule>([['Plan', { tools: ['Write'] }]]);
     expect(deviceHostedSubagentAllows('Plan', 'Write', rules)).toBe(true);
+  });
+});
+
+describe('device-hosted guest Claude tools', () => {
+  it('never lists tools that act on this computer, its other sessions or its user account', () => {
+    const forbidden = [
+      ...DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS,
+      // 其他会话
+      'ListAgents', 'SendMessage',
+      // 本机用户的 claude.ai 账号
+      'Artifact', 'RemoteTrigger', 'DesignSync', 'ClaudeDesign', 'Projects', 'Workflow', 'PushNotification',
+      'ReadNotifications', 'SendFeedback', 'ProposeSkills', 'ProposeGoal',
+      // 本机文件、命令与网络
+      'Monitor', 'SendUserFile', 'LSP', 'WebFetch', 'OfferChromeSetup',
+    ];
+    for (const name of forbidden) expect(DEVICE_HOSTED_GUEST_CLAUDE_TOOLS).not.toContain(name);
+  });
+
+  it('keeps subagents, questions, plan mode, tasks, skills and web search', () => {
+    for (const name of ['Agent', 'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode', 'TodoWrite', 'ToolSearch', 'Skill', 'WebSearch']) {
+      expect(DEVICE_HOSTED_GUEST_CLAUDE_TOOLS).toContain(name);
+    }
+  });
+
+  it('refuses subagent isolation and leaves other calls alone', () => {
+    expect(deviceHostedGuestAgentDenial('Agent', { prompt: 'x', isolation: 'remote' })).toMatch(/isolation/);
+    expect(deviceHostedGuestAgentDenial('Task', { prompt: 'x', isolation: 'worktree' })).toMatch(/isolation/);
+    expect(deviceHostedGuestAgentDenial('Agent', { prompt: 'x' })).toBeNull();
+    expect(deviceHostedGuestAgentDenial('Agent', undefined)).toBeNull();
+    expect(deviceHostedGuestAgentDenial('WebSearch', { isolation: 'remote' })).toBeNull();
   });
 });

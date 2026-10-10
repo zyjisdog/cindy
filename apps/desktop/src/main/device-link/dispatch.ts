@@ -121,7 +121,8 @@ import { isProviderSharePeer, isSharedTaskPeer, parseProviderSharePeer, PROVIDER
 import { captureSharedTaskPeer, captureSharedTaskPush, assertSharedTaskInvoke, sharedTaskMetadataTopic, sharedTaskAccessFailure } from './sharedTaskDispatch.js';
 import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import { fetchLocalMediaToOss } from './mediaFetch';
-import { refreshSharedTaskPeer } from './sharedTaskDispatch.js';
+import { MAX_SHARED_TASK_TOPICS, refreshSharedTaskPeer, releaseSharedTaskWatchesOnWorkdirChange } from './sharedTaskDispatch.js';
+import { admitSharedTaskFsWatchTopics } from './sharedTaskFileAccess.js';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
@@ -1936,6 +1937,7 @@ function listMessagePayload(dst: string, sessionId: string, payload: unknown): u
 }
 
 function forwardPush(channel: string, payload: unknown, ownerStamp?: PushOwnerStamp): void {
+  releaseSharedTaskWatchesOnWorkdirChange(channel, payload);
   if (!activeClient) return;
   const topic = topicForPush(channel, payload);
   if (!topic) return;
@@ -2820,7 +2822,14 @@ async function handleInvoke(
     return;
   }
   if (payload && (payload.channel === DL_SUBSCRIBE_CHANNEL || payload.channel === DL_UNSUBSCRIBE_CHANNEL)) {
-    const result = handleSubscriptionFrame(src, payload);
+    // Only a shared-task workdir watch awaits; every other frame stays synchronous.
+    const admitting = admitSharedTaskSubscription(src, payload);
+    const settle = admitting ? await admitting : null;
+    // The workdir lookup is an await boundary; a frame from a replaced link must not subscribe.
+    if (settle && (remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
+    // Settled synchronously with the install below: no workdir move can slip between them.
+    const admission = settle?.();
+    const result = handleSubscriptionFrame(src, admission?.payload ?? payload, admission?.verifiedFsWatchTopics);
     if (!await sendAuthorizedInvokeResultSafe(
       client,
       src,
@@ -3874,14 +3883,59 @@ function isRemoteSubscriptionTopic(value: unknown): value is Topic {
   return parseFsWatchTopic(value) !== null;
 }
 
-function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeResultPayload {
+/**
+ * Shared-task guests may watch only their task workdir. That binding needs the
+ * host DB, so it runs before the synchronous frame handler. Returns null when
+ * no admission is needed, so ordinary frames never cross an await. The result
+ * is settled synchronously at install time: if the task workdir moved during
+ * the lookup, the watch topics are dropped and the rest of the frame proceeds.
+ */
+function admitSharedTaskSubscription(
+  src: string,
+  payload: InvokePayload,
+): Promise<() => { payload: InvokePayload; verifiedFsWatchTopics: ReadonlySet<string> }> | null {
+  const rawArg = (payload.args ?? [])[0];
+  const arg = rawArg && typeof rawArg === 'object' && !Array.isArray(rawArg)
+    ? rawArg as Record<string, unknown> : null;
+  const topics = arg?.topics;
+  // Oversized frames skip the DB lookup; the synchronous gate rejects them.
+  if (!isSharedTaskPeer(src) || payload.channel !== DL_SUBSCRIBE_CHANNEL || !Array.isArray(topics)
+    || topics.length > MAX_SHARED_TASK_TOPICS
+    || !topics.some((topic) => typeof topic === 'string' && parseFsWatchTopic(topic) !== null)) {
+    return null;
+  }
+  const sharedTask = captureSharedTaskPeer(src);
+  // The synchronous gate reports the access failure.
+  if (!sharedTask) return null;
+  const withTopics = (next: unknown[]): InvokePayload =>
+    ({ ...payload, args: [{ ...arg, topics: next }, ...(payload.args ?? []).slice(1)] });
+  return admitSharedTaskFsWatchTopics(sharedTask, topics).then(
+    (admitted) => () => admitted.isFresh()
+      ? { payload: withTopics(admitted.topics), verifiedFsWatchTopics: admitted.verified }
+      : {
+        payload: withTopics(admitted.topics.filter((topic) =>
+          typeof topic !== 'string' || parseFsWatchTopic(topic) === null)),
+        verifiedFsWatchTopics: new Set<string>(),
+      },
+    (error: unknown) => {
+      log.warn(`shared task fs-watch admission failed for ${shortId(src)}: ${String(error)}`);
+      return () => ({ payload, verifiedFsWatchTopics: new Set<string>() });
+    },
+  );
+}
+
+function handleSubscriptionFrame(
+  src: string,
+  payload: InvokePayload,
+  verifiedFsWatchTopics: ReadonlySet<string> = new Set(),
+): InvokeResultPayload {
   // Provider-share guests never subscribe: the remote agent is poll-only.
   if (isProviderSharePeer(src)) return PROVIDER_SHARE_ACCESS_FAILURE;
   if (isSharedTaskPeer(src)) {
     const sharedTask = captureSharedTaskPeer(src);
     try {
       if (!sharedTask) throw new Error('SharedTask unavailable');
-      assertSharedTaskInvoke(sharedTask, payload);
+      assertSharedTaskInvoke(sharedTask, payload, undefined, 'invoke', verifiedFsWatchTopics);
     } catch {
       return sharedTaskAccessFailure(src, sharedTask);
     }

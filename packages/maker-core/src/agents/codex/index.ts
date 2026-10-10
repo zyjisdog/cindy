@@ -29,6 +29,8 @@ import {
 import {
   assertNoCodexUserInstructions,
   CODEX_DEVICE_HOSTED_GUEST_THREAD_CONFIG,
+  codexGuestFeatureOverrides,
+  listCodexFeatures,
   withoutCodexSpawnModelOverrides,
 } from './device-hosted-guest.js';
 import { LIBRARY_READ_ROOT, withLibraryNativeReadContext } from '../shared/library-native-read.js';
@@ -5518,6 +5520,8 @@ assertRouteCurrent();
     // 设备托管：本机 MCP 一律停用，只用任务所在电脑经隧道提供的 Cindy 工具(令牌放在隧道路径里，
     // 本机 MCP 的 bearer 令牌对隧道无效)。
     let hostedLocalMcpNames: string[] = [];
+    // 受邀者：白名单之外的 Codex 功能在线程配置里逐个关闭(启动时按 app-server 的功能清单生成)。
+    let hostedGuestFeatureConfig: Record<string, false> = {};
     const readHostedMcpConfig = (): Record<string, unknown> => {
       const out: Record<string, unknown> = {};
       for (const name of hostedLocalMcpNames) {
@@ -6475,9 +6479,9 @@ assertRouteCurrent();
               'features.remote_plugin': false,
             }
           : {}),
-        // 受邀者：只关闭本机的插件 / hooks / connectors / 记忆，以及在本机执行代码的工具；
+        // 受邀者：固定关闭本机的插件 / hooks / connectors / 记忆，再按功能清单关闭白名单之外的 Codex 功能；
         // 不含 mcp_servers.* 键，经隧道的 MCP(readHostedMcpConfig)保持启用。联网搜索不变。
-        ...(hostedGuest ? CODEX_DEVICE_HOSTED_GUEST_THREAD_CONFIG : {}),
+        ...(hostedGuest ? { ...CODEX_DEVICE_HOSTED_GUEST_THREAD_CONFIG, ...hostedGuestFeatureConfig } : {}),
         // Review disables only transport-bearing entries discovered above.
         // Its host omits Cindy's MCP bridge, so a bare memory override would
         // create an invalid transport even though the entry is disabled.
@@ -7059,6 +7063,18 @@ assertRouteCurrent();
         log.warn('codex: hosted session could not list local MCP servers', { error: String(error) });
         // 受邀者：确认不了本机 MCP 都已停用就不启动，不能让本机 MCP 留在另一个账号的会话里。
         if (hostedGuest) throw new Error(`Cannot start Codex for a shared user safely: ${String(error)}`);
+      }
+      if (hostedGuest) {
+        // 受邀者：Codex 的功能只开白名单里的。清单取不到就不启动。
+        try {
+          hostedGuestFeatureConfig = codexGuestFeatureOverrides(await listCodexFeatures((cursor) => host.request(
+            Method.ExperimentalFeatureList, { limit: 200, ...(cursor ? { cursor } : {}) },
+            { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+          )));
+        } catch (error) {
+          throw new Error(`Cannot start Codex for a shared user safely: ${String(error)}`);
+        }
+        assertCurrentHost('experimentalFeature/list');
       }
       assertCurrentHost('environment/add');
       await host.request(Method.EnvironmentAdd, {
