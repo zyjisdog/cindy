@@ -7615,8 +7615,15 @@ export class PiAgent extends BaseAgent {
       // setOpts.effort 上做校验、从不下发。不在这里把目标档位重新下发的话，每次切模型
       // 都会掉回默认档，表现为「推理强度自动变低」。目标档 = 显式 effort > 会话原档位
       // （mutableEffort）；新模型不支持（含未声明档位）时保持 pi 默认，与能力收敛一致。
+      // 无载体切模（旁路入口）时用户明确关过思考：这里不得重开——同一段收敛逻辑在
+      // 下面还有一份（按目标能力 + 意图标记决定开/关），本次恢复只负责「开」这一半。
+      const explicitThinking =
+        setOpts && typeof setOpts.thinkingEnabled === 'boolean' ? setOpts.thinkingEnabled : undefined;
+      const thinkingKeptOff =
+        explicitThinking === false || (explicitThinking === undefined && thinkingExplicitlyOff);
       const restoredEffort = setOpts?.effort ?? mutableEffort;
       if (
+        !thinkingKeptOff &&
         restoredEffort &&
         nextEffortSnapshot && nextEffortSnapshot.length > 0 &&
         nextEffortSnapshot.includes(restoredEffort)
@@ -7683,8 +7690,6 @@ export class PiAgent extends BaseAgent {
       //
       // 失败只告警、不抛：模型切换已经成功，抛出会让上层回滚 route / 终止会话，反而
       // 制造「Pi 已切模、宿主认为没切」的分裂。用户可在 UI 上重新选择。
-      const explicitThinking =
-        setOpts && typeof setOpts.thinkingEnabled === 'boolean' ? setOpts.thinkingEnabled : undefined;
       {
         const requestedEffort = setOpts?.effort ?? mutableEffort ?? startupEffort ?? null;
         const nativeTarget = provider !== PI_PROVIDER_ID
