@@ -45,6 +45,9 @@ describe('orca team shared helpers', () => {
       message: 'role must be 1-32 chars',
     });
     expect(orcaWorkerSessionTitle('reviewer', 'reviewer-2')).toBe('Worker · reviewer · reviewer-2');
+    // role 与 label（忽略大小写）相同时只写一次，与创建侧 orcaWorkerTitle 同一形态。
+    expect(orcaWorkerSessionTitle('reader', 'reader')).toBe('Worker · reader');
+    expect(orcaWorkerSessionTitle('reader', 'READER')).toBe('Worker · reader');
   });
 
   it('keeps pending Lead input as context only when a Worker task exists', () => {

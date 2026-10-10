@@ -65,7 +65,7 @@ export function normalizeOrcaWorkerRole(
 
 /**
  * Worker session 的生成标题。创建与改名共用同一形态;改名只在标题仍是这个形态时同步改写,不覆盖用户自定义标题。
- * label 与角色名相同时只写一次(「Worker · reader」而非「Worker · reader · reader」),与 orcaWorkerTitle 同规则。
+ * role 与 label（忽略大小写/首尾空白）相同时只写一次(「Worker · reader」）。
  */
 export function orcaWorkerSessionTitle(role: string, label: string): string {
   return role.trim().toLowerCase() === label.trim().toLowerCase()
