@@ -2236,6 +2236,7 @@ interface OrcaCollabService {
     label: string;
     workingDir?: string;
     initialTask?: string;
+    initialTaskImages?: string[];
   }) => Promise<
     | {
         ok: true;
@@ -2344,6 +2345,7 @@ interface OrcaCollabService {
     targetSessionId: string;
     message: string;
     delivery?: 'queue' | 'steer';
+    imagePaths?: string[];
   }) => Promise<SendToWorkerResult>;
   interruptWorker: (params: {
     callerLeadSessionId: string;
@@ -13080,6 +13082,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       message,
       workerId,
       delivery,
+      imagePaths,
       dispatchMeta,
       onAccepted,
       onAcceptedRollback,
@@ -13092,6 +13095,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         senderLabel: 'Lead',
         workerId,
         ...(delivery ? { delivery } : {}),
+        ...(imagePaths ? { imagePaths } : {}),
         meta: dispatchMeta,
         onAccepted,
         onAcceptedRollback,
