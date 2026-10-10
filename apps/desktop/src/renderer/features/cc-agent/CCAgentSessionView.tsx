@@ -1,3 +1,4 @@
+import { responseSpeedActivity, type ResponseSpeedSnapshot } from "@cindy/maker-shared/usage-format";
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
@@ -5126,7 +5127,9 @@ export function CCAgentSessionView({
                   reconnectStatus={reconnectStatus}
                   tokenUsage={agentStatus.tokenUsage}
                   outputTokens={agentStatus.outputTokens ?? 0}
+                  responseSpeed={agentStatus.responseSpeed}
                   generationDurationMs={agentStatus.generationDurationMs ?? 0}
+                  generationActive={agentStatus.generationActive}
                   generationReliable={agentStatus.generationReliable ?? true}
                   startedAt={agentStatus.startedAt}
                   visible={composerRuntimeVisible || (!pendingPlanReview && activeReconnect !== null)}
@@ -6038,7 +6041,9 @@ function RunningStatusBar({
   reconnectStatus = null,
   tokenUsage,
   outputTokens = 0,
+  responseSpeed,
   generationDurationMs = 0,
+  generationActive,
   generationReliable = true,
   startedAt,
   visible,
@@ -6060,7 +6065,9 @@ function RunningStatusBar({
   reconnectStatus?: string | null;
   tokenUsage: number;
   outputTokens?: number;
+  responseSpeed?: ResponseSpeedSnapshot;
   generationDurationMs?: number;
+  generationActive?: boolean;
   generationReliable?: boolean;
   startedAt: number | null;
   visible: boolean;
@@ -6153,6 +6160,8 @@ function RunningStatusBar({
 
   const isHidden = suppressContent || (!showContent && !visible);
   const workflowWaiting = workflowStatus !== undefined;
+  const completedSpeed = !visible && responseSpeed?.phase === 'complete'
+    && !reconnecting && !sideTaskRunning && !backgroundTasksRunning && !workflowWaiting;
 
   // 「全部停止」的说明:未确认残留时**追加**在操作说明之后,不覆盖操作名 ——
   // 读屏与悬浮都要先说清这个按钮是干什么的(它仍是可重试的「全部停止」)。
@@ -6173,10 +6182,18 @@ function RunningStatusBar({
 
   // side-task / 后台子任务运行中永远当成进行态 (即便上一轮 LLM 留下的 status 文案
   // 是 "Done", 此时任务还在跑, 显示 ✓ 完成图标会让用户以为已经做完)。
-  const isDone = status === 'Done' && !reconnecting && !sideTaskRunning && !backgroundTasksRunning;
+  const isDone = status === 'Done' && !responseSpeed?.outcome && !responseSpeed?.retrying && !reconnecting && !sideTaskRunning && !backgroundTasksRunning;
   // 后台子任务模式的左段文案:上一轮残留的 status(多半是 "Done")在此语义下是
   // 误导信息,整体替换为后台运行提示。仅后台 Bash 时用带数量的专属文案 ——
   // 「模型用量仍在消耗」对不调模型的 bash 任务是错误陈述。
+  const speedActivity = responseSpeed ? responseSpeedActivity(responseSpeed) : null;
+  const speedStatusKey = speedActivity === 'failed' ? 'responseFailed'
+    : speedActivity === 'cancelled' ? 'responseCancelled'
+      : speedActivity === 'retrying' ? 'responseRetrying'
+        : speedActivity === 'waiting' || speedActivity === 'quiet' ? 'responsePending'
+      : speedActivity === 'tool' ? 'toolRunning'
+        : speedActivity === 'paused' ? 'generationPaused'
+          : speedActivity === 'generating' ? 'responseGenerating' : null;
   const displayStatus =
     reconnectStatus ??
     workflowStatus ??
@@ -6184,7 +6201,8 @@ function RunningStatusBar({
       ? backgroundBashOnlyCount > 0
         ? t('chat.backgroundActivity.bashStatus', { count: backgroundBashOnlyCount })
         : t('chat.backgroundActivity.status')
-      : localizeAgentStatus(status, t));
+      : speedStatusKey && !status.toLowerCase().startsWith('compact')
+        ? t(`chat.runningStatus.${speedStatusKey}`) : localizeAgentStatus(status, t));
   // F-COMPACT-1: when SDK is auto-summarizing the conversation, give the
   // status bar a distinct icon so the user can tell "Compacting..." apart
   // from "Thinking..." — both share the shimmer animation by design, but
@@ -6248,30 +6266,37 @@ function RunningStatusBar({
     tokens: formatRunningTokenCount(animatedTokens),
   });
   const rateHistory = useRunningTokenRateHistory({
+    responseSpeed,
+    generationActive,
     sessionKey,
     startedAt,
     outputTokens,
     generationDurationMs,
     generationReliable:
-      generationReliable &&
+      !responseSpeed && generationReliable &&
       !reconnecting &&
       !sideTaskRunning &&
       !backgroundTasksRunning &&
       !workflowWaiting,
   });
-  const latestRate = rateHistory.latestRate;
-  const usageMeta = resolveRunningUsageMeta({
+  const latestRate = !responseSpeed && generationActive === false ? null : rateHistory.latestRate;
+  const legacyUsageMeta = resolveRunningUsageMeta({
     outputTokens,
     generationDurationMs,
     generationReliable,
     tokenUsage,
     latestRate,
   });
+  const usageMeta = responseSpeed
+    ? responseSpeed.averageRate !== null
+      ? { kind: 'rate' as const, rate: formatRecentOutputTokenRate(responseSpeed.averageRate) ?? '0' }
+      : { kind: 'none' as const }
+    : legacyUsageMeta;
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
   const rateText =
-    !isHidden && !reconnecting && usageMeta.kind === 'rate'
+    (!isHidden || completedSpeed) && !reconnecting && usageMeta.kind === 'rate'
       ? latestRateText !== null
-        ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
+        ? t(responseSpeed && (responseSpeed.phase !== 'complete' || responseSpeed.estimated) ? 'chat.runningStatus.estimatedTokenRate' : 'chat.runningStatus.tokenRate', { rate: latestRateText })
         : null
       : null;
 
@@ -6284,17 +6309,19 @@ function RunningStatusBar({
     transition: isHidden ? 'none' : `opacity ${STATUS_BAR_FADE_MS}ms ease-out`,
     pointerEvents: isHidden ? 'none' : 'auto',
   };
+  const waitingText = responseSpeed?.phase === 'waiting'
+    ? t('chat.runningStatus.responseWaiting', { seconds: ((responseSpeed.waitingMs + Math.max(0, Date.now() - responseSpeed.sampledAt)) / 1000).toFixed(1) }) : null;
   const showRatePanel =
     !reconnecting &&
     (ratePanelPinned ||
       (!workflowWaiting &&
         !sideTaskRunning &&
         !backgroundTasksRunning &&
-        usageMeta.kind === 'rate'));
+        (Boolean(responseSpeed) || usageMeta.kind === 'rate')));
   // A pinned panel keeps its anchor mounted through idle and subsequent turns.
-  // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
+  // 已完成测量保留原速度入口；没有测量的空闲任务仍收起。overlay 的 ResizeObserver 会在
   // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
-  if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;
+  if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned && !completedSpeed))) return null;
 
   // 两段式布局:左(运行状态) / 右(elapsed·tokens)。
   // - 左段 min-w-0(可收缩):status 并非短枚举 —— turn-start 文案带用户名(可含中文长句)、
@@ -6356,16 +6383,21 @@ function RunningStatusBar({
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
       <div className="flex min-w-0 items-center justify-self-end gap-2">
         {rightLeadingSlot}
-        {(!suppressContent && (!isHidden || ratePanelPinned)) && (
+        {(!suppressContent && (!isHidden || ratePanelPinned || completedSpeed)) && (
           <div
             data-running-status-meta="true"
             className="flex min-w-0 items-center gap-[6px]"
-            style={ratePanelPinned ? undefined : fadeStyle}
-            aria-hidden={isHidden && !ratePanelPinned}
+            style={ratePanelPinned || completedSpeed ? undefined : fadeStyle}
+            aria-hidden={isHidden && !ratePanelPinned && !completedSpeed}
           >
             {showRatePanel && (
               <RunningTokenRatePopover
-                elapsedText={elapsedText}
+                responseSpeed={responseSpeed}
+                elapsedText={completedSpeed
+                  ? t(responseSpeed?.outcome === 'failed' ? 'chat.runningStatus.responseFailed'
+                    : responseSpeed?.outcome === 'cancelled' ? 'chat.runningStatus.responseCancelled' : 'chat.runningStatus.lastGeneration')
+                  : speedActivity === 'retrying' ? t('chat.runningStatus.responseRetrying')
+                    : waitingText ?? (speedActivity === 'quiet' ? t('chat.runningStatus.responsePending') : elapsedText)}
                 rate={latestRateText}
                 rateText={
                   workflowWaiting || sideTaskRunning || backgroundTasksRunning
@@ -6376,8 +6408,8 @@ function RunningStatusBar({
                 }
                 isTokenCount={usageMeta.kind === 'tokens'}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
-                outputTokens={outputTokens}
-                history={rateHistory}
+                outputTokens={responseSpeed?.outputTokens ?? outputTokens}
+                history={latestRate === rateHistory.latestRate ? rateHistory : { ...rateHistory, latestRate }}
                 onPinnedChange={setRatePanelPinned}
               />
             )}
