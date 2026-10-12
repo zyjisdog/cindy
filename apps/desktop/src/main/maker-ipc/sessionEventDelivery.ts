@@ -106,7 +106,6 @@ export function deliverSessionEvent(
       // 也要先压住广播并预留 persistId，否则自愈失败时 surfaceOverflowFailure 拿不到
       // 预留 id（dedup 已被吃掉），错误行不落库、后台任务历史里看不到失败。
       isUnsupportedRequestOptionErrorData(event.data));
-    (isContextOverflowErrorData(event.data) || isOversizedHistoryErrorData(event.data));
   // 供应商组正在为这次失败换电脑：error 行先不落库(暂存，换成了就丢掉)，同样不预留 persistId。
   // 协调器在 prepare 阶段同步登记，结算都是异步的，这里与 terminal 阶段看到的是同一次登记。
   const providerGroupHoldId =

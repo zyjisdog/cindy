@@ -78,6 +78,8 @@ describe('resumeOrcaWorkerSessionIfMissing runtime cleanup', () => {
       // 同文件内的辅助函数，切源码时不会随 resume 函数一起被截取；这里给等价行为
       // （读取会话状态，用测试自己的 readStatus 以保留 post-bootstrap 复核语义）。
       isOrcaWorkerSessionResumable: async () => readStatus() === 'active',
+      // 与发送 / 供应商组换电脑同一把会话锁（register.ts 里包在 resume 外层）；测试里直接执行。
+      withSendToSessionLock: (_sessionId: string, task: () => Promise<boolean>) => task(),
       dbToMakerAgentKind: (value: unknown) => value,
       permissionModeOrAsk: (value: unknown) => value,
       directoryGrantsForRuntime: () => ({}),

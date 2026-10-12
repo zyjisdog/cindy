@@ -399,16 +399,6 @@ export function finishSessionTerminalEvent(
           deps.handleAgentIslandEventAfterBroadcast(session, stashed.event);
         }
       }
-      onTurnErrorEvent(
-        session.id,
-        attributedEvent.data as {
-          message?: unknown;
-          reason?: unknown;
-          sdkError?: unknown;
-        } | null,
-        eventAgentMeta,
-        persistId,
-      );
       // 供应商组正在为这次失败换电脑：先不落库，换成了就丢掉，没换成再补落。登记期间到达的另一条不同错误
       // 不归这次暂存，照常落库。
       if (
