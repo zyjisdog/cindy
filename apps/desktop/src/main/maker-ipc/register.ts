@@ -916,11 +916,9 @@ import {
   type WorkerQueuedMessageControlResult,
   type WorkerTerminalTurnCapture,
 } from './orcaTeamService.js';
-import { createOrcaWorkerCreationService } from './orcaWorkerCreationService.js';
 import {
   agentDeviceCatalogFailure,
   createOrcaWorkerCreationService,
-  normalizeOrcaWorkerLabel,
   pickWorkerAgentDeviceId,
 } from './orcaWorkerCreationService.js';
 import {
@@ -2592,7 +2590,6 @@ interface OrcaCollabService {
     | { ok: true; workerId: string; role: string; label: string | null }
     | { ok: false; errorCode: string; message: string }
   >;
-  listAvailableModels: (params: { agent?: AgentKind; callerSessionId?: string }) => Promise<
   listAvailableModels: (params: {
     agent?: AgentKind;
     callerSessionId?: string;
@@ -8569,31 +8566,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // assertCurrent：插件能力权威校验，冷启动前 / bootstrap 后各一次。
   // isCancelled：关闭协同 / 归档 / 显式 idle 会取消尚未落地的唤醒；冷启动前与
   // bootstrap 返回后都要检查，已经拉起的 runtime 要自己关掉（review P1）。
-  async function resumeOrcaWorkerSessionIfMissing(
-    target: {
-      id: string;
-      teamId: string;
-      leadSessionId: string;
-      sessionId: string;
-    },
-    assertCurrent?: () => Promise<void>,
-    isCancelled?: () => boolean,
-  ): Promise<boolean> {
-    const live = maker.getSession(target.sessionId);
-    if (live) return false;
-    if (isCancelled?.()) return false;
   async function resumeOrcaWorkerSessionIfMissing(target: {
     id: string;
     teamId: string;
     leadSessionId: string;
     sessionId: string;
-  }, assertCurrent?: () => Promise<void>): Promise<boolean> {
+  }, assertCurrent?: () => Promise<void>, isCancelled?: () => boolean): Promise<boolean> {
     if (maker.getSession(target.sessionId)) return false;
+    if (isCancelled?.()) return false;
     // 与发送、供应商组换电脑同一把会话锁：换电脑时会先关掉 Worker 再按新位置启动，不能在这段空档里按
     // 旧的任务记录在原来那台上把它拉起来。拿到锁后再看一次是否已经在运行。
     return withSendToSessionLock(target.sessionId, async () => {
       if (maker.getSession(target.sessionId)) return false;
-      return resumeOrcaWorkerSessionLocked(target, assertCurrent);
+      return resumeOrcaWorkerSessionLocked(target, assertCurrent, isCancelled);
     });
   }
 
@@ -8602,7 +8587,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     teamId: string;
     leadSessionId: string;
     sessionId: string;
-  }, assertCurrent?: () => Promise<void>): Promise<boolean> {
+  }, assertCurrent?: () => Promise<void>, isCancelled?: () => boolean): Promise<boolean> {
     const db = getDbClient().drizzle;
     const [row] = await db
       .select()
@@ -15785,7 +15770,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
       }
     },
-    listAvailableModels: async ({ agent, callerSessionId }) => {
     listAvailableModels: async ({ agent, callerSessionId, agentDeviceId: requestedAgentDeviceId }) => {
       try {
         const agents: AgentKind[] = agent ? [agent] : ['codex', 'claude-code', 'pi'];

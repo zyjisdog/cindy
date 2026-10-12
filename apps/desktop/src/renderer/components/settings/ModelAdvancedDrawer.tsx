@@ -1218,7 +1218,6 @@ export function ModelAdvancedDrawer({
                           })}
                         </DropdownMenuContent>
                       </DropdownMenu>
-=======
                       <span
                         title={
                           capabilityModel.modalities || capabilityModel.supportsImageInput !== undefined
@@ -1233,7 +1232,6 @@ export function ModelAdvancedDrawer({
                           label={t(`settings.providers.models.advanced.vision.${vision}`)}
                         />
                       </span>
->>>>>>> b09dc194b6cdf5d0ac8c8d5c1c6fbce667cb93a6
                     </Row>
                     {capabilityModel.modalities &&
                       (['input', 'output'] as const).map((direction) => (

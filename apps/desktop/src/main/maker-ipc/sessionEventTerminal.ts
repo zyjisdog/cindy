@@ -409,7 +409,6 @@ export function finishSessionTerminalEvent(
         eventAgentMeta,
         persistId,
       );
-=======
       // 供应商组正在为这次失败换电脑：先不落库，换成了就丢掉，没换成再补落。登记期间到达的另一条不同错误
       // 不归这次暂存，照常落库。
       if (
@@ -439,7 +438,6 @@ export function finishSessionTerminalEvent(
           persistId,
         );
       }
->>>>>>> b09dc194b6cdf5d0ac8c8d5c1c6fbce667cb93a6
     } else if (persistId) {
       releaseReservedTurnErrorPersistId(session.id, persistId);
     }

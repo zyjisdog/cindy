@@ -454,6 +454,8 @@ function bootstrapSwitchedSessionWithThinking(
   return thinkingEnabled === undefined
     ? deps.bootstrapSwitchedSession(sessionId)
     : deps.bootstrapSwitchedSession(sessionId, { thinkingEnabled });
+}
+
 /**
  * 打开任务时 Agent 没能启动、要换到另一个位置重新打开(供应商组启动阶段换电脑，docs/product-rules/provider-groups.md §6)：
  * 原生会话在原来那个位置上，换过去不能续接，与换电脑同一套交接——全量交接 + 全新原生会话 + 分隔条。没有开着的会话
@@ -735,24 +737,25 @@ export async function performSessionAgentSwitch(
     params.assertSelectionCurrent?.();
   }
   if (fromDbKind === toDbKind && !relocating) {
+    // 重登记可能不带思考意图(旧调用方 / 只改 effort·Fast)：仍指向同一个目标时
+    // 继承既有 intent，否则登记时的快照被覆盖成 undefined，结算回放会丢掉思考
+    // 档位收敛；目标已换（改选到别的模型）时不继承——旧模型的开关不适用，
+    // 宁可当未提供，让运行时按目标模型自己的能力处理。
+    const existingIntent = deps.pendingSwitches?.get?.(sessionId);
+    const sameTarget =
+      existingIntent !== undefined &&
+      existingIntent.model === model &&
+      (existingIntent.providerId ?? null) === (normalizedProviderId ?? null);
+    const thinking =
+      typeof params.thinking === 'boolean'
+        ? params.thinking
+        : sameTarget
+          ? existingIntent?.thinking
+          : undefined;
     // Only picker calls stage a model choice here. Internal cross-engine apply/recovery
     // callers retain the existing same-engine no-op; send consumes staged choices below.
     if (deps.selectSameAgentModel && !params.applyNow) {
-      // 重登记可能不带思考意图(旧调用方 / 只改 effort·Fast)：仍指向同一个目标时
-      // 继承既有 intent，否则登记时的快照被覆盖成 undefined，结算回放会丢掉思考
-      // 档位收敛；目标已换（改选到别的模型）时不继承——旧模型的开关不适用，
-      // 宁可当未提供，让运行时按目标模型自己的能力处理。
-      const existingIntent = deps.pendingSwitches?.get?.(sessionId);
-      const sameTarget =
-        existingIntent !== undefined &&
-        existingIntent.model === model &&
-        (existingIntent.providerId ?? null) === (normalizedProviderId ?? null);
-      const thinking =
-        typeof params.thinking === 'boolean'
-          ? params.thinking
-          : sameTarget
-            ? existingIntent?.thinking
-            : undefined;
+    }
     // 组把换电脑的意图选回了当前位置(groupResolvedToCurrentPosition)：这次 applyNow 提交
     // 本身就是模型 / effort / fastMode 要落地的时刻，必须走真正的同引擎模型应用路径，
     // 不能当成已经应用过的 no-op 直接丢弹(greptile-apps P1, PR #5792 review)。
@@ -945,6 +948,7 @@ export async function performSessionAgentSwitch(
         model,
         thinking: thinkingEnabled,
       });
+    }
     // DB 已过 commit point，切换生效：此刻再持久化组内绑定，前面的目录校验 /
     // closeSession / assertModelRouteUsable 任何一步抛错都不会让新绑定抔先持久化
     // (chatgpt-codex-connector P2, PR #5792 review)。

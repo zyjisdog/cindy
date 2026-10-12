@@ -9795,8 +9795,6 @@
         "recentEmpty": "還沒有最近使用——選一個模型後，它會出現在這裡",
         "favoritesSaveFailed": "未能儲存收藏變更",
         "favoritesCleanupFailed": "未能清理已失效的分享模型收藏",
-=======
->>>>>>> refs/remotes/upstream/pr/4621
         "favoritesEmpty": "還沒有收藏——把滑鼠停到模型列上，點 ☆ 存到這裡",
         "addFavorite": "存為收藏",
         "customize": "自訂",

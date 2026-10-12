@@ -188,10 +188,7 @@ export function registerCreateWorkerTool(
     category: 'control',
     description: DESCRIPTION,
     inputShape: createWorkerSpecSchema.shape,
-    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, images, working_dir, execution_device_id }) => {
-=======
-    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, working_dir, execution_device_id, agent_device_id }) => {
->>>>>>> b09dc194b6cdf5d0ac8c8d5c1c6fbce667cb93a6
+    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, images, working_dir, execution_device_id, agent_device_id }) => {
       const ctx = deps.getSessionContext?.() ?? deps;
       if (!ctx.sessionId) {
         return errorPayload('LEAD_NOT_SUPPORTED', '当前 session 类型不支持作为 Lead。');

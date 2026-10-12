@@ -1883,10 +1883,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiNativeCompatOverride: (providerId, modelId) =>
       readPiNativeCompatOverride(providerId, modelId),
     getManagedSkills: listCindyManagedSkills,
-=======
-    getManagedSkills: listCindyManagedSkills,
     scanLocalCustomizations,
->>>>>>> b09dc194b6cdf5d0ac8c8d5c1c6fbce667cb93a6
     resolveModelContextLimit: (providerId, modelId) => {
       const catalog = getActiveCatalog();
       const source = resolveModelContextProviderId(catalog, 'pi', providerId, modelId);

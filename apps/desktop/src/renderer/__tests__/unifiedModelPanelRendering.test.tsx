@@ -234,8 +234,6 @@ import {
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { providerShareFavoriteSource, reconcileProviderShareFavorites } from '@/state/providerShareFavorites';
 import { toast } from '@/lib/toast';
-=======
->>>>>>> refs/remotes/upstream/pr/4621
 import { setModelEngineOverride } from '@/state/modelEnginePrefs';
 
 const onProviderChange = vi.fn();

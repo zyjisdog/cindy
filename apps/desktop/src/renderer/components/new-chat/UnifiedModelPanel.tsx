@@ -373,8 +373,6 @@ export function UnifiedModelPanel({
   const { t } = useTranslation();
   const storedFavorites = useModelFavorites();
   // 分享来的供应商(`share:<id>`)不是同账号的电脑，没有可同步的收藏：不去读，也不报同步失败。
-  const remoteFavorites = useRemoteModelFavorites(isProviderShareAgentDeviceId(deviceId) ? undefined : deviceId);
-  const favorites = selectionPolicy === 'official' ? NO_FAVORITES : deviceId ? remoteFavorites.items : storedFavorites;
   const storedRecentModels = useRecentModels();
   // official 入口(设置页 / create-agent)刻意不展示「最近」:那里的选择动作不记录(见
   // `recordRecentUsage`)也不该被个人流水影响 —— 与收藏区同一条策略门。
@@ -387,8 +385,6 @@ export function UnifiedModelPanel({
   }, [isSharedProvider]);
   const favorites = selectionPolicy === 'official' ? NO_FAVORITES
     : isSharedProvider ? sharedFavorites.items : deviceId ? remoteFavorites.items : storedFavorites;
-=======
->>>>>>> refs/remotes/upstream/pr/4621
   // 引擎 override / 深度 / Fast 三份 store 的版本号:任一变化都要重算行三元组与浮层
   // (其它窗口的 storage 事件、device-link 推送同样经这两个版本号进来)。远程 Agent 的档位记忆
   // 是另一份 store,版本号并进 memoryVersion。

@@ -1068,9 +1068,7 @@ export function TodaySpendChip({
   const [quotaPopoverPortalHost, setQuotaPopoverPortalHost] = React.useState<HTMLDivElement | null>(
     null,
   );
-=======
   const [resetListOpen, setResetListOpen] = React.useState(false);
->>>>>>> b09dc194b6cdf5d0ac8c8d5c1c6fbce667cb93a6
   const quotaPopoverOpenTimerRef = React.useRef<number | null>(null);
   const quotaPopoverCloseTimerRef = React.useRef<number | null>(null);
   const quotaPopoverPointerInsideRef = React.useRef(false);

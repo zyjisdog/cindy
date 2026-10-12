@@ -9796,8 +9796,6 @@
         "recentEmpty": "最近使ったモデルはまだありません——モデルを選ぶとここに表示されます",
         "favoritesSaveFailed": "お気に入りの変更を保存できませんでした",
         "favoritesCleanupFailed": "共有が解除されたモデルのお気に入りを削除できませんでした",
-=======
->>>>>>> refs/remotes/upstream/pr/4621
         "favoritesEmpty": "お気に入りはまだありません——モデルの行にカーソルを合わせて ☆ で保存できます",
         "addFavorite": "お気に入りに保存",
         "customize": "カスタマイズ",

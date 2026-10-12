@@ -106,6 +106,8 @@ function unsupportedRequestOptionErrorText(data: unknown): string {
   return [rec.message, rec.sdkError].find(
     (value): value is string => typeof value === 'string' && value.length > 0,
   ) ?? '';
+}
+
 /** A new companion input may retire an explicitly rejected compact operation.
  * Bare empty responses, transport failures and ordinary generation errors are
  * not proof of a broken compact context. Reuse the native failure classifier.
