@@ -458,6 +458,43 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     return commit(result);
   };
 
+  /**
+   * 「最近使用」的唯一记录点:选择**真的应用成功**之后才记 —— 取消确认 / 写入失败 / 抛错都
+   * 不记(与收藏锚点「成功才落」同一条规则)。void 视为成功(调用方既有约定);同步 / 异步
+   * 结果都接住,并把原结果原样传回去(调用方还要靠 false 决定留不留面板)。
+   *
+   * 记的是**归一化行身份 + 那一刻生效的整份配置**(引擎 / 深度 / Fast):最近 = 配置副本,
+   * 与收藏同一套语义(见 recentModels 文件头),星标也按这份副本与收藏做完全匹配。
+   * 缺省字段不落快照(effort 无所谓「跟随推荐」/ fast 关闭)。
+   */
+  const rememberRecentModel = (
+    result: ActionResult,
+    entry: UnifiedModelEntry | undefined,
+    config: UnifiedRowConfig,
+  ): ActionResult => {
+    if (!recordRecentUsage || !entry) return result;
+    // 归属代次在**发起选择时**捕获:选择可能是异步的(跨引擎事务、远程写),回调落地时用户
+    // 可能已经登出 / 切到本地模式。那种情况下绝不能把 A 的一条模型记录写进 B 的分区
+    // (2026-09-16 review P1:跨账号串写)。归属变了就整条丢弃 —— 少一条快捷方式远好于串号。
+    const ownerAtSelect = getRecentModelsOwner();
+    const commit = (applied: void | boolean): void | boolean => {
+      if (applied !== false && getRecentModelsOwner() === ownerAtSelect) {
+        recordRecentModel({
+          providerId: entry.providerId,
+          modelId: entry.modelId,
+          agent: config.engine,
+          ...(config.effort ? { effort: config.effort } : {}),
+          ...(config.fast ? { fast: true as const } : {}),
+        });
+      }
+      return applied;
+    };
+    if (result && typeof result === 'object' && 'then' in result) {
+      return Promise.resolve(result).then(commit);
+    }
+    return commit(result);
+  };
+
   // ── 「把一份配置真的应用到正在跑的那一份上」的三条链路 ─────────────────────
   // 恢复推荐(§1.4)与「删除当前选中的收藏」(§1.5)是同一件事的两个入口:都要把行回落到
   // 默认 / 推荐配置。三条链路抽在这里,两个入口共用 —— 各写一遍必然漂移成「恢复推荐会

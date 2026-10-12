@@ -9794,10 +9794,10 @@
         "favoritesGroup": "お気に入り",
         "recentGroup": "最近",
         "recentEmpty": "最近使ったモデルはまだありません——モデルを選ぶとここに表示されます",
-=======
         "favoritesSaveFailed": "お気に入りの変更を保存できませんでした",
         "favoritesCleanupFailed": "共有が解除されたモデルのお気に入りを削除できませんでした",
->>>>>>> b09dc194b6cdf5d0ac8c8d5c1c6fbce667cb93a6
+=======
+>>>>>>> refs/remotes/upstream/pr/4621
         "favoritesEmpty": "お気に入りはまだありません——モデルの行にカーソルを合わせて ☆ で保存できます",
         "addFavorite": "お気に入りに保存",
         "customize": "カスタマイズ",

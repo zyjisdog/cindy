@@ -231,11 +231,11 @@ import {
   recordRecentModel,
   setRecentModelsOwner,
 } from '@/state/recentModels';
-=======
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { providerShareFavoriteSource, reconcileProviderShareFavorites } from '@/state/providerShareFavorites';
 import { toast } from '@/lib/toast';
->>>>>>> b09dc194b6cdf5d0ac8c8d5c1c6fbce667cb93a6
+=======
+>>>>>>> refs/remotes/upstream/pr/4621
 import { setModelEngineOverride } from '@/state/modelEnginePrefs';
 
 const onProviderChange = vi.fn();
@@ -4259,6 +4259,51 @@ describe('harness configuration keeps the model menu open', () => {
     expect(screen.getByRole('listbox')).toBeTruthy();
     expect(screen.getByTestId('unified-model-config-flyout')
       .querySelector('[data-engine-capsule="codex"]')?.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+// 外层 ModelSelector 打开的面板必须把「当前选中的是哪条收藏」带进去(2026-10-10 @greptileai P1:
+// 上一次修复的注释把那行的属性透传一起注释掉了,面板恒收到 selectedFavoriteUid=null)。
+describe('外层 ModelSelector · 取消当前选中的收藏先应用默认配置', () => {
+  it('selectedFavoriteUid 透传到面板:删它是回落默认 + 清锚点,不是直接删记录', async () => {
+    const uid = addModelFavorite({ providerId: 'xd', modelId: 'gpt-5.5', agent: 'cc', effort: 'low' });
+    const onUnifiedSelect = vi.fn();
+    const onSessionFavoriteAnchorChange = vi.fn();
+    function Picker() {
+      return (
+        <ModelSelector
+          modelId="gpt-5.5"
+          effort="low"
+          fastMode={false}
+          vendorKey="cc"
+          currentProviderId="xd"
+          onModelChange={vi.fn()}
+          onEffortChange={vi.fn()}
+          onUnifiedSelect={onUnifiedSelect}
+          onSessionFavoriteAnchorChange={onSessionFavoriteAnchorChange}
+          selectedFavoriteUid={uid}
+        />
+      );
+    }
+    render(<Picker />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button'));
+    });
+    const star = within(screen.getAllByRole('group')[0]).getByRole('button', { name: '取消收藏' });
+    await act(async () => {
+      fireEvent.click(star);
+    });
+    // 属性丢了只会走到「直接删记录」那一支:没有先应用默认配置,也不清锚点。
+    expect(onUnifiedSelect).toHaveBeenCalledWith({
+      providerId: 'xd',
+      modelId: 'gpt-5.5',
+      engine: 'codex',
+      effort: 'high',
+      fast: false,
+      favoriteUid: null,
+      resetToRecommended: true,
+    });
+    expect(listModelFavorites()).toHaveLength(0);
   });
 });
 

@@ -9832,10 +9832,10 @@
         "favoritesGroup": "Favorites",
         "recentGroup": "Recent",
         "recentEmpty": "No recent models yet — pick a model and it will show up here",
-=======
         "favoritesSaveFailed": "Could not save favorite changes",
         "favoritesCleanupFailed": "Could not remove favorites for revoked provider shares",
->>>>>>> b09dc194b6cdf5d0ac8c8d5c1c6fbce667cb93a6
+=======
+>>>>>>> refs/remotes/upstream/pr/4621
         "favoritesEmpty": "No favorites yet — hover a model and hit ☆ to pin it here",
         "addFavorite": "Save to favorites",
         "customize": "Customize",
