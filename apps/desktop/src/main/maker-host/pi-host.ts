@@ -1,4 +1,5 @@
 import { listCindyManagedSkills } from './managed-skills.js';
+import { scanLocalCustomizations } from '../skillhub/customizationScanHost';
 import { resolveCompanionRuntimeEnvironment } from '../bot-import/runtime.js';
 import { readCachedGenericOAuthAccessToken } from './generic-oauth.js';
 import { providerPresetModelRecord, providerModelAdapterId } from '@cindy/model-providers';
@@ -1882,6 +1883,10 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolvePiNativeCompatOverride: (providerId, modelId) =>
       readPiNativeCompatOverride(providerId, modelId),
     getManagedSkills: listCindyManagedSkills,
+=======
+    getManagedSkills: listCindyManagedSkills,
+    scanLocalCustomizations,
+>>>>>>> b09dc194b6cdf5d0ac8c8d5c1c6fbce667cb93a6
     resolveModelContextLimit: (providerId, modelId) => {
       const catalog = getActiveCatalog();
       const source = resolveModelContextProviderId(catalog, 'pi', providerId, modelId);

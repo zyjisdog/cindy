@@ -1754,6 +1754,8 @@ export class PiAgent extends BaseAgent {
   private readonly inFlightStartups = new Set<Promise<AgentSessionHandle>>();
   private readonly subagentRunners = new Map<string, PiSubagentRunnerProcess>();
   private readonly subagentRunnerExitErrors = new Map<string, string>();
+  /** Local Pi-bundled windows learned from its runtime catalog for the next process rebuild. */
+  private readonly inheritedNativeContextWindows = new Map<string, number>();
   private disposeStarted = false;
 
   constructor(deps: AgentDeps) {
@@ -1821,6 +1823,10 @@ export class PiAgent extends BaseAgent {
         ));
       });
     });
+  }
+
+  private inheritedNativeContextWindowKey(provider: string, model: string): string {
+    return `${provider}\0${model}`;
   }
 
   private requestSubagentRunnerExit(
@@ -2503,7 +2509,27 @@ export class PiAgent extends BaseAgent {
       if (provider.id === PI_PROVIDER_ID) continue;
       for (const model of provider.models) {
         const workingWindow = this.deps.resolveModelContextLimit?.(provider.sourceProviderId ?? provider.id, model.id) ?? undefined;
-        addBudget(provider.id, model.wireId ?? model.id, Math.max(model.contextWindow ?? 128_000, workingWindow ?? 0), workingWindow);
+        const inheritsNativeWindow = provider.inheritModels === true && model.api === undefined
+          && model.catalogAddition !== true && model.contextWindow === undefined;
+        const learnedWindow = !opts.remote && inheritsNativeWindow
+          ? this.inheritedNativeContextWindows.get(
+              this.inheritedNativeContextWindowKey(provider.id, model.wireId ?? model.id),
+            )
+          : undefined;
+        // An inherited entry without a Cindy-owned window keeps Pi's native
+        // compaction budget until Pi reports its real catalog value. Cache that
+        // value across the required local process rebuild; never synthesize a
+        // 128K override for a model whose bundled window is still unknown.
+        if (inheritsNativeWindow && !(workingWindow && workingWindow > 0) && !learnedWindow) continue;
+        // Preview treats a Cindy working-window override as the effective
+        // inherited window. Keep startup on the same precedence: a previously
+        // learned larger native capacity must not inflate reserveTokens and
+        // cause every subsequent preview to request another rebuild.
+        const budgetWindow = inheritsNativeWindow && workingWindow && workingWindow > 0
+          ? workingWindow
+          : Math.max(model.contextWindow ?? learnedWindow ?? 128_000, workingWindow ?? 0);
+        addBudget(provider.id, model.wireId ?? model.id,
+          budgetWindow, workingWindow);
       }
     }
     const settingsJsonContent = await this.buildSettingsJsonPreservingUserKeys(
@@ -2858,8 +2884,14 @@ export class PiAgent extends BaseAgent {
     const startupWorkingContextWindow = effectiveWorkingContextWindow(authProviderId, opts.model);
     const nativeModel = nativeProviders.find((provider) => provider.id === initialProvider)?.models
       .find((model) => (model.wireId ?? model.id) === initialWireModel);
+    const learnedNativeContextWindow = !remote && nativeModel?.contextWindow === undefined
+      ? this.inheritedNativeContextWindows.get(
+          this.inheritedNativeContextWindowKey(initialProvider, initialWireModel),
+        )
+      : undefined;
     const startupContextWindow = Math.max(
-      nativeModel?.contextWindow ?? selectedRuntimeModel?.contextWindow ?? publicRuntimeModel?.contextWindow ?? 128_000,
+      nativeModel?.contextWindow ?? learnedNativeContextWindow
+        ?? selectedRuntimeModel?.contextWindow ?? publicRuntimeModel?.contextWindow ?? 128_000,
       startupWorkingContextWindow ?? 0,
     );
 
@@ -6810,6 +6842,12 @@ export class PiAgent extends BaseAgent {
               ? entries?.find((entry) => entry.provider === provider && entry.id === wireId)?.contextWindow : undefined;
             if (typeof actualWindow === 'number' && Number.isSafeInteger(actualWindow) && actualWindow > 0) {
               configuredWindow = actualWindow;
+              if (!remote && provider && wireId) {
+                this.inheritedNativeContextWindows.set(
+                  this.inheritedNativeContextWindowKey(provider, wireId),
+                  actualWindow,
+                );
+              }
             }
           } catch { /* No mutation: leave window resolution to the existing recovery path. */ }
           if (!configuredWindow) {
@@ -7617,7 +7655,8 @@ export class PiAgent extends BaseAgent {
         }
         const verifiedWindow = verifiedModel.contextWindow;
         const verifiedReserve = reserveForWindow(verifiedWindow, effectiveProviderId, model);
-        if (!liveRuntimeSettings || resolvePiNativeReserve(liveRuntimeSettings, provider, wireModel) !== verifiedReserve) {
+        if (!liveRuntimeSettings ||
+            resolvePiNativeReserve(liveRuntimeSettings, provider, wireModel) !== verifiedReserve) {
           throw new Error('Pi selected a model whose native compaction settings require a fresh runtime');
         }
         await this.writePiRuntimeSettings(configHome, {
@@ -9131,7 +9170,9 @@ export class PiAgent extends BaseAgent {
 
   /** SkillHub raw view; project items remain discovered until runtime truth says otherwise. */
   override async listCustomizations(opts: ListCustomizationsOptions): Promise<ListCustomizationsResult> {
-    const result = await scanPiCustomizations(opts);
+    const result = await (this.deps.scanLocalCustomizations
+      ? this.deps.scanLocalCustomizations('pi', opts)
+      : scanPiCustomizations(opts));
     if (!opts.kinds || opts.kinds.includes('skill')) {
       result.items.push(...(await this.deps.getManagedSkills?.() ?? []).filter((skill) => skill.path).map((skill) => ({
         engine: 'pi' as const, kind: 'skill', scope: 'user', name: skill.name,

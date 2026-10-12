@@ -1,4 +1,3 @@
-import { responseSpeedActivity, type ResponseSpeedSnapshot } from "@cindy/maker-shared/usage-format";
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
@@ -167,6 +166,7 @@ import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
 import {
   controlledTaskAgentLocationReadable,
+  controlledTaskReadableShareIds,
   controlledTaskSupportsAgentLocation,
   selectControlledTaskAgentDevices,
 } from '@/lib/controlledTaskAgentLocation';
@@ -279,6 +279,7 @@ import {
   resolveRunningUsageMeta,
 } from './lib/runningTokenUsage';
 import { RunningTokenRatePopover, useRunningTokenRateHistory } from './RunningTokenRatePopover';
+import type { TokenSpeedSnapshot } from './lib/runningTokenRateHistory';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
@@ -307,7 +308,7 @@ import { hasSplitGroupSessionType } from './splitGroupDnd';
 import { splitGroupStore } from './splitGroupStore';
 import {
   attachGhostMediaToSession,
-  getGhostMediaUriFromDataTransfer,
+  getGhostMediaHandoverFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import {
@@ -315,7 +316,7 @@ import {
   getDroppedFileItems,
   type DroppedFileItems,
 } from '@/lib/fileDrop';
-import { getCollaborationStartErrorMessage } from './collaborationErrors';
+import { getCollaborationStartErrorMessage, workerAgentDeviceErrorMessage } from './collaborationErrors';
 import { useCollabProjectPolicy } from './hooks/useCollabProjectPolicy';
 import { resolveCollabEntryPolicy } from './collabEntryPolicy';
 import { consumePendingRemoteCollab, enableRemoteCollabForSession } from './remoteCollabHandoff';
@@ -844,8 +845,14 @@ export function CCAgentSessionView({
   const [forkStripEncryptedRunning, setForkStripEncryptedRunning] = useState(false);
   // 从 Automations 的 RunHistoryCard 跳过来的 navigate 会带 state.from='automations'，
   // 在聊天区左上角显示一个返回按钮；点别的 session 入口（不带 state）时按钮自然消失。
-  const navState = location.state as { from?: string } | null;
+  const navState = location.state as { from?: string; sourceSessionId?: unknown } | null;
   const cameFromAutomations = navState?.from === 'automations';
+  // /review 审查任务不在任务列表里,从来源任务的审查卡片进入时带上来源 id,
+  // 左上角给出回到来源任务的返回按钮(侧栏收起时这是唯一的回路)。
+  const reviewSourceSessionId =
+    navState?.from === 'review-source' && typeof navState.sourceSessionId === 'string'
+      ? navState.sourceSessionId
+      : null;
   const handoffFrom = useMemo(() => parseHandoffState(location.state), [location.state]);
   const locationSearchJump = useMemo(() => parseSearchJumpState(location.state), [location.state]);
   const searchJump = searchJumpProp !== undefined ? searchJumpProp : locationSearchJump;
@@ -2064,9 +2071,30 @@ export function CCAgentSessionView({
   // 生效)。Agent 当前所在电脑与挂着的换位置目标即使掉线也保留,让用户看得到、换得回来。
   const { devices: selectableDevices } = useSelectableDevices();
   const pendingAgentDeviceId = agentSwitchIntent?.agentDeviceId;
+  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，并进本机任务，
+  // 不进设备切换器。已暂停 / 已不在的分享只在它正是当前或即将使用的位置时保留。
+  const {
+    devices: providerShareDevices,
+    nameFor: providerShareDeviceName,
+    isReceived: isReceivedProviderShare,
+  } = useProviderShareAgentDevices([agentDeviceId, pendingAgentDeviceId]);
+  // 被控电脑上的任务 Agent 现在 / 挂着的位置是分享时:分享按账号授予,本机也收到了同一条就经本机
+  // 的分享通道读它的目录,模型按钮按分享显示(否则只能读到被控电脑自己的目录,显示「模型信息暂
+  // 不可用」)。本机没收到的分享读不到,维持原样。
+  const controlledShareIds = useMemo(
+    () =>
+      remoteDeviceId
+        ? controlledTaskReadableShareIds({
+            agentDeviceId: session?.agentDeviceId,
+            pendingAgentDeviceId,
+            isReceived: isReceivedProviderShare,
+          })
+        : undefined,
+    [remoteDeviceId, session?.agentDeviceId, pendingAgentDeviceId, isReceivedProviderShare],
+  );
   // 远程控制的被控电脑上的任务:被控电脑支持远程 Agent 时,同样列出其他电脑的供应商(与手机同一
   // 套)。共享任务访客读到的是自己账号的设备、与任务无关,SSH 任务不支持;Agent 现在或挂着的位置
-  // 在本机读不到目录的地方(被控电脑收到的分享 / 本机自己)时,维持原有的被控电脑列表。
+  // 在本机读不到目录的地方(本机没收到的分享 / 本机自己)时,维持原有的被控电脑列表。
   const controlledAgentLocation =
     !!remoteDeviceId &&
     !session?.remoteHostId &&
@@ -2076,16 +2104,12 @@ export function CCAgentSessionView({
       agentDeviceId: session?.agentDeviceId,
       pendingAgentDeviceId,
       selfDeviceId,
+      ...(controlledShareIds ? { readableShareIds: controlledShareIds } : {}),
     });
   /** 被控电脑上的任务里 Agent 现在所在的电脑(undefined = 被控电脑本身)。 */
   const controlledAgentDeviceId = controlledAgentLocation
     ? (session?.agentDeviceId ?? undefined)
     : undefined;
-  // 供应商分享：别人分享给我的供应商也是远程 Agent 的落点(`share:<id>`)，只并进本机任务，
-  // 不进设备切换器(被控电脑上的任务用不了本机收到的分享)。已暂停 / 已不在的分享只在它正是
-  // 当前或即将使用的位置时保留。
-  const { devices: providerShareDevices, nameFor: providerShareDeviceName } =
-    useProviderShareAgentDevices([agentDeviceId, pendingAgentDeviceId]);
   const remoteAgentDevices = useMemo(() => {
     if (session?.remoteHostId) return undefined;
     if (remoteDeviceId) {
@@ -2094,6 +2118,10 @@ export function CCAgentSessionView({
             devices: selectableDevices,
             controlledDeviceId: remoteDeviceId,
             keepDeviceIds: [controlledAgentDeviceId, pendingAgentDeviceId],
+            shareDevices: [...(controlledShareIds ?? [])].map((deviceId) => ({
+              deviceId,
+              name: providerShareDeviceName(deviceId) ?? deviceId,
+            })),
           })
         : undefined;
     }
@@ -2115,6 +2143,8 @@ export function CCAgentSessionView({
     session?.remoteHostId,
     controlledAgentLocation,
     controlledAgentDeviceId,
+    controlledShareIds,
+    providerShareDeviceName,
     agentDeviceId,
     pendingAgentDeviceId,
   ]);
@@ -2250,7 +2280,9 @@ export function CCAgentSessionView({
     [messages, agentStatus.isRunning, isStreaming, continuationTurnClientId, continuationInFlightProjectionCapability],
   );
   const reconnectStatus = activeReconnect
-    ? activeReconnect.attempt !== undefined && activeReconnect.maxAttempts !== undefined
+    ? activeReconnect.groupSwitchPending
+      ? t('chat.systemCard.autoResumePending.groupSwitch')
+      : activeReconnect.attempt !== undefined && activeReconnect.maxAttempts !== undefined
       ? t('chat.systemCard.autoResumePending.labelWithProgress', {
           attempt: activeReconnect.attempt,
           total: activeReconnect.maxAttempts,
@@ -3056,6 +3088,8 @@ export function CCAgentSessionView({
                 ...(form.workingDir ? { workingDir: form.workingDir } : {}),
               }
             : {}),
+          // 首个 Worker 的 Agent 所在电脑(远程供应商)；面板只在任务所在电脑支持时才带。
+          ...(form.agentDeviceId !== undefined ? { agentDeviceId: form.agentDeviceId } : {}),
         };
         const orcaDeviceId = getStickySessionDeviceId(collabSessionId);
         if (orcaDeviceId) {
@@ -3085,9 +3119,10 @@ export function CCAgentSessionView({
         setCollabWorker(previousWorker);
         log.error('enableOrca failed', err);
         toast.error(
-          getCollaborationStartErrorMessage(err, t, {
-            remoteDevice: Boolean(remoteDeviceId),
-          }),
+          (form.agentDeviceId && workerAgentDeviceErrorMessage(err, t))
+            || getCollaborationStartErrorMessage(err, t, {
+              remoteDevice: Boolean(remoteDeviceId),
+            }),
         );
       } finally {
         setEnableBusy(false);
@@ -3380,6 +3415,7 @@ export function CCAgentSessionView({
           return { handled: true, accepted: true, message };
         } catch (err) {
           const ipcError = extractIpcError(err);
+          if (ipcError?.code === 'MUTATION_CANCELLED') return { handled: true, accepted: false, message };
           toast.error(
             ipcError
               ? t('review.toast.failed')
@@ -4959,7 +4995,7 @@ export function CCAgentSessionView({
           // 意识面板拖来的产物(cindy-ghost:// 媒体地址,不带 files):落在聊天区
           // 任意位置都算数,与 ChatInput 自己的 onDrop 同一条引渡链路——
           // main 验归属后图片落图片附件、视频落路径引用的 file 附件(托盘可见)。
-          const ghostMediaUri = getGhostMediaUriFromDataTransfer(e.dataTransfer);
+          const ghostMediaUri = getGhostMediaHandoverFromDataTransfer(e.dataTransfer);
           if (ghostMediaUri) {
             if (sessionId) void attachGhostMediaToSession(ghostMediaUri, sessionId, t);
             return;
@@ -5127,10 +5163,9 @@ export function CCAgentSessionView({
                   reconnectStatus={reconnectStatus}
                   tokenUsage={agentStatus.tokenUsage}
                   outputTokens={agentStatus.outputTokens ?? 0}
-                  responseSpeed={agentStatus.responseSpeed}
                   generationDurationMs={agentStatus.generationDurationMs ?? 0}
-                  generationActive={agentStatus.generationActive}
                   generationReliable={agentStatus.generationReliable ?? true}
+                  tokenSpeed={agentStatus.tokenSpeed}
                   startedAt={agentStatus.startedAt}
                   visible={composerRuntimeVisible || (!pendingPlanReview && activeReconnect !== null)}
                   inputWidth={inputWidth}
@@ -5275,6 +5310,7 @@ export function CCAgentSessionView({
                   agentKind={session?.agentKind}
                   remoteHostId={session?.remoteHostId ?? undefined}
                   deviceLinkDeviceId={remoteDeviceId}
+                agentDeviceId={session?.agentDeviceId}
                   modelId={session?.model}
                   providerId={session?.providerId}
                   sessionSource={session?.source}
@@ -5351,6 +5387,7 @@ export function CCAgentSessionView({
                 agentKind={session?.agentKind}
                 remoteHostId={session?.remoteHostId ?? undefined}
                 deviceLinkDeviceId={remoteDeviceId}
+                agentDeviceId={session?.agentDeviceId}
                 modelId={session?.model}
                 providerId={session?.providerId}
                 sessionSource={session?.source}
@@ -5957,6 +5994,10 @@ export function CCAgentSessionView({
         executionDevicesEnabled={
           !remoteDeviceId && !session?.remoteHostId && !session?.agentDeviceId
         }
+        // Worker 的 Agent 默认跟 Lead 的 Agent 所在电脑(远程供应商)，模型目录也先按那台读；
+        // 面板里列出与输入框同一份其他电脑 / 分享的供应商，可以换到本机或别处。
+        leadAgentDeviceId={agentDeviceId ?? controlledAgentDeviceId ?? null}
+        remoteAgentDevices={remoteAgentDevices}
       />
 
       {/* 来自 Automations 的入口浮动返回按钮：固定在聊天区左上角，
@@ -5967,6 +6008,20 @@ export function CCAgentSessionView({
           type="button"
           onClick={() => navigate('/cc-agent/scheduled')}
           aria-label={t('ccAgent.layout.backToAutomations')}
+          className={cn(
+            'absolute left-[14px] top-[14px] z-40 inline-flex items-center justify-center',
+            'text-[var(--settings-section-desc)] transition-colors hover:text-foreground',
+          )}
+        >
+          <ArrowLeft size={18} strokeWidth={2} />
+        </button>
+      )}
+      {ownsWindowRoute && !cameFromAutomations && reviewSourceSessionId && (
+        <button
+          type="button"
+          onClick={() => navigate(`/cc-agent/${reviewSourceSessionId}`)}
+          aria-label={t('ccAgent.layout.backToReviewSource')}
+          title={t('ccAgent.layout.backToReviewSource')}
           className={cn(
             'absolute left-[14px] top-[14px] z-40 inline-flex items-center justify-center',
             'text-[var(--settings-section-desc)] transition-colors hover:text-foreground',
@@ -6041,10 +6096,9 @@ function RunningStatusBar({
   reconnectStatus = null,
   tokenUsage,
   outputTokens = 0,
-  responseSpeed,
   generationDurationMs = 0,
-  generationActive,
   generationReliable = true,
+  tokenSpeed,
   startedAt,
   visible,
   inputWidth,
@@ -6065,10 +6119,10 @@ function RunningStatusBar({
   reconnectStatus?: string | null;
   tokenUsage: number;
   outputTokens?: number;
-  responseSpeed?: ResponseSpeedSnapshot;
   generationDurationMs?: number;
-  generationActive?: boolean;
   generationReliable?: boolean;
+  /** Host-measured live tok/s; replaces the usage-counter estimate when present. */
+  tokenSpeed?: TokenSpeedSnapshot;
   startedAt: number | null;
   visible: boolean;
   inputWidth?: CSSProperties['width'];
@@ -6160,8 +6214,6 @@ function RunningStatusBar({
 
   const isHidden = suppressContent || (!showContent && !visible);
   const workflowWaiting = workflowStatus !== undefined;
-  const completedSpeed = !visible && responseSpeed?.phase === 'complete'
-    && !reconnecting && !sideTaskRunning && !backgroundTasksRunning && !workflowWaiting;
 
   // 「全部停止」的说明:未确认残留时**追加**在操作说明之后,不覆盖操作名 ——
   // 读屏与悬浮都要先说清这个按钮是干什么的(它仍是可重试的「全部停止」)。
@@ -6182,18 +6234,10 @@ function RunningStatusBar({
 
   // side-task / 后台子任务运行中永远当成进行态 (即便上一轮 LLM 留下的 status 文案
   // 是 "Done", 此时任务还在跑, 显示 ✓ 完成图标会让用户以为已经做完)。
-  const isDone = status === 'Done' && !responseSpeed?.outcome && !responseSpeed?.retrying && !reconnecting && !sideTaskRunning && !backgroundTasksRunning;
+  const isDone = status === 'Done' && !reconnecting && !sideTaskRunning && !backgroundTasksRunning;
   // 后台子任务模式的左段文案:上一轮残留的 status(多半是 "Done")在此语义下是
   // 误导信息,整体替换为后台运行提示。仅后台 Bash 时用带数量的专属文案 ——
   // 「模型用量仍在消耗」对不调模型的 bash 任务是错误陈述。
-  const speedActivity = responseSpeed ? responseSpeedActivity(responseSpeed) : null;
-  const speedStatusKey = speedActivity === 'failed' ? 'responseFailed'
-    : speedActivity === 'cancelled' ? 'responseCancelled'
-      : speedActivity === 'retrying' ? 'responseRetrying'
-        : speedActivity === 'waiting' || speedActivity === 'quiet' ? 'responsePending'
-      : speedActivity === 'tool' ? 'toolRunning'
-        : speedActivity === 'paused' ? 'generationPaused'
-          : speedActivity === 'generating' ? 'responseGenerating' : null;
   const displayStatus =
     reconnectStatus ??
     workflowStatus ??
@@ -6201,8 +6245,7 @@ function RunningStatusBar({
       ? backgroundBashOnlyCount > 0
         ? t('chat.backgroundActivity.bashStatus', { count: backgroundBashOnlyCount })
         : t('chat.backgroundActivity.status')
-      : speedStatusKey && !status.toLowerCase().startsWith('compact')
-        ? t(`chat.runningStatus.${speedStatusKey}`) : localizeAgentStatus(status, t));
+      : localizeAgentStatus(status, t));
   // F-COMPACT-1: when SDK is auto-summarizing the conversation, give the
   // status bar a distinct icon so the user can tell "Compacting..." apart
   // from "Thinking..." — both share the shimmer animation by design, but
@@ -6265,38 +6308,36 @@ function RunningStatusBar({
   const tokenCountText = t('chat.runningStatus.tokenCount', {
     tokens: formatRunningTokenCount(animatedTokens),
   });
+  // Host speed counts and times generation itself; usage counters stay the fallback.
+  const rateOutputTokens = tokenSpeed?.tokens ?? outputTokens;
+  const rateDurationMs = tokenSpeed?.elapsedMs ?? generationDurationMs;
+  const rateReliable = tokenSpeed ? true : generationReliable;
   const rateHistory = useRunningTokenRateHistory({
-    responseSpeed,
-    generationActive,
     sessionKey,
     startedAt,
     outputTokens,
     generationDurationMs,
+    tokenSpeed,
     generationReliable:
-      !responseSpeed && generationReliable &&
+      rateReliable &&
       !reconnecting &&
       !sideTaskRunning &&
       !backgroundTasksRunning &&
       !workflowWaiting,
   });
-  const latestRate = !responseSpeed && generationActive === false ? null : rateHistory.latestRate;
-  const legacyUsageMeta = resolveRunningUsageMeta({
-    outputTokens,
-    generationDurationMs,
-    generationReliable,
+  const latestRate = rateHistory.latestRate;
+  const usageMeta = resolveRunningUsageMeta({
+    outputTokens: rateOutputTokens,
+    generationDurationMs: rateDurationMs,
+    generationReliable: rateReliable,
     tokenUsage,
     latestRate,
   });
-  const usageMeta = responseSpeed
-    ? responseSpeed.averageRate !== null
-      ? { kind: 'rate' as const, rate: formatRecentOutputTokenRate(responseSpeed.averageRate) ?? '0' }
-      : { kind: 'none' as const }
-    : legacyUsageMeta;
   const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
   const rateText =
-    (!isHidden || completedSpeed) && !reconnecting && usageMeta.kind === 'rate'
+    !isHidden && !reconnecting && usageMeta.kind === 'rate'
       ? latestRateText !== null
-        ? t(responseSpeed && (responseSpeed.phase !== 'complete' || responseSpeed.estimated) ? 'chat.runningStatus.estimatedTokenRate' : 'chat.runningStatus.tokenRate', { rate: latestRateText })
+        ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
         : null
       : null;
 
@@ -6309,19 +6350,17 @@ function RunningStatusBar({
     transition: isHidden ? 'none' : `opacity ${STATUS_BAR_FADE_MS}ms ease-out`,
     pointerEvents: isHidden ? 'none' : 'auto',
   };
-  const waitingText = responseSpeed?.phase === 'waiting'
-    ? t('chat.runningStatus.responseWaiting', { seconds: ((responseSpeed.waitingMs + Math.max(0, Date.now() - responseSpeed.sampledAt)) / 1000).toFixed(1) }) : null;
   const showRatePanel =
     !reconnecting &&
     (ratePanelPinned ||
       (!workflowWaiting &&
         !sideTaskRunning &&
         !backgroundTasksRunning &&
-        (Boolean(responseSpeed) || usageMeta.kind === 'rate')));
+        usageMeta.kind === 'rate'));
   // A pinned panel keeps its anchor mounted through idle and subsequent turns.
-  // 已完成测量保留原速度入口；没有测量的空闲任务仍收起。overlay 的 ResizeObserver 会在
+  // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
   // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
-  if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned && !completedSpeed))) return null;
+  if (!rightLeadingSlot && (suppressContent || (isHidden && !ratePanelPinned))) return null;
 
   // 两段式布局:左(运行状态) / 右(elapsed·tokens)。
   // - 左段 min-w-0(可收缩):status 并非短枚举 —— turn-start 文案带用户名(可含中文长句)、
@@ -6383,21 +6422,16 @@ function RunningStatusBar({
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
       <div className="flex min-w-0 items-center justify-self-end gap-2">
         {rightLeadingSlot}
-        {(!suppressContent && (!isHidden || ratePanelPinned || completedSpeed)) && (
+        {(!suppressContent && (!isHidden || ratePanelPinned)) && (
           <div
             data-running-status-meta="true"
             className="flex min-w-0 items-center gap-[6px]"
-            style={ratePanelPinned || completedSpeed ? undefined : fadeStyle}
-            aria-hidden={isHidden && !ratePanelPinned && !completedSpeed}
+            style={ratePanelPinned ? undefined : fadeStyle}
+            aria-hidden={isHidden && !ratePanelPinned}
           >
             {showRatePanel && (
               <RunningTokenRatePopover
-                responseSpeed={responseSpeed}
-                elapsedText={completedSpeed
-                  ? t(responseSpeed?.outcome === 'failed' ? 'chat.runningStatus.responseFailed'
-                    : responseSpeed?.outcome === 'cancelled' ? 'chat.runningStatus.responseCancelled' : 'chat.runningStatus.lastGeneration')
-                  : speedActivity === 'retrying' ? t('chat.runningStatus.responseRetrying')
-                    : waitingText ?? (speedActivity === 'quiet' ? t('chat.runningStatus.responsePending') : elapsedText)}
+                elapsedText={elapsedText}
                 rate={latestRateText}
                 rateText={
                   workflowWaiting || sideTaskRunning || backgroundTasksRunning
@@ -6408,8 +6442,8 @@ function RunningStatusBar({
                 }
                 isTokenCount={usageMeta.kind === 'tokens'}
                 averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
-                outputTokens={responseSpeed?.outputTokens ?? outputTokens}
-                history={latestRate === rateHistory.latestRate ? rateHistory : { ...rateHistory, latestRate }}
+                outputTokens={rateOutputTokens}
+                history={rateHistory}
                 onPinnedChange={setRatePanelPinned}
               />
             )}

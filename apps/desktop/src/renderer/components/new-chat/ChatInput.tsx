@@ -189,15 +189,17 @@ import { SlashCommandPalette } from './SlashCommandPalette';
 import {
   expandGhostCommand,
   findGhostByCommand,
-  parseGhostCommandWord,
+  formatGhostCommandToken,
+  parseGhostCommandToken,
 } from '@/cindy-brain/ghostCommand';
+import { findInstalledGhostByInstanceId, installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import { filterGhostsForWorkdir, getWorkdirDisabledGhostIds } from '@/cindy-brain/ghostWorkdirFilter';
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
 import {
   attachGhostMediaToSession,
-  getGhostMediaUriFromDataTransfer,
+  getGhostMediaHandoverFromDataTransfer,
 } from '@/cindy-brain/ghostMediaHandover';
 import { AtMentionPanel, type AtPanelState } from './AtMentionPanel';
 import { MentionChipNode, type MentionChipAttrs } from './MentionChipNode';
@@ -408,6 +410,7 @@ import { createWorkLouderCodexVoiceGesture } from '@/lib/workLouderCodexVoiceGes
 import { appendMentionChip } from './mentionChipInsertion';
 // device-link 远程会话:设置变更不落本地 DB(会 404),改写远程内存层 + 运行时隧道。
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import { readSessionProviderGroup } from '@/features/provider-group/sessionProviderGroup';
 import { makerApiFor, makerApiForDevice, makerApiForSticky, subscribeRemoteCredentialSwitchOutcome } from '@/lib/makerTransport';
 import { SESSION_LINK_DROP_MIME } from '@/lib/sessionLinkDrop';
 
@@ -1289,8 +1292,9 @@ export function ChatInput({
   /**
    * 远程控制的被控电脑上的任务(已建任务,或建到被控电脑的新任务草稿),Agent 同样可以在第三台电脑
    * 运行(与手机同一套)。调用方只在被控电脑支持时才传 remoteAgentDevices;SSH 任务与共享任务访客
-   * 不走这条。已建任务里 Agent 现在或挂着的位置是本机读不到目录的地方(被控电脑收到的分享 / 本机
-   * 自己)时,维持原有的被控电脑列表;草稿的落点只会是 remoteAgentDevices 里的电脑。
+   * 不走这条。已建任务里 Agent 现在或挂着的位置是本机读不到目录的地方(本机没收到的分享 / 本机
+   * 自己)时,维持原有的被控电脑列表;草稿的落点只会是 remoteAgentDevices 里的电脑。分享只有在
+   * 调用方确认本机也收到、放进了 remoteAgentDevices 时才算读得到。
    */
   const deviceLinkAgentLocation =
     !!deviceLinkDeviceId &&
@@ -1302,6 +1306,7 @@ export function ChatInput({
         agentDeviceId: _agentDeviceId,
         pendingAgentDeviceId: makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId,
         selfDeviceId,
+        readableShareIds: new Set(remoteAgentDevices.map((device) => device.deviceId)),
       }));
   /** 这个任务的 Agent 位置由本机呈现与切换:本机任务,或上面那种被控电脑上的任务。 */
   const agentLocationAware = !deviceLinkDeviceId || deviceLinkAgentLocation;
@@ -1318,6 +1323,11 @@ export function ChatInput({
   /** 下一条消息时 Agent 所在的电脑(null = 任务所在电脑)。 */
   const effectiveAgentDeviceId =
     intentAgentDeviceId !== undefined ? intentAgentDeviceId : agentDeviceId;
+  /** 有过 Agent 回复:供应商组已为这个任务选好电脑(provider-groups.md §6)。 */
+  const taskStarted = useMemo(
+    () => !!sessionId && (messages ?? []).some((message) => message.role === 'assistant'),
+    [sessionId, messages],
+  );
   /** 模型目录所在的电脑:Agent 在另一台电脑运行时是那台;否则远程任务在被控电脑,本机任务在本机。 */
   const catalogDeviceId = effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined;
   const { t } = useTranslation();
@@ -3118,7 +3128,11 @@ export function ChatInput({
   const ghostsForCommand = pluginsForMenu;
   const pluginAvailableIds = useMemo(
     () =>
-      new Set(ghostsForCommand.filter((ghost) => ghost.enabled).map((ghost) => ghost.manifest.id)),
+      new Set(
+        ghostsForCommand
+          .filter((ghost) => ghost.enabled)
+          .map((ghost) => installedGhostStoragePart(ghost)),
+      ),
     [ghostsForCommand],
   );
   // 统一建议面板的插件条目(旧 `+` 菜单口径的并集):可用项可选,无指令或
@@ -3127,7 +3141,8 @@ export function ChatInput({
     return pluginsForMenu.map((ghost) => {
       const hasCommand = !!ghost.manifest.command;
       const hasComposerEntry = hasCommand;
-      const selectable = pluginAvailableIds.has(ghost.manifest.id) && hasComposerEntry;
+      const instanceId = installedGhostStoragePart(ghost);
+      const selectable = pluginAvailableIds.has(instanceId) && hasComposerEntry;
       const entryKey = ghost.manifest.command ?? '';
       return {
         item: {
@@ -3135,19 +3150,19 @@ export function ChatInput({
           name: ghost.manifest.name,
           relPath:
             ghost.manifest.command ??
-            `cindy://plugin/${ghost.manifest.id}`,
-          pluginId: ghost.manifest.id,
+            `cindy://plugin/${instanceId}`,
+          pluginId: instanceId,
           ...(ghost.iconDataUrl ? { iconDataUrl: ghost.iconDataUrl } : {}),
           sourceLabel: entryKey,
           _nameLower: `${ghost.manifest.name} ${entryKey}`.toLowerCase(),
-          _relPathLower: `${entryKey} ${ghost.manifest.id}`.toLowerCase(),
+          _relPathLower: `${entryKey} ${instanceId}`.toLowerCase(),
         },
         ...(selectable
           ? {}
           : {
               disabled: true,
               disabledReason: t(
-                !pluginAvailableIds.has(ghost.manifest.id)
+                !pluginAvailableIds.has(instanceId)
                   ? 'extraDirs.pluginDisabled'
                   : ghost.hasSkill
                     ? 'extraDirs.pluginAgentInvoked'
@@ -4136,9 +4151,7 @@ export function ChatInput({
     if (!draft) return;
 
     if (draft.pendingGhostId) {
-      const ghost = ghostsForCommand.find(
-        (candidate) => candidate.manifest.id === draft.pendingGhostId,
-      );
+      const ghost = findInstalledGhostByInstanceId(ghostsForCommand, draft.pendingGhostId);
       if (!ghost) return;
       saveComposerDraft(
         storageKey,
@@ -4149,7 +4162,7 @@ export function ChatInput({
         },
         { silent: true },
       );
-      placeGhostAtComposerStart(editor, ghost, installedGhosts);
+      placeGhostAtComposerStart(editor, ghost, ghostsForCommand);
       return;
     }
 
@@ -4163,7 +4176,7 @@ export function ChatInput({
       { silent: true },
     );
     focusComposerEndNextFrame(editor);
-  }, [editor, ghostsForCommand, installedGhosts, storageKey, deviceLinkDeviceId, remoteHostId]);
+  }, [editor, ghostsForCommand, storageKey, deviceLinkDeviceId, remoteHostId]);
 
   // browser-comment-chip:挂载 / 会话切换时从草稿恢复评论胶囊。
   useEffect(() => {
@@ -4424,8 +4437,8 @@ export function ChatInput({
         (g) =>
           ({
             kind: 'desktop',
-            name: g.manifest.command!,
-            description: `${g.manifest.name} · ${t('settings.ghosts.commandPaletteTag')}`,
+            name: formatGhostCommandToken(g, ghostsForCommand)!,
+            description: `${g.manifest.name} · ${t('settings.ghosts.commandPaletteTag')}${g.namespace ? ` · ${g.namespace}` : ''}`,
           }) as UnifiedCommand,
       );
   }, [ghostsForCommand, isGhostSigil, t]);
@@ -5051,8 +5064,9 @@ export function ChatInput({
       if (selectedItem.type === 'file-picker') return;
       if (selectedItem.type === 'plugin-command') {
         if (!selectedItem.pluginId) return;
-        const ghost = composerGhostsRef.current.find(
-          (candidate) => candidate.manifest.id === selectedItem.pluginId,
+        const ghost = findInstalledGhostByInstanceId(
+          composerGhostsRef.current,
+          selectedItem.pluginId,
         );
         if (!ghost?.enabled) return;
 
@@ -5558,8 +5572,10 @@ export function ChatInput({
           installedGhostsRef.current,
           workingDirRef.current,
         );
-        const ghostCommandWord = parseGhostCommandWord(text);
-        const usedGhost = ghostCommandWord ? findGhostByCommand(eligibleGhosts, ghostCommandWord) : null;
+        const ghostCommandToken = parseGhostCommandToken(text);
+        const usedGhost = ghostCommandToken
+          ? findGhostByCommand(eligibleGhosts, ghostCommandToken.word, ghostCommandToken.namespace)
+          : null;
         const routedText = expandGhostCommand(text, eligibleGhosts);
         const sendSnapshot = captureComposerSendSnapshot(
           editor.getJSON(),
@@ -5588,7 +5604,7 @@ export function ChatInput({
         const markRecentPluginUsage = () => {
           if (!usedGhost || recentUsageMarked || sourceRemoteGhosts) return;
           recentUsageMarked = true;
-          void window.electronAPI.ghosts.markUsed(usedGhost.manifest.id).catch((error) => {
+          void window.electronAPI.ghosts.markUsed(installedGhostStoragePart(usedGhost)).catch((error) => {
             log.warn(
               'failed to persist recent Plugin usage:',
               error instanceof Error ? error.message : String(error),
@@ -7221,8 +7237,15 @@ export function ChatInput({
       selectedDeviceId: effectiveAgentDeviceId,
       // 被控电脑上的任务:没在浏览其他电脑时列被控电脑自己的目录与它的镜像记忆。
       ...(deviceLinkDeviceId ? { homeDeviceId: deviceLinkDeviceId } : {}),
+      ...(deviceLinkDeviceId && deviceLinkDeviceName ? { homeDeviceName: deviceLinkDeviceName } : {}),
+      selfDeviceId: selfDeviceId ?? null,
       ...(taskComputerModelMemory ? { localModelMemory: taskComputerModelMemory } : {}),
       deviceModelMemory: agentDeviceModelMemoryAccessors,
+      // 归组的任务在组那一项下显示与选择(provider-groups.md §10)。组的绑定记在任务所在电脑上：被控电脑上的
+      // 任务经设备互联问那台(旧版本问不到按没归组处理)；挂着换位置的意图时下一条消息就不在原处了，也不按组显示。
+      ...(intentAgentDeviceId === undefined
+        ? { readProviderGroup: () => readSessionProviderGroup(sessionId, deviceLinkDeviceId || undefined) }
+        : {}),
       onRelocate: async (selection) => {
         if (!(await confirmAgentRelocation(selection.agentDevice))) return false;
         return performAgentSwitchRef.current(selection.agent, selection.modelId, selection.providerId, {
@@ -7236,11 +7259,14 @@ export function ChatInput({
     sessionId,
     agentLocationAware,
     deviceLinkDeviceId,
+    deviceLinkDeviceName,
+    selfDeviceId,
     taskComputerModelMemory,
     remoteHostId,
     sessionEngineFilter,
     remoteAgentDevices,
     effectiveAgentDeviceId,
+    intentAgentDeviceId,
     confirmAgentRelocation,
   ]);
 
@@ -8895,7 +8921,7 @@ export function ChatInput({
               // main 验归属后,图片落图片附件、视频落路径引用的 file 附件(托盘可见)。
               // 键用 storageKey(= draftKey ?? sessionId):新建会话草稿态没有
               // sessionId,附件落草稿命名空间,发送时 rehomeDraftAttachments 迁移。
-              const ghostMediaUri = getGhostMediaUriFromDataTransfer(e.dataTransfer);
+              const ghostMediaUri = getGhostMediaHandoverFromDataTransfer(e.dataTransfer);
               if (ghostMediaUri) {
                 if (storageKey) void attachGhostMediaToSession(ghostMediaUri, storageKey, t);
                 return;
@@ -9480,6 +9506,8 @@ export function ChatInput({
                     // 已建会话按实际路由口径解析当前来源(含停用拷贝,跟真实扣费路由);
                     // 草稿是新路由选择,保持准入口径(PR #744 review 第十轮)。
                     actualRoute={!!sessionId}
+                    // 有过 Agent 回复 = 供应商组已为这个任务选好电脑,组那一项的用量按那台显示。
+                    taskStarted={taskStarted}
                     onProviderChange={(providerId, modelId, effort, fast) =>
                       handleProviderChange(providerId, modelId, effort, undefined, fast)
                     }

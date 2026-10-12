@@ -143,6 +143,7 @@ import {
 import { buildClaudeFlagSettings } from './flag-settings.js';
 import {
   buildClaudeAskUserQuestionCallerProvenanceHooks,
+  buildClaudeDisallowedTools,
   buildClaudeOrcaCallerProvenanceHooks,
   buildClaudeLocalToolGuardHooks,
   buildClaudeRemoteOrcaCallerGuards,
@@ -1211,7 +1212,9 @@ export class ClaudeCodeAgent extends BaseAgent {
    * 按 name 去重), 二者共享 ~/.claude/{...} 扫盘事实, 但消费者不同。
    */
   async listCustomizations(opts: ListCustomizationsOptions): Promise<ListCustomizationsResult> {
-    const result = await scanClaudeCustomizations(opts);
+    const result = await (this.deps.scanLocalCustomizations
+      ? this.deps.scanLocalCustomizations('claude-code', opts)
+      : scanClaudeCustomizations(opts));
     if (!opts.kinds || opts.kinds.includes('skill')) {
       result.items.push(...(await this.deps.getManagedSkills?.() ?? []).filter((skill) => skill.path).map((skill) => ({
         engine: 'claude-code' as const, kind: 'skill', scope: 'user', name: skill.name,
@@ -1813,6 +1816,12 @@ export class ClaudeCodeAgent extends BaseAgent {
       : this.deps.claudeAllowedTools?.length
         ? [...this.deps.claudeAllowedTools]
         : undefined;
+    // 与 Cindy 重复且结果在 Cindy 里看不到的 Claude 自带工具(host 路由表决定),
+    // 加上设备托管时交给 cindy_exec 顶替的本机工具。启动时快照, 整条会话不变。
+    const claudeDisallowedTools = [...new Set([
+      ...(hosted ? DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS : []),
+      ...buildClaudeDisallowedTools(reviewMode ? undefined : this.deps.capabilityRouting),
+    ])];
     /**
      * 本 session 实际注册进 SDK 的 MCP server 名, 由 buildMcpServers 写入。
      * canUseTool 用它把 `mcp__<server>__<tool>` 归属到唯一 server; 空集合时
@@ -3782,6 +3791,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // cc-manager 的 QueryStartParams 已原生支持 allowedTools; 传副本避免 RPC
           // 序列化前后任一侧原地改写 session 快照。
           ...(claudeAllowedTools ? { allowedTools: [...claudeAllowedTools] } : {}),
+          ...(claudeDisallowedTools.length > 0
+            ? { disallowedTools: [...claudeDisallowedTools] }
+            : {}),
           ...(remoteToolGuards.length > 0
             ? { toolGuards: remoteToolGuards }
             : {}),
@@ -4413,8 +4425,11 @@ export class ClaudeCodeAgent extends BaseAgent {
           // Bot MCP selection is explicit; native delegation remains available.
           // 设备托管：只用经隧道的 MCP(本机用户 / 项目里的 MCP 启动命令会在本机执行)。
           ...(opts.botRuntimeProfile || hosted ? { strictMcpConfig: true } : {}),
-          // 设备托管：自带文件与命令工具只能操作本机，关掉，由 cindy_exec 顶替。
-          ...(hosted ? { disallowedTools: [...DEVICE_HOSTED_DISALLOWED_CLAUDE_TOOLS] } : {}),
+          // 设备托管：自带文件与命令工具只能操作本机，关掉，由 cindy_exec 顶替；
+          // 另含 host 路由表关闭的自带工具(见 claudeDisallowedTools)。
+          ...(claudeDisallowedTools.length > 0
+            ? { disallowedTools: [...claudeDisallowedTools] }
+            : {}),
           // 受邀者(另一个账号)：自带工具只开白名单里的，其余都作用于本机或本机用户的账号。
           ...(hosted?.guest ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
