@@ -1445,7 +1445,8 @@ describe('session runtime control wiring', () => {
     const guardCall = makerSendSource.indexOf(
       'await deps.verifyRetiredRouteWindowBeforeSend?.(sessionId);',
     );
-    const vendorSend = makerSendSource.indexOf('const sendResult = await sess.send(');
+    // 上游把真正的 vendor 发送包进了 withChannelTurnSource(...)，旧锚点 `await sess.send(` 已不存在。
+    const vendorSend = makerSendSource.indexOf('const sendResult = await withChannelTurnSource(');
     expect(guardCall).toBeGreaterThan(-1);
     expect(guardCall).toBeLessThan(vendorSend);
     // 核验失败必须抛错（pre-accept 回滚 + 队列恢复），不能只记日志后照发。
