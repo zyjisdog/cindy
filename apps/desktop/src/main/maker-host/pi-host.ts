@@ -1880,6 +1880,8 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     getDisabledSkillPaths: readDisabledSkillPaths,
     // 上游拒收可选请求字段（如 prompt_cache_retention）后学到的 per-model compat 修正，
     // 写 models.json 时合并；只改 compat，不动路由与凭证。
+    // 上游拒收可选请求字段（如 prompt_cache_retention / prompt_cache_key）后学到的 per-model
+    // compat 修正，写 models.json 时合并；只改 compat，不动路由与凭证。
     resolvePiNativeCompatOverride: (providerId, modelId) =>
       readPiNativeCompatOverride(providerId, modelId),
     getManagedSkills: listCindyManagedSkills,

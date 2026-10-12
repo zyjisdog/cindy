@@ -5157,7 +5157,7 @@ describe("Pi provider-aware model routing", () => {
   });
 
   it('keeps a learned inherited window below a later Cindy working-window override', async () => {
-    let workingWindow: number | undefined;
+    let workingWindow: number | null;
     const deps = byomDeps(async () => ({ providers: [
       { id: 'native-a', name: 'Current', baseUrl: 'http://a.test', api: 'openai-completions',
         models: [{ id: 'local-model', contextWindow: 200_000 }] },
@@ -5169,7 +5169,7 @@ describe("Pi provider-aware model routing", () => {
     deps.resolveModelContextLimit = (provider, model) =>
       provider === 'native-account' && (model === 'catalog-model' || model === 'catalog-alias')
         ? workingWindow
-        : undefined;
+        : null;
     captured.requestHandler = async (command) => {
       if (command.type === 'get_available_models') return { success: true, data: { models: [
         { provider: 'pi-native', id: 'wire-model', contextWindow: 400_000 },

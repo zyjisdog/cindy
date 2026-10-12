@@ -603,9 +603,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (!sessionRow || sessionRow.status === 'deleted') return false;
     // SSH only. device-link 会话落在被控桌面本地库,没有 remoteHostId,必须继续换窗。
     if (sessionRow.remoteHostId) return false;
-    // compat 自愈同样只服务本机桌面会话（与 replayUserMessage 的 continueFromHistory 一致）。
     if (unsupportedOption && sessionRow.source !== 'desktop') return false;
-    // oversized 走 canContinueContextRecovery：canonical bot 会话也能续（上游口径）。
     if (oversized && (!canContinueContextRecovery(sessionRow) || sessionRow.agentKind !== 'codex')) return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {

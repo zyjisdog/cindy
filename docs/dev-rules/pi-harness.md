@@ -595,6 +595,9 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 - [x] **provider compat 自愈**:上游以 `invalid_request_error` 明确拒收某个可选请求字段时
       (已知形态:Console Go / OpenCode Zen-Go 的 GLM 上游拒收 `prompt_cache_retention`,提示改用
       `prompt_cache_options`),Pi translator 打稳定 reason `unsupported-request-option`;
+      `prompt_cache_options`;自定义政企/内网网关只拒 `prompt_cache_key`
+      ——Pi 1.0.2 实测二者在同一 compat 开关下一起消失,见 issue #5878),Pi translator 打稳定 reason
+      `unsupported-request-option`;
       desktop 把该 provider/model 的 compat 修正(`supportsLongCacheRetention: false`)记入
       `<userData>/pi-native-compat-overrides.json`,关闭会话后重放同一轮用户消息(Pi 序列化
       跳过失败轮,等价于重试),重建的 models.json 合并该覆盖(`writeModelsJson`)。
