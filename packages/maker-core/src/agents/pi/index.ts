@@ -606,7 +606,15 @@ interface ConfigHomeCleanupLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
 }
 
-type PiStartupStage = 'mcp-ready' | 'pi-spawn' | 'rpc-ready' | 'first-model-request';
+type PiStartupStage =
+  | 'prepared-enter'
+  | 'prepared-native-providers'
+  | 'prepared-auth'
+  | 'prepared-pre-models-json'
+  | 'mcp-ready'
+  | 'pi-spawn'
+  | 'rpc-ready'
+  | 'first-model-request';
 
 function logPiStartupStage(
   logger: AgentDeps['logger'],
@@ -2593,6 +2601,10 @@ export class PiAgent extends BaseAgent {
     onRuntimeStartAttempted: () => void,
   ): Promise<AgentSessionHandle> {
     const startupTraceId = randomBytes(8).toString('hex');
+    // 诊断打点：startSessionPrepared 内各阶段耗时段（与 pi-spawn 等 stage 同一
+    // trace 流，按 startupTraceId 关联），定位冷唤醒在 spawn 前卡在哪一步。
+    const preparedStartedAt = Date.now();
+    logPiStartupStage(this.deps.logger, startupTraceId, 'prepared-enter', preparedStartedAt, 'ok');
     const startupCleanupKey = opts.sessionId ?? '<anonymous>';
     // 轮 22 LOW-6:空串 remoteHostId 规范化 —— Boolean('') 是 false 会让会话
     // 被判定本地但后续仍把 '' 传给 resolvePiNativeProviders 等, 行为分裂。
@@ -2690,6 +2702,7 @@ export class PiAgent extends BaseAgent {
       nativeProviderBySourceId.get(providerId) ?? nativeProviderById.get(providerId);
     const resolveNativeModelId = (providerId: string, model: string): string =>
       nativeProviderById.get(providerId)?.modelIdAliases?.[model] ?? model;
+    logPiStartupStage(this.deps.logger, startupTraceId, 'prepared-native-providers', preparedStartedAt, 'ok');
     // providerId 是模型来源的主键；同名模型可同时存在于 Cindy 网关和多个 BYOM provider。
     // 三态语义(与 session-provider-store 对齐):
     //   - 显式 BYOM id → 该 native provider(经上面的 model-combo fail-closed 校验);
@@ -3076,6 +3089,7 @@ export class PiAgent extends BaseAgent {
       credentialMode,
       providerId: authProviderId,
     });
+    logPiStartupStage(this.deps.logger, startupTraceId, 'prepared-auth', preparedStartedAt, 'ok');
     // 轮 42 P1(codex-connector):远端 pi + 订阅凭证(oauth-bearer)必须拒绝 ——
     // getAuthEnv 返回的是**本地 loopback proxy 的占位 key**, 远端 models.json
     // 却写真实 upstream endpoint 且不携带本地 proxy 的 OAuth 注入 headers,
@@ -3264,6 +3278,7 @@ export class PiAgent extends BaseAgent {
         `${stableSessionPathSegment(opts.sessionId)}-${preview.modelsJsonHash.slice(0, 16)}${globalContextHash ? `-${globalContextHash}` : ''}`,
       );
     }
+    logPiStartupStage(this.deps.logger, startupTraceId, 'prepared-pre-models-json', preparedStartedAt, 'ok');
     const { gatewayImageInputByModel, gatewayApiByModel, modelsJsonHash, modelConfigHash } = await this.writeModelsJson(
       configHome,
       nativeProviders,

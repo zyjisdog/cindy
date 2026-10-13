@@ -3161,6 +3161,10 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
         .filter(([message]) => message === 'pi startup stage')
         .map(([, fields]) => fields as Record<string, unknown>);
       expect(events.map((event) => event.stage)).toEqual([
+        'prepared-enter',
+        'prepared-native-providers',
+        'prepared-auth',
+        'prepared-pre-models-json',
         'mcp-ready',
         'pi-spawn',
         'rpc-ready',

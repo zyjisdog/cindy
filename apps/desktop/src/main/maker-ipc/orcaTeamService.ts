@@ -1085,7 +1085,18 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
           // Runtime liveness is independent from the persisted worker status. After a restart a
           // running/error worker can be dormant too, and must rehydrate through the Worker-specific
           // path so its stored permission mode and Orca vendor options are preserved.
-          if (!wasLiveBeforeDispatch) await deps.resumeWorkerSession(target, link);
+          if (!wasLiveBeforeDispatch) {
+            const workerWakeStartedAt = Date.now();
+            deps.log.info('orca dispatch: waking dormant worker', {
+              workerId: target.id,
+              sessionId: target.sessionId,
+            });
+            await deps.resumeWorkerSession(target, link);
+            deps.log.info('orca dispatch: worker wake done', {
+              sessionId: target.sessionId,
+              wakeMs: Date.now() - workerWakeStartedAt,
+            });
+          }
           await params.assertCurrent?.();
           result = await deps.dispatchWorkerMessage({
             targetSessionId: target.sessionId,
@@ -1206,6 +1217,13 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       };
     }
     const assertCurrent = captured ?? await deps.captureControlAuthority?.(params.callerLeadSessionId);
+    // 诊断打点：派单入口时间戳，与 wake stage / pi startup stage 对账。
+    deps.log.info('orca dispatch-to-worker: start', {
+      callerLeadSessionId: params.callerLeadSessionId,
+      targetSessionId: params.targetSessionId,
+      mode: params.mode,
+      ...(params.delivery ? { delivery: params.delivery } : {}),
+    });
     const resolved = await resolveWorkerRef(params.callerLeadSessionId, params.targetSessionId);
     if (!resolved.ok) {
       return {

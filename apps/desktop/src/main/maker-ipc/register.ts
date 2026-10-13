@@ -7733,6 +7733,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const agentDeviceId = await readSessionAgentDeviceId(o.id);
       if (agentDeviceId) o.agentDeviceId = agentDeviceId;
     }
+    // 诊断打点：bootstrapSession 各阶段耗时段（与 orca worker wake stage 配套）。
+    const bootstrapStartedAt = Date.now();
+    const bootstrapStage = (stage: string, extra?: Record<string, unknown>): void => {
+      log.info('bootstrap session stage', {
+        sessionId: o.id ?? null,
+        stage,
+        elapsedMs: Date.now() - bootstrapStartedAt,
+        ...extra,
+      });
+    };
+    bootstrapStage('enter');
     let providerGroupStart = await applyProviderGroupAssignment(o);
     // 模型与供应商来自那台电脑(由那台按它自己的目录校验)，本机目录里没有它们。
     const agentOnOtherDevice = Boolean(o.agentDeviceId) && !o.remoteHostId;
@@ -7834,6 +7845,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     };
     if (!agentOnOtherDevice) await admitLocalRoute();
+    bootstrapStage('route-admitted');
     assertAccess?.();
     let session: Awaited<ReturnType<typeof maker.createSession>> | undefined;
     while (!session) {
@@ -7861,6 +7873,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertAccess?.();
       }
     }
+    bootstrapStage('session-created');
     await markProjectContextIfNeeded(session.id, didInjectProjectContext);
     wireSessionToIpc(session);
     markOrcaMcpHydratedIfNeeded(session.id, o);
@@ -8243,6 +8256,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     assertCurrent?: () => Promise<void>,
     isCancelled?: () => boolean,
   ): Promise<boolean> {
+    // 诊断打点：worker 冷唤醒各阶段耗时段（2026-10-13 实测三次冷唤醒全部静默
+    // ~300s，且慢在 pi spawn 之前；这些 stage 用来定位卡点，定位后可降级/清理）。
+    const wakeStartedAt = Date.now();
+    const wakeStage = (stage: string, extra?: Record<string, unknown>): void => {
+      log.info('orca worker wake stage', {
+        sessionId: target.sessionId,
+        workerId: target.id,
+        stage,
+        elapsedMs: Date.now() - wakeStartedAt,
+        ...extra,
+      });
+    };
     const live = maker.getSession(target.sessionId);
     if (live) return false;
     if (isCancelled?.()) return false;
@@ -8257,6 +8282,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 归档 / 删除后的 worker 不允许被唤醒：关闭协同与 archive 可能和后台预热交错。
     if (row.status !== 'active') return false;
     if (isCancelled?.()) return false;
+    wakeStage('db-row', {
+      status: row.status,
+      sdkSessionId: row.sdkSessionId ?? null,
+      remoteHostId: row.remoteHostId ?? null,
+    });
 
     const workerVendorOptions = {
       orcaRole: 'worker' as const,
@@ -8286,6 +8316,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       ...directoryGrantsForRuntime(storedExtraDirs),
       ...(writableDirs.length > 0 ? { writableDirs } : {}),
     });
+    wakeStage('opts-built');
     await assertCurrent?.();
     await ensureRemoteReadyForSessionStart({ createOpts: opts });
     // 任务级窗口预算：worker 唤醒这条路径自己拼 opts，不经过 createSession 的
@@ -8296,7 +8327,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     await applySessionContextWindowBudgetToCreateOpts(target.sessionId, opts, getActiveCatalog());
     await assertCurrent?.();
     if (isCancelled?.()) return false;
+    wakeStage('pre-bootstrap');
     const { session: resumedSession } = await bootstrapSession(opts);
+    wakeStage('bootstrapped', { totalMs: Date.now() - wakeStartedAt });
     // bootstrap 之后 runtime 已经存在：从这里开始的任何失败（授权失效 / 账号切换 /
     // 关闭协同 / 归档 / 显式 idle）都必须先关掉刚拉起的 session 再返回或抛错，
     // 否则已归档 worker 会留在运行态（review P1 + Security）。
