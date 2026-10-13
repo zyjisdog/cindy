@@ -225,4 +225,25 @@ describe('sendToSessionLock', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(hasSendToSessionLock('queued-watchdogs')).toBe(false);
   });
+
+  it('same-chain reentry runs the nested task without deadlocking (reentrancy fix)', async () => {
+    let innerRan = false;
+    const result = await withSendToSessionLock('s-reentry', async () => {
+      // 同链内再取同一把锁：修复前这里会等到 300s bail，修复后直接放行。
+      const nested = await withSendToSessionLock('s-reentry', async () => {
+        innerRan = true;
+        return 'inner-ok';
+      });
+      expect(nested).toBe('inner-ok');
+      expect(innerRan).toBe(true);
+      return 'outer-ok';
+    });
+    expect(result).toBe('outer-ok');
+    expect(innerRan).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(hasSendToSessionLock('s-reentry')).toBe(false);
+    // 检测器日志仍在（观察剩余重入源），且不应出现 5min bail 类警告。
+    expect(warnMock.mock.calls.some((call) => String(call[0]).includes('same-chain reentry allowed'))).toBe(true);
+    expect(warnMock.mock.calls.some((call) => String(call[0]).includes('bailed out'))).toBe(false);
+  });
 });

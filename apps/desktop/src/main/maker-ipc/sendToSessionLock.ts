@@ -219,6 +219,15 @@ export async function withSendToSessionLock<T>(
   task: () => Promise<T>,
   getStage?: () => string | undefined,
 ): Promise<T> {
+  // 同异步链重入直接放行（同链天然串行，不存在与自己的竞争）；否则锁内临界区
+  // 再触发一次取同把锁的调用（如 drain→sendToAgentAccepted）就会自锁到 bail。
+  // 检测器日志保留，观察修复命中后的剩余重入源。
+  if (heldLockKeys.getStore()?.has(sessionId)) {
+    log.warn('sendToSession lock same-chain reentry allowed (reentrancy fix active)', {
+      sessionId,
+    });
+    return task();
+  }
   noteNestedAcquireIfHeld(sessionId, 'withSendToSessionLock');
   const release = await acquireSendToSessionLock(sessionId, undefined, getStage);
   const nextHeld = new Set(heldLockKeys.getStore() ?? []);
