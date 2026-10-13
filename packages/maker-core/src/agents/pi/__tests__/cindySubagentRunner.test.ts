@@ -265,6 +265,8 @@ async function makeFixture(options: {
    * permissions or mocking fs.
    */
   poisonResultPath?: boolean;
+  /** Override the per-task profile prompt, e.g. to blow the spawn argv budget. */
+  profilePrompt?: string;
 } = {}) {
   const root = await tempRoot();
   const runId = randomUUID();
@@ -495,7 +497,7 @@ process.stdin.on('end', () => {
       title: `scout ${index + 1}`,
       task: `task ${index + 1}`,
       tools: 'read,grep,find,ls',
-      profilePrompt: 'fixture prompt',
+      profilePrompt: options.profilePrompt ?? 'fixture prompt',
       provider: 'fixture',
       model: 'fixture-model',
       thinking: 'high',
@@ -596,6 +598,39 @@ describe('Cindy durable PI Subagent runner', () => {
       });
       await waitForClose(fixture.child, fixture.stderr);
     });
+  });
+
+  // A profile prompt long enough to blow the platform spawn command line budget
+  // must fail closed as a readable task error. Without the guard the spawn
+  // itself throws (ENAMETOOLONG / EINVAL on Windows) and the run ends with an
+  // opaque error instead of saying which argument was too long.
+  it('fails a task closed when its profile prompt exceeds the spawn argv budget', async () => {
+    // Over the budget on both platforms: 30k on Windows, 128k on POSIX.
+    const fixture = await makeFixture({
+      profilePrompt: 'profile prompt. '.repeat(process.platform === 'win32' ? 3000 : 9000),
+    });
+    const failed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'failed' ? run : null;
+    });
+    expect(failed.tasks[0]?.status).toBe('failed');
+    expect(failed.tasks[0]?.error).toMatch(/spawn budget/i);
+    expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
+  });
+
+  // 预算按字节算：汉字在 UTF-8 下是 3 字节/字，按字符数估会漏掉三分之二，
+  // 于是一段「字符数没超、字节数超了」的中文提示词会漏过守卫并炸在 spawn 上。
+  it('counts multi-byte argv in bytes, not characters', async () => {
+    // ~4.5 万字符 ≈ 13.5 万 UTF-8 字节：字符数在 POSIX 的 128k 之下，字节数在其上。
+    const fixture = await makeFixture({
+      profilePrompt: '中文提示词'.repeat(9000),
+    });
+    const failed = await waitFor(async () => {
+      const [run] = await listPiSubagentRuns(fixture.root);
+      return run?.state === 'failed' ? run : null;
+    });
+    expect(failed.tasks[0]?.error).toMatch(/\d+ > \d+ bytes/);
+    expect(await readCommandsIfPresent(fixture.commandsFile)).toBeNull();
   });
 
   it('uses unique exact child session ids and persists terminal output/usage', async () => {
