@@ -1825,8 +1825,11 @@ export class PiAgent extends BaseAgent {
     });
   }
 
-  private inheritedNativeContextWindowKey(provider: string, model: string): string {
-    return `${provider}\0${model}`;
+  private inheritedNativeContextWindowKey(binaryPath: string, provider: string, model: string): string {
+    // Desktop may update Pi in place while this Agent stays registered. Bind a
+    // learned catalog value to the binary frozen for that session: an old task
+    // can remain alive after deps.binaryPath starts advertising the next build.
+    return `${binaryPath}\0${provider}\0${model}`;
   }
 
   private requestSubagentRunnerExit(
@@ -2063,8 +2066,8 @@ export class PiAgent extends BaseAgent {
    * 通常是 RemoteHost.execStream 在远端跑同一命令、把 stdin/stdout 拽回本地
    * (SshPiTransport)。PiAgent 对两种来源的差异零感知(协议层只认行)。
    *
-   * remoteBinaryPath:远端 pi 二进制绝对路径(host 已 probe)。需要它来决定
-   * plan-mode 扩展路径 / subagent spawn env —— 本地场景即 this.deps.binaryPath。
+   * runtimeBinaryPath:会话冻结的 pi 二进制绝对路径。远端由 host probe，
+   * 本地也必须使用快照，不能在异步准备完成后重新读取动态依赖。
    */
   private async createTransport(
     opts: {
@@ -2079,13 +2082,13 @@ export class PiAgent extends BaseAgent {
     },
     onProcessSpawned?: (pid: number) => void | (() => void),
     remoteHostId?: string | null,
-    remoteBinaryPath?: string,
+    runtimeBinaryPath?: string,
   ): Promise<{ transport: PiTransport; remoteBinaryPath: string | undefined }> {
     if (remoteHostId && this.deps.getRemotePiTransport) {
       const transport = await this.deps.getRemotePiTransport(remoteHostId, {
         binaryPath: this.deps.binaryPath,
         // startSession 已在 plan-mode 段前 resolve;host 侧有 cache,重复 probe 秒回。
-        remoteBinaryPath: remoteBinaryPath ?? this.deps.binaryPath,
+        remoteBinaryPath: runtimeBinaryPath ?? this.deps.binaryPath,
         args: opts.args,
         cwd: opts.cwd,
         env: opts.env,
@@ -2095,12 +2098,12 @@ export class PiAgent extends BaseAgent {
       });
       return {
         transport,
-        remoteBinaryPath: transport.remoteBinaryPath ?? remoteBinaryPath,
+        remoteBinaryPath: transport.remoteBinaryPath ?? runtimeBinaryPath,
       };
     }
     return {
       transport: createPiStdioTransport({
-        binaryPath: this.deps.binaryPath,
+        binaryPath: runtimeBinaryPath ?? this.deps.binaryPath,
         args: opts.args,
         cwd: opts.cwd,
         env: opts.env,
@@ -2253,6 +2256,8 @@ export class PiAgent extends BaseAgent {
       sessionContextWindowBudget?: number | null;
       /** Session-frozen Pi auto-compact percentage. Do not re-read the live getter. */
       piCompactionPct?: number;
+      /** Local Pi binary frozen for this session; scopes learned native windows. */
+      runtimeBinaryPath?: string;
       /** Host-installed roots/specs for Pi's own package discovery. */
       packages?: readonly PiNativePackageEntry[];
       disabledSkills?: DisabledSkillLaunchSnapshot;
@@ -2321,7 +2326,10 @@ export class PiAgent extends BaseAgent {
       // provider-aware 描述符，不能被同名 non-reasoning BYOM 清空 reasoning。
       // host 未注入 resolver 或只有 BYOM 条目时保留旧 flat fallback。
       const m = this.deps.resolvePiGatewayModelDescriptor?.(gatewayProviderId, publicModel.id) ?? publicModel;
-      const resolverContext = { remote: opts.remote === true };
+      const resolverContext = {
+        remote: opts.remote === true,
+        runtimeBinaryPath: opts.runtimeBinaryPath,
+      };
       const resolvedSpec = this.deps.resolvePiGatewayModelSpec?.(gatewayProviderId, m.id, resolverContext);
       const resolvedApi = resolvedSpec?.api ?? this.deps.resolvePiGatewayModelApi?.(
         gatewayProviderId,
@@ -2511,9 +2519,9 @@ export class PiAgent extends BaseAgent {
         const workingWindow = this.deps.resolveModelContextLimit?.(provider.sourceProviderId ?? provider.id, model.id) ?? undefined;
         const inheritsNativeWindow = provider.inheritModels === true && model.api === undefined
           && model.catalogAddition !== true && model.contextWindow === undefined;
-        const learnedWindow = !opts.remote && inheritsNativeWindow
+        const learnedWindow = !opts.remote && opts.runtimeBinaryPath && inheritsNativeWindow
           ? this.inheritedNativeContextWindows.get(
-              this.inheritedNativeContextWindowKey(provider.id, model.wireId ?? model.id),
+              this.inheritedNativeContextWindowKey(opts.runtimeBinaryPath, provider.id, model.wireId ?? model.id),
             )
           : undefined;
         // An inherited entry without a Cindy-owned window keeps Pi's native
@@ -2623,6 +2631,9 @@ export class PiAgent extends BaseAgent {
     // 轮 22 LOW-6:空串 remoteHostId 规范化 —— Boolean('') 是 false 会让会话
     // 被判定本地但后续仍把 '' 传给 resolvePiNativeProviders 等, 行为分裂。
     if (opts.remoteHostId === '') opts.remoteHostId = undefined;
+    // Freeze the local runtime identity before the first await. Desktop may
+    // install a newer managed Pi while this task remains alive.
+    const sessionRuntimeBinaryPath = opts.remoteHostId ? undefined : this.deps.binaryPath;
     if (opts.remoteHostId && !this.deps.getRemotePiTransport) {
       throw new NotSupportedError('remoteSession', {
         supported: false,
@@ -2692,6 +2703,7 @@ export class PiAgent extends BaseAgent {
           remoteHostId: opts.remoteHostId,
           providerId: opts.providerId,
           model: opts.model,
+          runtimeBinaryPath: sessionRuntimeBinaryPath,
           resumeSessionId: opts.resumeSessionId,
         });
         nativeProviders = resolved?.providers ?? [];
@@ -2884,9 +2896,9 @@ export class PiAgent extends BaseAgent {
     const startupWorkingContextWindow = effectiveWorkingContextWindow(authProviderId, opts.model);
     const nativeModel = nativeProviders.find((provider) => provider.id === initialProvider)?.models
       .find((model) => (model.wireId ?? model.id) === initialWireModel);
-    const learnedNativeContextWindow = !remote && nativeModel?.contextWindow === undefined
+    const learnedNativeContextWindow = !remote && sessionRuntimeBinaryPath && nativeModel?.contextWindow === undefined
       ? this.inheritedNativeContextWindows.get(
-          this.inheritedNativeContextWindowKey(initialProvider, initialWireModel),
+          this.inheritedNativeContextWindowKey(sessionRuntimeBinaryPath, initialProvider, initialWireModel),
         )
       : undefined;
     const startupContextWindow = Math.max(
@@ -3016,7 +3028,7 @@ export class PiAgent extends BaseAgent {
     // the current `cindy` provider and leak an invalid unnamespaced model id.
     // 受邀者分享的不是网关时，子代理不能改走网关。
     const routedGatewaySubagentModels = guestOmitsGateway ? [] : gatewaySubagentModels.filter((model) => {
-      const resolverContext = { remote };
+      const resolverContext = { remote, runtimeBinaryPath: sessionRuntimeBinaryPath };
       const spec = this.deps.resolvePiGatewayModelSpec?.(PI_PROVIDER_ID, model.id, resolverContext);
       const api = spec?.api ?? this.deps.resolvePiGatewayModelApi?.(
         PI_PROVIDER_ID,
@@ -3289,6 +3301,7 @@ export class PiAgent extends BaseAgent {
         workingContextWindow: startupWorkingContextWindow,
         sessionContextWindowBudget,
         piCompactionPct: sessionPiAutoCompactPct,
+        runtimeBinaryPath: sessionRuntimeBinaryPath,
       });
       configHome = joinRemotePosixPath(
         agentHome,
@@ -3306,6 +3319,7 @@ export class PiAgent extends BaseAgent {
         workingContextWindow: startupWorkingContextWindow,
         sessionContextWindowBudget,
         piCompactionPct: sessionPiAutoCompactPct,
+        runtimeBinaryPath: sessionRuntimeBinaryPath,
         ...(guestOmitsGateway ? { omitGatewayModels: true } : {}),
       },
     );
@@ -3862,7 +3876,7 @@ export class PiAgent extends BaseAgent {
           }
           return resolved;
         })(opts.remoteHostId)
-      : this.deps.binaryPath;
+      : sessionRuntimeBinaryPath!;
 
     // plan 模式:挂载 pi 自带的 plan-mode example 扩展(随 pi 分发,版本匹配,免 vendoring)。
     // 只在文件存在时 --extension;缺失则 plan 模式静默降级(setPlanMode 时 warn)。
@@ -6758,6 +6772,7 @@ export class PiAgent extends BaseAgent {
             remoteHostId: opts.remoteHostId,
             providerId: requestedProviderId,
             model,
+            runtimeBinaryPath: sessionRuntimeBinaryPath,
             resumeSessionId: sdkSessionId || opts.resumeSessionId,
             purpose: 'preview',
           });
@@ -6816,7 +6831,9 @@ export class PiAgent extends BaseAgent {
           && nativeModel.catalogAddition !== true && nativeModel.contextWindow === undefined;
       }
       const gatewaySpec = gateway
-        ? this.deps.resolvePiGatewayModelSpec?.(sourceId, model, { remote })
+        ? this.deps.resolvePiGatewayModelSpec?.(sourceId, model, {
+            remote, runtimeBinaryPath: sessionRuntimeBinaryPath,
+          })
         : undefined;
       if (gateway && gatewaySpec === null) {
         return { action: 'unavailable', targetContextWindow: null, windowVerified: false,
@@ -6844,7 +6861,7 @@ export class PiAgent extends BaseAgent {
               configuredWindow = actualWindow;
               if (!remote && provider && wireId) {
                 this.inheritedNativeContextWindows.set(
-                  this.inheritedNativeContextWindowKey(provider, wireId),
+                  this.inheritedNativeContextWindowKey(effectivePiBinaryPath, provider, wireId),
                   actualWindow,
                 );
               }
@@ -6870,6 +6887,7 @@ export class PiAgent extends BaseAgent {
           workingContextWindow: effectiveWorkingContextWindow(sourceId, model),
           sessionContextWindowBudget,
           piCompactionPct: sessionPiAutoCompactPct,
+          runtimeBinaryPath: sessionRuntimeBinaryPath,
           packages: nativePackagePaths, disabledSkills: disabledSkillLaunch,
           ...(guestOmitsGateway ? { omitGatewayModels: true } : {}) },
       );
@@ -6925,6 +6943,7 @@ export class PiAgent extends BaseAgent {
         remoteHostId: opts.remoteHostId,
         providerId: requestedProviderId,
         model,
+        runtimeBinaryPath: sessionRuntimeBinaryPath,
         resumeSessionId: sdkSessionId || opts.resumeSessionId,
         purpose: 'live-refresh',
       });
@@ -7004,6 +7023,7 @@ export class PiAgent extends BaseAgent {
           { remote, fileOps, contextWindow: nextDescriptor?.contextWindow ?? ctx.contextWindow,
             workingContextWindow: effectiveWorkingContextWindow(sourceId, model),
             sessionContextWindowBudget,
+            runtimeBinaryPath: sessionRuntimeBinaryPath,
             piCompactionPct: sessionPiAutoCompactPct, packages: nativePackagePaths,
             disabledSkills: disabledSkillLaunch,
             ...(guestOmitsGateway ? { omitGatewayModels: true } : {}) },
