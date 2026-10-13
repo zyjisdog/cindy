@@ -1,6 +1,21 @@
 import { createLogger } from '../logger.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 const log = createLogger('maker-ipc:send-to-session-lock');
+
+// 诊断（2026-10-13 send_to_worker 卡 300s）：同异步链内对同一会话锁的嵌套获取
+// 检测器。命中即打印重入调用栈，用于定位 worker 唤醒临界区内的嵌套点；定位后
+// 本段按 engineering-conventions 清理。
+const heldLockKeys = new AsyncLocalStorage<ReadonlySet<string>>();
+
+function noteNestedAcquireIfHeld(sessionId: string, where: string): void {
+  if (!heldLockKeys.getStore()?.has(sessionId)) return;
+  log.warn('sendToSession lock nested acquire detected in same async chain', {
+    sessionId,
+    where,
+    nestedStack: new Error(`nested acquire at ${where}`).stack,
+  });
+}
 
 /**
  * Per-session send/route serialization. Every local send path (maker:send,
@@ -174,6 +189,7 @@ export async function acquireSendToSessionLock(
   getStage?: () => string | undefined,
 ): Promise<() => void> {
   assertSessionNotRestarting(sessionId, restartToken);
+  noteNestedAcquireIfHeld(sessionId, 'acquireSendToSessionLock');
   const previous = sendToSessionLocks.get(sessionId);
   const waitPrevious = previous ? previous.catch(() => undefined) : Promise.resolve();
   let releaseGate!: () => void;
@@ -203,9 +219,12 @@ export async function withSendToSessionLock<T>(
   task: () => Promise<T>,
   getStage?: () => string | undefined,
 ): Promise<T> {
+  noteNestedAcquireIfHeld(sessionId, 'withSendToSessionLock');
   const release = await acquireSendToSessionLock(sessionId, undefined, getStage);
+  const nextHeld = new Set(heldLockKeys.getStore() ?? []);
+  nextHeld.add(sessionId);
   try {
-    return await task();
+    return await heldLockKeys.run(nextHeld, task);
   } finally {
     release();
   }
