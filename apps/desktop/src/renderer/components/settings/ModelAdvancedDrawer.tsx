@@ -1,3 +1,4 @@
+import { DisplayPricingDetails } from '@/components/DisplayPricingDetails';
 import { Button } from '@/components/ui/button';
 import { localizedModelDescription } from '@/lib/modelDescriptions';
 import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames';
@@ -1245,7 +1246,9 @@ export function ModelAdvancedDrawer({
                   </Section>
 
                   <Section title={t('settings.providers.models.advanced.pricing')}>
-                    {price === null ? (
+                    {primaryModel.displayPricing && primaryModel.currency ? (
+                      <DisplayPricingDetails model={primaryModel} />
+                    ) : price === null ? (
                       <Row label={t('settings.providers.models.advanced.pricingLabel')} muted>
                         {t(
                           provider.access?.kind === 'subscription'
@@ -1277,7 +1280,7 @@ export function ModelAdvancedDrawer({
                         </Row>
                       ))
                     )}
-                    {price?.kind === 'priced' && price.discount !== undefined && (
+                    {!primaryModel.displayPricing && price?.kind === 'priced' && price.discount !== undefined && (
                       <Row label={t('settings.providers.models.advanced.discount')}>
                         <span
                           className="inline-flex items-center rounded-full px-2 py-[1px] text-10 font-medium"
