@@ -937,7 +937,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     // Schema-disclosure state persists per sid in agentHome/runtime across pi process
     // restarts — clear it unless a test deliberately continues the previous boot.
     if (!opts.keepDisclosureState) {
-      rmSync(path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`), { force: true });
+      rmSync(path.join(agentHome, 'runtime', `mcp-disclosure-${sid}.json`), { force: true });
     }
     const requestStart = modelRequests.length;
     const requestBodyStart = modelRequestBodies.length;
@@ -1452,11 +1452,13 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         'persisted disclosure first boot',
         { sessionId: sid },
       );
-      const stateFile = path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`);
+      const stateFile = path.join(agentHome, 'runtime', `mcp-disclosure-${sid}.json`);
       expect(existsSync(stateFile)).toBe(true);
-      const state = JSON.parse(readFileSync(stateFile, 'utf8')) as { keys?: string[] };
-      expect(Array.isArray(state.keys)).toBe(true);
-      expect(state.keys?.some((key) => key.includes('cindy_echo'))).toBe(true);
+      const state = JSON.parse(readFileSync(stateFile, 'utf8')) as {
+        version?: unknown; entries?: Record<string, unknown>;
+      };
+      expect(state.version).toBe(1);
+      expect(Object.keys(state.entries ?? {}).some((key) => key.includes('cindy_echo'))).toBe(true);
 
       // Second boot (fresh pi process, same session id): the blind call must execute
       // instead of being gated — the schema was already inspected in first boot.
@@ -1474,7 +1476,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   );
 
   it(
-    'schema disclosure state is dropped when the tool catalog changes across restarts',
+    'schema disclosure survives adding a server whose tools are untouched',
     { timeout: 120_000 },
     async () => {
       echoCalls.length = 0;
@@ -1487,29 +1489,31 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         'persisted disclosure first boot',
         { sessionId: sid },
       );
-      // Second boot on a different catalog (echo + workspace): the fingerprint
-      // mismatch must drop the persisted key, so the blind call is gated again
-      // instead of running on a schema remembered from the previous catalog.
-      const { requestBodies } = await runOneTurn(
+      const stateFile = path.join(agentHome, 'runtime', `mcp-disclosure-${sid}.json`);
+      const afterFirstBoot = readFileSync(stateFile, 'utf8');
+      // Second boot adds cindy_workspace but leaves cindy_echo/echo's schema
+      // byte-identical. 失效判据是**单个工具的 schema 指纹**，不是工具目录：
+      // 同 schema 的工具必须继续沿用披露，不该被无关工具的增删重新关门。
+      // （schema 真变了会重新关门，由 mcpDisclosureFingerprint 用例覆盖。）
+      await runOneTurn(
         'ask',
         async () => ({ kind: 'permission', behavior: 'allow' }),
         'local-echo-plus',
-        'persisted disclosure stale catalog',
+        'persisted disclosure wider catalog',
         { sessionId: sid, keepDisclosureState: true },
       );
-      expect(echoCalls).toEqual([]);
-      expect(requestBodies.join('\n')).toContain('Inspect this tool before execution');
-      const state = JSON.parse(readFileSync(path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`), 'utf8')) as { keys?: string[] };
-      expect(state.keys).toEqual([]);
+      expect(echoCalls).toHaveLength(1);
+      // 沿用披露 → 不记账 → 落盘快照原样不动；重新关门自愈会把它改写成新快照。
+      expect(readFileSync(stateFile, 'utf8')).toBe(afterFirstBoot);
     },
   );
 
   it(
-    'invalid disclosure snapshots (missing catalog or wrong pi version) fall back to the gate',
+    'invalid disclosure snapshots (bad version or missing entries) fall back to the gate',
     { timeout: 180_000 },
     async () => {
       const sid = 'mcp-itest-disclose-invalid';
-      const stateFile = path.join(agentHome, 'runtime', `mcp-disclosed-${sid}.json`);
+      const stateFile = path.join(agentHome, 'runtime', `mcp-disclosure-${sid}.json`);
       const blindCallPrompt = 'persisted disclosure stale catalog';
 
       const bootAndMutate = async (mutate: (snapshot: Record<string, unknown>) => void): Promise<void> => {
@@ -1525,23 +1529,28 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         const snapshot = JSON.parse(readFileSync(stateFile, 'utf8')) as Record<string, unknown>;
         mutate(snapshot);
         writeFileSync(stateFile, JSON.stringify(snapshot));
-        // Second boot with the mutated snapshot: the blind call must NOT run on it.
-        const { requestBodies } = await runOneTurn(
+        // Second boot with the mutated snapshot: 快照不被采信，工具重新关门并自愈一次
+        // （自愈会按当前 schema 重写落盘快照 → 文件回到 version 1 且 entries 非空；
+        // 若快照被采信则不会有这次重写，文件会保持被我改坏的形态）。
+        await runOneTurn(
           'ask',
           async () => ({ kind: 'permission', behavior: 'allow' }),
           'local',
           blindCallPrompt,
           { sessionId: sid, keepDisclosureState: true },
         );
-        expect(echoCalls).toEqual([]);
-        expect(requestBodies.join('\n')).toContain('Inspect this tool before execution');
+        const repaired = JSON.parse(readFileSync(stateFile, 'utf8')) as {
+          version?: unknown; entries?: Record<string, unknown>;
+        };
+        expect(repaired.version).toBe(1);
+        expect(Object.keys(repaired.entries ?? {}).length).toBeGreaterThan(0);
       };
 
-      // Snapshot with keys but no catalog field: must be treated as invalid, not
+      // Snapshot with the wrong version tag: must be treated as invalid, not
       // honored on faith.
-      await bootAndMutate((snapshot) => { delete snapshot.catalog; });
-      // Snapshot with matching catalog but tampered pi version: same fallback.
-      await bootAndMutate((snapshot) => { snapshot.piVersion = '0.0.0-wrong'; });
+      await bootAndMutate((snapshot) => { snapshot.version = 2; });
+      // Snapshot with no entries at all: same fallback.
+      await bootAndMutate((snapshot) => { delete snapshot.entries; });
     },
   );
 

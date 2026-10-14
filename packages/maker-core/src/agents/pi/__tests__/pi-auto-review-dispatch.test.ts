@@ -3667,9 +3667,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(bridge).toContain('exposeSessionEnvironment: false');
     // 静态剥离名单是单一来源:生成代码必须原样落进 SECRET_ENV_NAMES
     // (换掉字面量改为插值后,这条断言同时钉住单源与落盘。)
-    expect(bridge).toContain(
-      `const SECRET_ENV_NAMES = new Set<string>(${JSON.stringify(PI_BASH_STATIC_SECRET_ENV_NAMES)});`,
-    );
+    expect(bridge).toContain('const SECRET_ENV_NAMES = new Set<string>([');
+    for (const name of PI_BASH_STATIC_SECRET_ENV_NAMES) {
+      // 名单项在生成源里要么是集合内的字面量，要么是同文件里 `const X_ENV = '<name>'`
+      // 的常量引用（后者同样以该字面量出现），所以按字面量钉，不钉缩进与排版。
+      expect(bridge).toContain(`'${name}'`);
+    }
     expect(PI_BASH_STATIC_SECRET_ENV_NAMES).toContain('CINDY_PI_PERMISSION_FILE');
     // 模型请求偏好档与 Fast 模型清单也是父进程专用控制面：它们在 bridge 生成代码
     // 与后台命令 env 两条路径上都会被剥离。抽成单一来源后，合并上游时新增的名字
