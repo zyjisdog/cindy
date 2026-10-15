@@ -2389,6 +2389,7 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
   const context: Record<string, any> = {
     recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
     mcpContentToPi: (content: unknown) => content,
+    createHash,
   };
   runInNewContext(compiled, context);
   const calls: unknown[] = [];
@@ -2534,6 +2535,7 @@ it('lets cindy_mcp_call_tool omit args and forwards an empty object for no-param
   const context: Record<string, any> = {
     recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
     mcpContentToPi: (content: unknown) => content,
+    createHash,
     // PR #6002 的 schemaFingerprint 走 sha256；切片从 import 之后开始，故需注入。
     createHash,
   };
@@ -2592,6 +2594,7 @@ it('tells the model the call_tool envelope instead of forwarding a flattened env
   const context: Record<string, any> = {
     recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
     mcpContentToPi: (content: unknown) => content,
+    createHash,
   };
   runInNewContext(compiled, context);
   const requests: Array<{ method: string; params: any }> = [];
@@ -2631,6 +2634,7 @@ it('does not apply the Cindy envelope rule to a third-party tool also named call
   const context: Record<string, any> = {
     recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
     mcpContentToPi: (content: unknown) => content,
+    createHash,
   };
   runInNewContext(compiled, context);
   const requests: Array<{ method: string; params: any }> = [];
@@ -2689,6 +2693,7 @@ it('leaves a direct tool alone when its required name is not the Cindy envelope'
   const context: Record<string, any> = {
     recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
     mcpContentToPi: (content: unknown) => content,
+    createHash,
   };
   runInNewContext(compiled, context);
   const requests: Array<{ method: string; params: any }> = [];
