@@ -926,8 +926,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     prompt = 'call the echo tool',
     // 披露记录按 sessionId 落盘，所以要真正走到「首次未披露」必须给独立会话；
     // 否则同文件前序用例已落盘的披露会让首次调用直接执行，掩盖门的行为。
-    sessionId = `mcp-itest-${permissionMode}`,
-    opts: { sessionId?: string; keepDisclosureState?: boolean } = {},
+    // 传字符串 = 会话 id；传对象 = { sessionId, keepDisclosureState }（续接上一次启动时用）。
+    sessionId: string | { sessionId?: string; keepDisclosureState?: boolean } = `mcp-itest-${permissionMode}`,
   ): Promise<{
     events: AgentEvent[];
     permissionAsked: boolean;
@@ -936,6 +936,7 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   }> {
     const agent = new PiAgent(buildDeps(bridgeMode));
     const cwd = mkdtempSync(path.join(tmpdir(), 'pi-mcp-cwd-'));
+    const opts = typeof sessionId === 'string' ? { sessionId } : sessionId;
     const sid = opts.sessionId ?? `mcp-itest-${permissionMode}`;
     // Schema-disclosure state persists per sid in agentHome/runtime across pi process
     // restarts — clear it unless a test deliberately continues the previous boot.
