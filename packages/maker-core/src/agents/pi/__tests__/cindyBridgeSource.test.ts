@@ -2534,6 +2534,7 @@ it('lets cindy_mcp_call_tool omit args and forwards an empty object for no-param
   const context: Record<string, any> = {
     recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
     mcpContentToPi: (content: unknown) => content,
+    // PR #6002 的 schemaFingerprint 走 sha256；切片从 import 之后开始，故需注入。
     createHash,
   };
   runInNewContext(compiled, context);
