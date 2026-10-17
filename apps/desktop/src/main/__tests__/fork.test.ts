@@ -45,7 +45,13 @@ const { ipcHandlers, sessionCreatedMock } = vi.hoisted(() => ({
   ipcHandlers: new Map<string, (event: unknown, ...args: unknown[]) => Promise<unknown>>(),
   sessionCreatedMock: vi.fn(),
 }));
-vi.mock('electron', () => ({
+vi.mock('electron', async () => {
+  const [{ tmpdir }, { join }] = await Promise.all([import('node:os'), import('node:path')]);
+  return {
+  app: {
+    // #4598 让 fork 继承任务预算，预算存储经 appSessionState 读 userData/temp。
+    getPath: (name: string) => (name === 'temp' ? tmpdir() : join(tmpdir(), 'cindy-fork-test')),
+  },
   ipcMain: {
     handle: (
       channel: string,
@@ -54,7 +60,8 @@ vi.mock('electron', () => ({
       ipcHandlers.set(channel, handler);
     },
   },
-}));
+  };
+});
 vi.mock('../localDb/ipc/sessionCreatedBroadcast.js', () => ({
   emitSessionCreated: sessionCreatedMock,
 }));
