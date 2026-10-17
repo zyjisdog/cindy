@@ -76,6 +76,8 @@ describe('resumeOrcaWorkerSessionIfMissing runtime cleanup', () => {
       permissionModeOrAsk: (value: unknown) => value,
       directoryGrantsForRuntime: () => ({}),
       ensureRemoteReadyForSessionStart: async () => undefined,
+      applySessionContextWindowBudgetToCreateOpts: async () => undefined,
+      getActiveCatalog: () => ({}),
       bootstrapSession,
       markOrcaRoleIfNeeded,
       log: { info: vi.fn(), warn: vi.fn() },
