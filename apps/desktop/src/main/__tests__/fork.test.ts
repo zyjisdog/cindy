@@ -45,7 +45,13 @@ const { ipcHandlers, sessionCreatedMock } = vi.hoisted(() => ({
   ipcHandlers: new Map<string, (event: unknown, ...args: unknown[]) => Promise<unknown>>(),
   sessionCreatedMock: vi.fn(),
 }));
-vi.mock('electron', () => ({
+vi.mock('electron', async () => {
+  const [{ tmpdir }, { join }] = await Promise.all([import('node:os'), import('node:path')]);
+  return {
+  app: {
+    // #4598 让 fork 继承任务预算，预算存储经 appSessionState 读 userData/temp。
+    getPath: (name: string) => (name === 'temp' ? tmpdir() : join(tmpdir(), 'cindy-fork-test')),
+  },
   ipcMain: {
     handle: (
       channel: string,
@@ -54,12 +60,8 @@ vi.mock('electron', () => ({
       ipcHandlers.set(channel, handler);
     },
   },
-  // 预算用例经真实的 session-context-budget-store → ownerScopedUserDataPath →
-  // app.getPath('userData')；mock 必须暴露 app，否则报「No "app" export is defined
-  // on the electron mock」。指向 beforeEach 建的临时目录（userDataDirRef），随
-  // tempDirs 生命周期一起清理，绝不碰真实 userData。
-  app: { getPath: (name: string) => (name === 'userData' ? userDataDirRef.current : `/tmp/cindy-fork-test/${name}`) },
-}));
+  };
+});
 vi.mock('../localDb/ipc/sessionCreatedBroadcast.js', () => ({
   emitSessionCreated: sessionCreatedMock,
 }));
