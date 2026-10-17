@@ -1573,7 +1573,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
       expect(resolver).toHaveBeenCalled();
       expect(handle.getPlanMode!()).toBe(false);
-      expect(handle.getExecutionPlanMode!()).toBe(false);
+      // planModeActive 初始为 null，由原生 plan 扩展的状态回包异步收敛；
+      // turn 结束与该回包是两条独立消息，繁忙时断言会抢跑。
+      await vi.waitFor(() => expect(handle!.getExecutionPlanMode!()).toBe(false), { timeout: 20_000 });
       const next = seenRequests.length;
       await handle.send({ type: 'user', content: 'An ordinary greeting.' });
       await vi.waitFor(() => expect(seenRequests.length).toBeGreaterThan(next), { timeout: 20_000 });
