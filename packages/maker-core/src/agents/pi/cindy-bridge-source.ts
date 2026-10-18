@@ -2901,6 +2901,17 @@ function acquireDisclosureLock(lockPath: string): boolean {
       } catch {
         return false; // 已被另一个实例回收或重建：不争，跳过本次落盘。
       }
+      // rename 只证明「搬走了某个锁」，不证明搬的是刚读到的残留锁：另一实例可能在
+      // 我们读 owner 与 rename 之间已完成回收并重建，这次 rename 搬走的是它的新锁。
+      // 校验搬到的内容，不是刚看到的残留持有者就原样搬回去并放弃本次落盘；恢复也
+      // 失败（第三者又抢先建了锁）时残件留给下次回收——本锁无授权语义，宁可多一轮
+      // 自愈，也不冒两个实例同时持锁互相覆盖记录的风险。
+      let recoveredOwner: number | undefined;
+      try { recoveredOwner = readLockOwner(stale); } catch { /* 内容读不出按不匹配处理 */ }
+      if (recoveredOwner !== owner) {
+        try { renameSync(stale, lockPath); } catch { /* 第三者已建新锁：残件留待下次回收 */ }
+        return false;
+      }
       try { rmSync(stale, { force: true }); } catch { /* 残留回收槽不影响正确性 */ }
     }
   }
@@ -2958,6 +2969,9 @@ class CindyMcpGateway {
    * 因此重启后同 schema 直接沿用；读不到或损坏按未披露处理（fail-closed）。
    */
   private readonly disclosedSchemas = new Map<string, string>();
+  /** 本进程**本次运行**新增/更新过的 key。落盘时只有这些覆盖磁盘值。 */
+  private readonly dirtyDisclosureKeys = new Set<string>();
+  private disclosureNotePending = false;
   private botMemoryFacadeEnabled = false;
   private botHelperFacadeEnabled = false;
 
@@ -2999,11 +3013,13 @@ class CindyMcpGateway {
   }
 
   /**
-   * 落盘：先读回并**合并**磁盘上已有记录再原子替换。
-   * 多实例可共用运行目录（同会话可能同时开着另一个 Cindy 实例），直接覆盖本进程
-   * 的全量快照会把另一个实例刚写的披露抹掉（下次启动又触发一次自愈），因此合并是
-   * 必需的，单纯原子写入避免不了丢记录。锁用同目录独占创建，跨进程可见；拿不到锁
-   * 就退化为不写（本进程内存里的披露仍然有效）。
+   * 落盘：以**磁盘上的记录**为基，只让本进程本次真正新增/更新的记录覆盖它。
+   * 多实例可共用运行目录（同会话可能同时开着另一个 Cindy 实例），写本进程的全量
+   * 快照会把另一个实例刚更新的指纹退回旧值：实例 A 启动时读入旧指纹，B 随后保存
+   * 新指纹，之后 A 披露别的工具时把 A 的旧值一并写回，下次启动又被拦一次。
+   * 只合并「本进程没有的 key」同样挡不住这一种 —— 那个 key 本进程有，只是值是旧的，
+   * 所以必须区分「本次改动过」(dirty) 与「启动时读来的旧值」。
+   * 锁用同目录独占创建，跨进程可见；拿不到锁就退化为不写（本进程内存里的披露仍然有效）。
    */
   private persistDisclosures(): void {
     const file = this.disclosureFile();
@@ -3013,20 +3029,26 @@ class CindyMcpGateway {
       const lockPath = file + '.lock';
       if (!acquireDisclosureLock(lockPath)) return;
       try {
-        const merged = new Map<string, string>(this.disclosedSchemas);
+        let base: Map<string, string> | null = null;
         try {
           const existing = JSON.parse(readFileSync(file, 'utf8')) as {
             version?: unknown; entries?: unknown;
           };
           if (existing?.version === 1 && existing.entries && typeof existing.entries === 'object') {
+            base = new Map<string, string>();
             for (const [key, fingerprint] of Object.entries(existing.entries as Record<string, unknown>)) {
               if (typeof fingerprint === 'string' && /^[a-f0-9]{64}$/.test(fingerprint)) {
-                if (!merged.has(key)) merged.set(key, fingerprint);
+                base.set(key, fingerprint);
               }
             }
           }
         } catch {
-          // 磁盘记录缺失/损坏：按只有本进程记录处理。
+          // 磁盘记录缺失/损坏：无从判断谁更新，退回本进程快照（宁可多披露一次）。
+        }
+        const merged = base ?? new Map<string, string>(this.disclosedSchemas);
+        for (const key of this.dirtyDisclosureKeys) {
+          const fingerprint = this.disclosedSchemas.get(key);
+          if (fingerprint) merged.set(key, fingerprint);
         }
         writeFileSync(temp, JSON.stringify({ version: 1, entries: Object.fromEntries(merged) }), { mode: 0o600 });
         renameSync(temp, file);
@@ -3190,6 +3212,26 @@ class CindyMcpGateway {
   }
 
   /**
+   * Sorted, prompt-ready server/tool names worth re-surfacing after compaction:
+   * only tools that still exist AND whose stored fingerprint still matches the
+   * live schema — a removed or schema-drifted tool must not be advertised as
+   * safe to call directly (the gate would re-close on it and waste a round-trip).
+   */
+  disclosedKeysForPrompt(limit = 48): string {
+    const all: string[] = [];
+    for (const [key, fingerprint] of this.disclosedSchemas) {
+      const tool = this.tools.get(key);
+      if (!tool || this.schemaFingerprint(tool) !== fingerprint) continue;
+      const sep = key.indexOf('\u0000');
+      all.push(sep === -1 ? key : key.slice(0, sep) + '/' + key.slice(sep + 1));
+    }
+    all.sort();
+    const shown = all.slice(0, limit);
+    if (all.length > limit) shown.push('… +' + (all.length - limit) + ' more');
+    return shown.join(', ');
+  }
+
+  /**
    * 按当前 schema 记一次披露并落盘。自愈路径与 list_tools 显式披露共用这里，
    * 所以“被自愈放行”的工具与“看过 schema 的工具”在下一次启动后待遇一致。
    */
@@ -3198,6 +3240,7 @@ class CindyMcpGateway {
     const fingerprint = this.schemaFingerprint(call.tool);
     if (this.disclosedSchemas.get(key) === fingerprint) return false;
     this.disclosedSchemas.set(key, fingerprint);
+    this.dirtyDisclosureKeys.add(key);
     this.persistDisclosures();
     return true;
   }
@@ -3461,6 +3504,31 @@ class CindyMcpGateway {
     this.botHelperFacadeEnabled = options.botMemoryFacade === true;
     this.botMemoryFacadeEnabled = options.botMemoryFacade === true
       && this.tools.has(mcpGatewayKey('cindy_memory', 'call_tool'));
+    // Token hygiene: post-compaction the model loses the memory of which MCP tools
+    // it already inspected and re-runs cindy_mcp_list_tools "to be safe". Inject a
+    // one-shot custom message into the first run after each successful compaction
+    // instead of editing the system prompt every run; the message then lives in
+    // context like any other turn until the next compaction summarizes it away.
+    this.disclosureNotePending = false;
+    pi.on?.('session_compact', () => { this.disclosureNotePending = true; });
+    pi.on?.('before_agent_start', () => {
+      if (!this.disclosureNotePending) return undefined;
+      this.disclosureNotePending = false;
+      const keys = this.disclosedKeysForPrompt();
+      if (!keys) return undefined;
+      return {
+        message: {
+          customType: 'cindy-mcp-disclosure-state',
+          content: [{
+            type: 'text',
+            text: 'MCP tools whose schemas you already inspected for this session (persisted across restarts): '
+              + keys + '. Call them directly; do not re-run cindy_mcp_list_tools to re-inspect them. '
+              + '(One-shot reminder after context compaction.)',
+          }],
+          display: false,
+        },
+      };
+    });
 
     if (this.botMemoryFacadeEnabled) {
       pi.registerTool({
