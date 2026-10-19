@@ -21783,9 +21783,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 // **Pi 例外**（Greptile P1，2026-10-17）：Pi 的预算生效方式不同 —— 走
                 // compaction.reserveTokens（热切时 set_compaction_reserve_tokens 实时改 + 切后
                 // 重载 fail-closed），引擎自己的 requiresModelSwitchRebuild（window 比较）已会把
-                // 需要的重建标出来；宿主再强制重建会撞上下面 Pi 分支无条件拒绝的
-                // assertSessionCloseSupported —— 「既要重建又禁止重建」，带预算的 Pi 任务切模
-                // 永远无法生效。预算变化时 Pi 的重建需求由引擎分支自己报。
+                // 需要的重建标出来。预算变化时 Pi 的重建需求由引擎分支自己报。
+                // 注意：不要在这里给 Pi 注入 assertSessionCloseSupported 之类的「无条件拒绝
+                // 重建」预判 —— 上游已把 Pi 运行时退役判定交回 apply/gate（retiredRuntime），
+                // 宿主侧预判会把「跨来源切模」在远程发送边界直接打死（0.1.111 实测死锁）。
                 (runtimeAgentKind !== 'pi' &&
                   sessionContextWindowBudget !== null &&
                   targetContextWindow !== undefined &&
@@ -21794,16 +21795,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // 窗口随热切下发给引擎（否则引擎会继续沿用旧模型的收敛值）。
               ...(sessionContextWindowBudget !== null && targetContextWindow !== undefined
                 ? { contextWindowBudget: targetContextWindow }
-                : {}),
-              ...(runtimeAgentKind === 'pi' && runtimeRouteChanged
-                ? {
-                    assertSessionCloseSupported: () => {
-                      throwIpcError(
-                        'PRECONDITION_FAILED',
-                        'Pi target route requires an unsupported runtime replacement; runtime selection was not changed',
-                      );
-                    },
-                  }
                 : {}),
               isSessionInTurn,
               registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
