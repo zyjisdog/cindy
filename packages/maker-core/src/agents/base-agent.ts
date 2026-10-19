@@ -205,6 +205,8 @@ export interface PiNativeModelSpec {
   api?: PiNativeApi;
   /** Per-model native endpoint retained from PI's bundled provider table. */
   baseUrl?: string;
+  /** Host-only identity for learned compatibility when baseUrl is a local auth proxy. */
+  cacheIdentityBaseUrl?: string;
   /** Add a model missing from PI's bundled catalog while inheriting the provider's bundled API. */
   catalogAddition?: boolean;
   name?: string;
@@ -277,6 +279,8 @@ export interface PiNativeProviderSpec {
   sourceProviderId?: string;
   name: string;
   baseUrl: string;
+  /** True upstream endpoint behind a local auth proxy; never serialized to models.json. */
+  cacheIdentityBaseUrl?: string;
   /** BYOM provider default. Omitted only when inheriting PI's bundled provider catalog. */
   api?: PiNativeApi;
   /** Keep PI's bundled models and serialize only models carrying an explicit api override. */
@@ -950,6 +954,7 @@ export interface AgentDeps {
   resolvePiNativeCompatOverride?: (
     providerId: string,
     modelId: string,
+    routeKey?: string,
   ) => Record<string, unknown> | undefined;
 
   /**
@@ -2126,7 +2131,10 @@ export interface MainOwnedSendContext {
  * Session.send / handle.send 的可选附加项。
  * 缺省 / 不识别字段必须安全忽略。
  */
+export const PI_CACHE_RECOVERY_EXPECTATION = Symbol('pi-cache-recovery-expectation');
+
 export interface SendOptions {
+  readonly [PI_CACHE_RECOVERY_EXPECTATION]?: import('./pi/cache-compatibility.js').PiCacheCompatibility;
   readonly [ASYNC_QUESTION_ANSWER]?: true;
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   readonly [AUTO_REVIEW_USER_INTENT]?: AutoReviewUserIntent;

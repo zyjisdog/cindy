@@ -101,6 +101,7 @@ import {
   getOrCreateRemoteOptimisticTransitionCheckpoint,
   removeRemoteOptimisticDraftFragment,
   type RemoteOptimisticTransitionCheckpoint,
+  type BuiltInSkillDraftIntent,
   saveDraft as saveComposerDraft,
   saveComposerTextAfterAsyncTransition,
   clearDraft as clearComposerDraft,
@@ -188,6 +189,7 @@ import {
   shouldPreservePlanModeComposerDraft,
 } from './planModeComposerCommand';
 import { PendingQueuePanel } from './PendingQueuePanel';
+import { resolveSoleSteerableQueuedMessage } from './pendingQueueRowPresentation';
 import { SendButton } from './SendButton';
 import { FolderPickerPopover, addRecentFolder } from './FolderPickerPopover';
 import { SlashCommandPalette } from './SlashCommandPalette';
@@ -268,6 +270,9 @@ import {
   loadAllCommands,
   nextAvailableSlashCommandIndex,
   PI_RUNTIME_SKILL_RETRY_DELAYS_MS,
+  rewriteBuiltInSkillDraftForSend,
+  leadingSlashInvocation,
+  rebaseInlineRangesAfterSlashCommandRewrite,
   type SlashCommandRosterState,
   type UnifiedCommand,
 } from '@/lib/slashCommands';
@@ -488,6 +493,7 @@ interface ChatInputProps {
     mentions?: MentionedResource[],
     opts?: {
       deliveryMode?: MessageDeliveryMode;
+      builtInSkillIntent?: BuiltInSkillDraftIntent;
       providerId?: string | null;
       /** chat-text-quote:message 开头的 blockquote 为引用功能拼接产出。 */
       quotesEncoded?: boolean;
@@ -1509,6 +1515,9 @@ export function ChatInput({
   onQueueExpandedChangeRef.current = onQueueExpandedChange;
   const queueEditingClientIdRef = useRef(queueEditingClientId);
   queueEditingClientIdRef.current = queueEditingClientId;
+  // 空输入框 + 队列仅一条时，输入框里的 Cmd/Ctrl+Enter 直接插话这条(稳定的 window
+  // capture 监听经 ref 读当前值;赋值在 handleQueueSteer 之后)。
+  const steerSoleQueuedMessageRef = useRef<() => boolean>(() => false);
   const onQueueEditCancelRef = useRef(onQueueEditCancel);
   onQueueEditCancelRef.current = onQueueEditCancel;
   const queueEditCancelAllowedRef = useRef(true);
@@ -3506,6 +3515,7 @@ export function ChatInput({
         event.preventDefault();
         event.stopPropagation();
         if (panelBridgeRef.current?.captureKey(event)) return;
+        if (steerSoleQueuedMessageRef.current()) return;
         clearPressTimer();
         voiceShortcutPressRef.current = null;
         void voiceInputStopAndSendRef.current(enterIntent);
@@ -4100,6 +4110,7 @@ export function ChatInput({
             attachments: existing?.attachments ?? [],
             quotes: existing?.quotes ?? [],
             browserComments: existing?.browserComments ?? [],
+            ...(existing?.builtInSkillIntent ? { builtInSkillIntent: existing.builtInSkillIntent } : {}),
             ...(existing?.pendingGhostId ? { pendingGhostId: existing.pendingGhostId } : {}),
             ...(existing?.focusAtEnd ? { focusAtEnd: true } : {}),
           },
@@ -5255,6 +5266,7 @@ export function ChatInput({
       const sourceSessionId = sessionId;
       const sourceRemoteGhosts = deviceLinkDeviceId ? composerGhostsRef.current : null;
       const sourceStorageKey = storageKey;
+      const sourceWorkingDir = workingDirRef.current;
       const sendInFlightKey = sourceStorageKey ?? sourceSessionId ?? '__draft__';
       if (dispatchSendInFlightKeysRef.current.has(sendInFlightKey)) return;
       const optimisticallyClearRemoteComposer = Boolean(deviceLinkDeviceId && sourceSessionId);
@@ -5301,6 +5313,7 @@ export function ChatInput({
         : () => {};
       if (!finishAgentSendDispatch) return;
       draftSaveSchedulerRef.current?.flush();
+      const builtInSkillIntent = sourceStorageKey ? getComposerDraft(sourceStorageKey)?.builtInSkillIntent : undefined;
       dispatchSendInFlightKeysRef.current.add(sendInFlightKey);
       // 发送新消息时立即递增 turnGen，并在任何 await / clearContent 前消费来源 session
       // 的推荐：旧 Promise 不能落地，正文程序化清空时也不会闪回上一轮推荐。
@@ -5375,10 +5388,12 @@ export function ChatInput({
           mentions,
           hasQuotes,
           agentReferences: serializedAgentReferences,
-          pastedTextRanges,
-          slashCommandRanges,
+          pastedTextRanges: originalPastedTextRanges,
+          slashCommandRanges: originalSlashCommandRanges,
         } = serializedContent;
         let agentReferences = serializedAgentReferences;
+        let pastedTextRanges = originalPastedTextRanges;
+        let slashCommandRanges = originalSlashCommandRanges;
         const sourceDraftExtras =
           sourceStorageKey !== undefined ? getComposerDraft(sourceStorageKey) : undefined;
         const frozenExtras =
@@ -5631,7 +5646,7 @@ export function ChatInput({
         const usedGhost = ghostCommandToken
           ? findGhostByCommand(eligibleGhosts, ghostCommandToken.word, ghostCommandToken.namespace)
           : null;
-        const routedText = expandGhostCommand(text, eligibleGhosts);
+        let routedText = expandGhostCommand(text, eligibleGhosts);
         const sendSnapshot = captureComposerSendSnapshot(
           editor.getJSON(),
           latestAttachmentsRef.current,
@@ -5654,6 +5669,29 @@ export function ChatInput({
           documentBeforeOptimisticClear = editor.getJSON();
           attachmentsBeforeOptimisticClear = [...latestAttachmentsRef.current];
           commentsBeforeOptimisticClear = [...browserCommentsRef.current];
+        }
+        // Recovered worktree drafts can now live in an existing task. Resolve
+        // their identity before optimistic clearing and ordinary slash dispatch,
+        // on every retry. Home still owns resolution after creating its worktree.
+        if (sourceSessionId && builtInSkillIntent) {
+          if (!currentModelAgentKind) return;
+          const rewritten = await rewriteBuiltInSkillDraftForSend({
+            message: routedText,
+            intent: builtInSkillIntent,
+            agentKind: currentModelAgentKind,
+            workingDir: sourceWorkingDir,
+            deviceId: deviceLinkDeviceId ?? undefined,
+            remoteHostId,
+          });
+          if (!isDataOwnerGenerationCurrent(dataOwnerAtOptimisticClear)) return;
+          if (rewritten === null) {
+            toast.error(t('settings.ghosts.page.creatorUnavailable'));
+            return;
+          }
+          agentReferences = rebaseInlineRangesAfterSlashCommandRewrite(agentReferences, routedText, rewritten);
+          pastedTextRanges = rebaseInlineRangesAfterSlashCommandRewrite(pastedTextRanges, routedText, rewritten);
+          slashCommandRanges = rebaseInlineRangesAfterSlashCommandRewrite(slashCommandRanges, routedText, rewritten);
+          routedText = rewritten;
         }
         let recentUsageMarked = false;
         const markRecentPluginUsage = () => {
@@ -5850,6 +5888,7 @@ export function ChatInput({
             sourceStorageKey,
             {
               clientId,
+              ...(builtInSkillIntent ? { builtInSkillIntent } : {}),
               text: tiptapDocHasContent(documentBeforeOptimisticClear)
                 ? documentBeforeOptimisticClear
                 : null,
@@ -6032,6 +6071,14 @@ export function ChatInput({
             {
               deliveryMode,
               providerId: sendProviderId,
+              ...(builtInSkillIntent
+                ? {
+                    builtInSkillIntent: {
+                      ...builtInSkillIntent,
+                      commandName: leadingSlashInvocation(routedText)?.name ?? builtInSkillIntent.commandName,
+                    },
+                  }
+                : {}),
               ...(hasQuotes ? { quotesEncoded: true } : {}),
               ...(agentReferences.length > 0 ? { agentReferences } : {}),
               ...(pastedTextRanges.length > 0 ? { pastedTextRanges } : {}),
@@ -6111,6 +6158,24 @@ export function ChatInput({
     },
     [onQueueSteer],
   );
+  steerSoleQueuedMessageRef.current = () => {
+    // 可见推荐也是待发内容，和正文、附件、评论、语音稿一样保留原发送路径。
+    if (
+      !onQueueSteer ||
+      voiceBusyOnCurrentComposer ||
+      showRecommendationRef.current ||
+      !composerFullyEmptyRef.current()
+    ) {
+      return false;
+    }
+    const clientId = resolveSoleSteerableQueuedMessage(pendingQueue ?? [], {
+      editingClientId: queueEditingClientId,
+      steeringClientIds: steeringQueueClientIds,
+    });
+    if (!clientId) return false;
+    void handleQueueSteer(clientId);
+    return true;
+  };
 
   const queueEditActive = Boolean(queueEditingClientId && onQueueEditSubmit);
   const submitQueueEdit = useCallback(async () => {
@@ -7910,13 +7975,12 @@ export function ChatInput({
               );
             }
           } else {
-            // 同一会话的 effort/model/provider 共用 commit lane，按点击顺序提交 DB → UI。
-            // runtime 不阻塞 lane；旧 IPC 晚完成时 coordinator 会重放最新 effort。
+            // 同一会话共用 commit lane；Main 在 route lock 内决定合入暂存选择或
+            // 提交当前路由。Renderer 不提前把目标档位写到旧模型的 DB 行上。
             await enqueueEffortChange(effortChangeCoordinatorRef.current, sessionId, newEffort, {
               persist: (targetSessionId, effort) =>
-                sessionService.update(targetSessionId, { effort }),
-              applyRuntime: (targetSessionId, effort) =>
                 window.electronAPI.maker.setEffort(targetSessionId, effort),
+              applyRuntime: async () => {}, // Main has already committed the runtime and its fields.
               onCommitted: (targetSessionId, effort) => {
                 if (activeModel)
                   syncSessionDraftModelPrefs(activeModel, { effort, fast: fastMode });

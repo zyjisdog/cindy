@@ -1,3 +1,7 @@
+import { VideoSitePreview } from './VideoSitePreview';
+import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
+import { splitRichAnswer, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
+import { RichAnswer } from './RichAnswer';
 /**
  * MarkdownRenderer
  * ---------------------------------------------------------------------------
@@ -16,7 +20,7 @@ import { useImageLoadFailure } from './useImageLoadFailure';
 import { ChatLoadingImage } from './ChatLoadingImage';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
-import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useId, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import 'katex/dist/katex.min.css';
 import { normalizeMathDelimiters } from '@cindy/maker-shared/math-markdown';
@@ -261,6 +265,7 @@ const previewSafeUrlTransform: UrlTransform = (url, key) => {
 };
 
 interface MarkdownRendererProps {
+  renderRichAnswers?: boolean;
   /** F1: session cwd used to resolve relative paths in markdown links.
    *  Stable per-session — only changes on session switch (parent remount). */
   workingDir: string;
@@ -1619,7 +1624,7 @@ function InlineCodeWithTarget({
   );
 }
 
-export const MarkdownRenderer = memo(function MarkdownRenderer({
+const MarkdownRendererBase = memo(function MarkdownRendererBase({
   workingDir,
   content,
   isStreaming = false,
@@ -1961,4 +1966,28 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       )}
     </div>
   );
+});
+
+/** Assistant-only envelope decoding, before Markdown chunking or repairs. */
+export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRendererProps) {
+  const instanceKey = useId();
+  const sessionFileCtx = useChatSessionFile();
+  const source = useStreamingThrottle(props.content, props.isStreaming ?? false);
+  const renderMedia = (node: RichNode) => {
+    if (node.kind === 'image') return <MarkdownRendererBase {...props} content={richMarkdown(node) ?? ''} isStreaming={false} />;
+    const raw = richMediaSource(node);
+    if (!raw) return null;
+    if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
+    const normalized = raw.startsWith('xdt-audio://') && props.allowPrivilegedLinks !== false ? raw : normalizeMarkdownImageSrc(raw, props.workingDir, props.allowPrivilegedLinks !== false);
+    if (!normalized) return null;
+    const src = rewriteToRemoteMediaOrigin(normalized, props.currentSessionId ? toRemoteMediaOrigin(sessionFileCtx.origin, sessionFileCtx.workingDir) : undefined);
+    return node.kind === 'audio' ? <InlineXdtAudioPlayer src={src} /> : <ChatVideoView src={src} filename={richString(node, 'alt', 'video')} variant="tool-output" sessionId={props.currentSessionId} />;
+  };
+  const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);
+  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} />;
+  return <div className="rich-answer-body">{parts.map(part => part.kind === 'rich'
+    ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
+        stateKey={`${props.streamFadeKey ?? instanceKey}:${part.key}`}
+        renderMarkdown={(content, id) => <MarkdownRendererBase {...props} content={content} streamFadeKey={`${props.streamFadeKey}:${part.key}:${id}`} />} />
+    : <MarkdownRendererBase {...props} key={part.key} content={part.source} isStreaming={!part.complete && props.isStreaming} streamFadeKey={`${props.streamFadeKey}:${part.key}`} />)}</div>;
 });

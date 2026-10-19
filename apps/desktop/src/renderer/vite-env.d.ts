@@ -1144,6 +1144,7 @@ type ElectronLocalDbSessionListUsageOptions = Omit<
 };
 
 interface ElectronAPI {
+  botMarket: import('../shared/botMarket').BotMarketApi;
   companionImport: import('@cindy/maker-shared/companion-import').CompanionImportApi;
   modelFavoritesHost: import('../shared/modelFavoritesSync').ModelFavoritesHostApi;
   routines: import('../shared/routines').RoutinesAPI;
@@ -1275,6 +1276,11 @@ interface ElectronAPI {
 
   /** 意识仓库 —— 数据模型与校验见 shared/ghost.ts,main 端见 main/cindy-brain/。 */
   ghosts: {
+    mailPreview: (sessionId: string, url: string, read: boolean, opened?: boolean) => Promise<{ supported: boolean; message?: import('@cindy/maker-shared/mail-message').MailMessage; error?: string }>;
+    openRemoteSettings: (target: import('../shared/remotePluginSettings').RemotePluginSettingsTarget) => Promise<import('../shared/remotePluginSettings').RemotePluginSettingsView>;
+    closeRemoteSettings: (id: string) => Promise<void>;
+    onRemoteSettingsDirectory: (callback: (value: import('../shared/remotePluginSettings').RemotePluginSettingsDirectory) => void) => () => void;
+    answerRemoteSettingsDirectory: (answer: import('../shared/remotePluginSettings').RemotePluginSettingsDirectoryAnswer) => Promise<void>;
     recommendationsSync: () => import('../shared/homePluginRecommendations').HomePluginRecommendationsSnapshot;
     /** 首帧同步拉取已装清单(规则 7:意识面板与内置面板同帧注册,无跳变)。 */
     listSync: () => { ghosts: import('../shared/ghost').InstalledGhost[] };
@@ -1438,6 +1444,7 @@ interface ElectronAPI {
     onCardUpdated: (
       callback: (payload: {
         callId: string;
+        sessionId?: string | null;
         ghostId: string;
         logicalGhostId?: string;
         toolUseId: string | null;
@@ -1471,6 +1478,8 @@ interface ElectronAPI {
       callId: string,
       actionId: string,
       prompt?: string,
+      formValues?: Record<string, string>,
+      formChange?: boolean,
     ) => Promise<{ ok: boolean }>;
     /** 订阅槽①:用户消息被意识钩子拦下(renderer 把乐观气泡原地降级为被拦态;
      *  没有既有气泡时用 text 补渲一条——排队消息被拦不无声蒸发)。 */
@@ -4038,6 +4047,8 @@ interface ElectronAPI {
     onChanged(cb: (event: { providerId: string }) => void): () => void;
   };
   deviceLink: {
+    confirmSkillMutation: (deviceId: string, operationId: string) => Promise<import('../shared/remoteSkills').RemoteSkillReceipt>;
+    pickPluginPackage: (deviceId: string) => Promise<{ attachment: string } | null>;
     taskMigration: (deviceId: string | null, request: import('@cindy/device-link').TaskMigrationRequest) => Promise<import('@cindy/device-link').TaskMigrationView>;
     getState: () => Promise<{
       remoteControlEnabled: boolean;
@@ -4849,6 +4860,10 @@ interface ElectronAPI {
       setPinnedCardSummaries: (enabled: boolean) => Promise<void>;
       /** interrupted-turn-resume:「疑似中断」(startedAt > endedAt)的 active 会话 id。 */
       interruptedPending: () => Promise<string[]>;
+      /** 启动「继续上次中断的任务」弹窗:中断会话 + 中断时间 + 中断前正在做的事。 */
+      interruptedResumeCandidates: () => Promise<
+        { sessionId: string; interruptedAt: number; activity: string | null }[]
+      >;
       /** 红点派生的周期性重算源:尾部停在未 dismissed 错误行的 active 会话 id。 */
       errorTailPending: () => Promise<string[]>;
       /** 批量处置未处理告警(「全部标为已读」)。failed = 未处置成功的会话 id。 */
@@ -6279,6 +6294,7 @@ interface ElectronAPI {
         sessionId: string,
         opts?: { expectedClearBoundaryMs?: number | null },
       ) => Promise<import('../shared/agentInputQueue').AgentInputProjection>;
+      retryImageDelivery: (sessionId: string, imageId: string) => Promise<void>;
       retryLastError: (
         sessionId: string,
         opts?: { expectedClearBoundaryMs?: number | null },

@@ -3318,6 +3318,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     deps.resolvePiGlobalContextHome = vi.fn(() => { throw new Error('Bot must not read user context'); });
     deps.getGhostRosterPrompt = vi.fn(() => 'BOT ROSTER');
     deps.runtimeConfig.memoryEnabled = false;
+    deps.runtimeConfig.answerDeliveryPrompt = 'DELIVERY PROTOCOL';
     const handle = await new PiAgent(deps).startSession({
       sessionId: 'bot-read-only-session',
       workingDir: cwd,
@@ -3351,8 +3352,12 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       // 不从 cwd 链加载项目/全局 AGENTS.md。
       expect(captured.args).toContain('--no-context-files');
       expect(deps.resolvePiGlobalContextHome).not.toHaveBeenCalled();
+      // 本 PR 把追加提示词写进 configHome 文件而非 spawn argv（argv 有上限，
+      // 顶穿会让 pi 启动失败），所以按 readAppendedSystemPrompt() 读文件断言，
+      // 不能沿用 argv 下标口径 —— 那正是本 PR 移除的写法。
       const botPrompt = readAppendedSystemPrompt();
       expect(botPrompt).toContain('BOT SOUL');
+      expect(botPrompt).toContain('DELIVERY PROTOCOL');
       expect(botPrompt).not.toContain('BOT ROSTER');
       expect(botPrompt).not.toContain('You are Cindy.');
       expect(botPrompt).not.toContain('GLOBAL USER PROMPT');

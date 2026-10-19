@@ -18,6 +18,7 @@ vi.setConfig({ testTimeout: 30_000 });
 
 import { CINDY_BRIDGE_EXTENSION_SOURCE } from "../cindy-bridge-source.js";
 import { CINDY_SUBAGENT_EXTENSION_SOURCE } from "../cindy-subagent-source.js";
+import { piCacheRouteKey } from '../cache-compatibility.js';
 
 const captured = vi.hoisted(() => ({
   args: [] as string[],
@@ -1260,7 +1261,7 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it("merges a learned native compat override into models.json", async () => {
+  it.each([false, true])("scopes learned compatibility to the real upstream behind a proxy: %s", async (proxied) => {
     const agent = new PiAgent({
       auth: {
         getState: async () => ({
@@ -1287,9 +1288,9 @@ describe("Pi provider-aware model routing", () => {
         ],
       },
       resolvePiAgentHome: () => agentHome,
-      resolvePiNativeCompatOverride: (providerId, modelId) =>
-        (modelId === "glm-5.3-flash" || modelId === "glm-5.3") &&
-        (providerId === "opencode-go" || providerId === "cindy-byom-opencode-go")
+      resolvePiNativeCompatOverride: (providerId, modelId, routeKey) =>
+        (modelId === "glm-5.3-flash" || modelId === "glm-5.3-wire") &&
+        providerId === "opencode-go" && routeKey === piCacheRouteKey('https://opencode.ai/zen/go/v1', 'openai-completions')
           ? { supportsLongCacheRetention: false }
           : undefined,
       resolvePiNativeProviders: async () => ({
@@ -1298,7 +1299,8 @@ describe("Pi provider-aware model routing", () => {
             id: "opencode-go",
             sourceProviderId: "opencode-go",
             name: "OpenCode Go",
-            baseUrl: "https://opencode.ai/zen/go/v1",
+            baseUrl: proxied ? 'http://127.0.0.1:19988/v1' : "https://opencode.ai/zen/go/v1",
+            ...(proxied ? { cacheIdentityBaseUrl: 'https://opencode.ai/zen/go/v1' } : {}),
             api: "openai-completions",
             models: [
               {
@@ -1314,7 +1316,7 @@ describe("Pi provider-aware model routing", () => {
                 },
               },
               {
-                // wireId 与目录 id 分叉：学习记录按目录 id 写，序列化按 wireId 写。
+                // Public model ID differs from wire ID; only the wire identity is learned.
                 id: "glm-5.3",
                 wireId: "glm-5.3-wire",
                 api: "openai-completions",
@@ -1367,7 +1369,7 @@ describe("Pi provider-aware model routing", () => {
           supportsLongCacheRetention: false,
         }),
       }),
-      // wireId 分叉时用目录 id 命中学到的覆盖。
+      // The learned wire model is distinct from the public model alias.
       expect.objectContaining({
         id: "glm-5.3-wire",
         compat: { supportsLongCacheRetention: false },
@@ -1380,6 +1382,8 @@ describe("Pi provider-aware model routing", () => {
         compat: { supportsLongCacheRetention: false },
       }),
     ]);
+    const rules = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'pi-cache-compatibility.json'), 'utf8'));
+    expect(rules).toContainEqual({ provider: 'opencode-go', id: 'glm-5.3-wire', baseUrl: proxied ? 'http://127.0.0.1:19988/v1' : 'https://opencode.ai/zen/go/v1' });
     await handle.close();
   });
 
@@ -3355,7 +3359,13 @@ describe("Pi provider-aware model routing", () => {
           logout: async () => {},
           getAuthEnv: async () => ({ CINDY_PI_API_KEY: "gateway-key" }),
         },
-        runtimeConfig: { endpoint: "http://127.0.0.1:9988/" },
+        runtimeConfig: {
+          endpoint: "http://127.0.0.1:9988/",
+          get remoteEndpoint() {
+            if (api !== 'openai-completions') throw new Error('Unrelated protocol must not read cache identity');
+            return 'https://gateway.example.test/v1';
+          },
+        },
         binaryPath: path.join(agentHome, "pi"),
         logger: noopLogger,
         capabilityAdditions: {
@@ -3451,7 +3461,7 @@ describe("Pi provider-aware model routing", () => {
         logout: async () => {},
         getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
       },
-      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/', remoteEndpoint: 'https://gateway.test/v1' },
       binaryPath: path.join(agentHome, 'pi'),
       logger: noopLogger,
       capabilityAdditions: {
@@ -3511,7 +3521,7 @@ describe("Pi provider-aware model routing", () => {
         logout: async () => {},
         getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
       },
-      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/', remoteEndpoint: 'https://gateway.test/v1' },
       binaryPath: path.join(agentHome, 'pi'),
       logger: noopLogger,
       capabilityAdditions: {
@@ -3563,7 +3573,7 @@ describe("Pi provider-aware model routing", () => {
         logout: async () => {},
         getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
       },
-      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/', remoteEndpoint: 'https://gateway.test/v1' },
       binaryPath: path.join(agentHome, 'pi'),
       logger: noopLogger,
       capabilityAdditions: {
@@ -3580,8 +3590,8 @@ describe("Pi provider-aware model routing", () => {
         api: 'openai-completions',
         compat: { supportsStore: false },
       }),
-      resolvePiNativeCompatOverride: (providerId, modelId) =>
-        providerId === 'xd' && modelId === 'z-ai/glm-5.3-flash'
+      resolvePiNativeCompatOverride: (providerId, modelId, routeKey) =>
+        providerId === 'xd' && modelId === 'z-ai/glm-5.3-flash' && routeKey === piCacheRouteKey('https://gateway.test/v1', 'openai-completions')
           ? { supportsLongCacheRetention: false }
           : undefined,
     };
@@ -5585,11 +5595,13 @@ describe("Pi provider-aware model routing", () => {
 
   it('restores exact private catalog bytes when the adapter rejects before mutation', async () => {
     let name = 'Before';
+    let learned = false;
     const deps = byomDeps(async () => ({ providers: [{
       id: 'native-a', name: 'Native A', adapterProvider: 'openai',
       baseUrl: 'http://a.test', api: 'openai-completions',
       models: [{ id: 'local-model', name, contextWindow: 200_000 }],
     }], env: {} }));
+    deps.resolvePiNativeCompatOverride = () => learned ? { supportsLongCacheRetention: false } : undefined;
     const handle = await new PiAgent(deps).startSession({
       sessionId: 'invalid-refresh-rollback', workingDir: cwd,
       model: 'local-model', providerId: 'native-a',
@@ -5599,13 +5611,17 @@ describe("Pi provider-aware model routing", () => {
     const settingsPath = path.join(configHome, 'settings.json');
     const beforeModels = readFileSync(modelsPath, 'utf8');
     const beforeSettings = readFileSync(settingsPath, 'utf8');
+    const rulesPath = path.join(configHome, 'pi-cache-compatibility.json');
+    const beforeRules = readFileSync(rulesPath, 'utf8');
     name = 'After';
+    learned = true;
     captured.refreshAckMode = 'invalid';
     captured.requests.length = 0;
     await expect(handle.setModel!('local-model', { providerId: 'native-a' }))
       .rejects.toThrow(/rejected the native provider refresh payload/);
     expect(readFileSync(modelsPath, 'utf8')).toBe(beforeModels);
     expect(readFileSync(settingsPath, 'utf8')).toBe(beforeSettings);
+    expect(readFileSync(rulesPath, 'utf8')).toBe(beforeRules);
     expect(captured.requests.some((request) => request.type === 'set_model')).toBe(false);
     expect(captured.closes).toBe(0);
     await handle.close();

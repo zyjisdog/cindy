@@ -150,3 +150,5 @@ export {
   isClaudeProjectKeyExact,
   findClaudeSessionJsonl,
 } from './claude-code/claude-projects-fs.js';
+
+export type { PiCacheCompatibility } from './pi/cache-compatibility.js';

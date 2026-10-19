@@ -30,7 +30,7 @@ describe('unsupported request option error', () => {
   });
 
   // issue #5878（2026-10-12）：政企/内网自定义 OpenAI 兼容网关只点名 prompt_cache_key。
-  // Pi 1.0.2 实测：关掉 supportsLongCacheRetention 后 key 与 retention 一起消失。
+  // Pi 1.0.2 的特殊 URL 还需要精确路由 hook；真实 native integration 覆盖该差异。
   const CUSTOM_GATEWAY_KEY_REJECTION =
     '400: {"message":"Validation: Unsupported parameter(s): `prompt_cache_key`",'
     + '"type":"invalid_request_error"}';
@@ -80,4 +80,16 @@ describe('unsupported request option error', () => {
     expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(false);
     expect(unsupportedRequestOptionCompatOverride(message)).toBeUndefined();
   });
+});
+
+it.each([
+  '401: Unsupported parameter(s): prompt_cache_key',
+  '429: prompt_cache_key is not supported',
+  '400: {"error":{"param":"temperature","message":"Unsupported parameter(s): prompt_cache_key"}}',
+  '400: {"type":"authentication_error","message":"Unsupported parameter(s): prompt_cache_key"}',
+  'temperature is unsupported; prompt_cache_key was forwarded',
+  'Unsupported parameter(s): temperature; prompt_cache_key was forwarded',
+  '400: {broken: Unsupported parameter(s): prompt_cache_key',
+])('does not infer cache support from unrelated or ambiguous failure: %s', (message) => {
+  expect(isUnsupportedRequestOptionErrorMessage(message)).toBe(false);
 });

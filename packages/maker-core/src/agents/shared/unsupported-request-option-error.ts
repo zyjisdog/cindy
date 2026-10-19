@@ -19,27 +19,40 @@ export const UNSUPPORTED_REQUEST_OPTION_REASON = 'unsupported-request-option';
 /**
  * `PI_CACHE_RETENTION=long` 下 Pi 会一起发给 openai-completions 端点的两个字段：
  * 档位本身（prompt_cache_retention）与随之派生的路由键（prompt_cache_key）。
- * Pi 1.0.2 实测：compat 关掉 supportsLongCacheRetention 后二者一起消失
- * （见 packages/maker-core/src/agents/pi/__tests__/pi-provider-routing.test.ts
- *  与 issue #5878 的运行记录），所以同一个修正即可覆盖两种拒收文案。
+ * Pi 1.0.2 普通 URL 下 compat 会移除二者；包含 api.openai.com 的 URL 仍可发送 key。
+ * Host 同时为精确命中的路由生成请求 hook 规则；真实 RPC/HTTP 回归覆盖两种 URL。
  */
 const CACHE_FIELDS = ['prompt_cache_retention', 'prompt_cache_key'] as const;
 // `\b` 边界防止误匹配 prompt_cache_keyword / prompt_cache_retention_policy 之类的长字段。
 const CACHE_FIELD_RE = /\bprompt_cache_(?:retention|key)\b/i;
-const NOT_SUPPORTED_RE = /not\s+supported|unsupported|isn't\s+supported|does\s+not\s+support/i;
-const STRUCTURED_PARAM_RE = /"param"\s*:\s*"([^"]*)"/i;
+// A relationship in the same short clause, not two keywords anywhere in the error.
+const REJECTED_FIELD_RE = /(?:unsupported\s+(?:request\s+)?parameters?(?:\(s\))?\s*:\s*[\x60"'\\\s]*(prompt_cache_(?:retention|key))\b|\b(prompt_cache_(?:retention|key))\b[\x60"'\\\s]*(?:is\s+(?:not\s+supported|unsupported)|isn't\s+supported))/i;
 
 export function isUnsupportedRequestOptionErrorMessage(message: string): boolean {
-  if (typeof message !== 'string' || message.length === 0) return false;
-  if (!CACHE_FIELD_RE.test(message)) return false;
-  const param = STRUCTURED_PARAM_RE.exec(message)?.[1];
-  if (param !== undefined && !CACHE_FIELDS.some((field) => field === param.toLowerCase())) return false;
-  return NOT_SUPPORTED_RE.test(message);
+  if (typeof message !== 'string' || message.length === 0 || message.length > 64 * 1024) return false;
+  const status = /^\s*(\d{3})\s*:/.exec(message);
+  if (status && status[1] !== '400') return false;
+  let text = message;
+  const jsonStart = message.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      let value: unknown = JSON.parse(message.slice(jsonStart));
+      for (let depth = 0; depth < 3; depth++) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+        const error = value as Record<string, unknown>;
+        if (Object.hasOwn(error, 'param') && !CACHE_FIELDS.some((field) => field === error.param)) return false;
+        if (error.type !== undefined && !['invalid_request_error', 'unsupported_parameter'].includes(String(error.type))) return false;
+        if (typeof error.message === 'string') { text = error.message; break; }
+        value = error.error;
+      }
+    } catch { return false; }
+  }
+  return CACHE_FIELD_RE.test(text) && REJECTED_FIELD_RE.test(text);
 }
 
 /**
  * 该错误在 PI models.json compat 上的修正。目前只有一种形态：上游不接受缓存扩展字段，
- * 关闭长缓存档位即可（隐式缓存与 prompt_cache_key 一并不再发送，见上方实测）。
+ * 关闭长缓存档位，并由精确路由的请求 hook 补齐残留字段处理。
  * undefined = 没有已知修正，调用方不得自愈。
  */
 export function unsupportedRequestOptionCompatOverride(

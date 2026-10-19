@@ -2427,6 +2427,22 @@ describe('pi translator live token speed', () => {
   });
 });
 
+it.each(['none', 'thinking', 'tool'])('reports a route receipt and blocks recovery after %s output', (kind) => {
+  const ctx = createPiTranslateContext(noopLogger);
+  const { queue, events } = makeQueue();
+  const receipt = { providerId: 'connection-a', modelId: 'public', wireModelId: 'wire', routeKey: 'a'.repeat(64), applied: false };
+  ctx.getCacheCompatibility = () => receipt;
+  translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+  if (kind === 'thinking') translatePiEvent(ev({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'working' } }), queue, ctx);
+  if (kind === 'tool') translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 'one', toolName: 'bash', args: { command: 'true' } }), queue, ctx);
+  translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '400: {"message":"Unsupported parameter(s): prompt_cache_key"}' } }), queue, ctx);
+  translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+  expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+    reason: 'unsupported-request-option', piCacheCompatibility: receipt, piCacheRecoverySafe: kind === 'none',
+  });
+  disposePiTranslateContext(ctx);
+});
+
 // Regression: [image] retained text but lost the actual media. Unit, native RPC entry.
 it('retains tool image bytes and a video resource alongside text', () => {
   const ctx = createPiTranslateContext(noopLogger);

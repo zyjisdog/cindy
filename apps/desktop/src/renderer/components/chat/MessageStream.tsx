@@ -1,4 +1,5 @@
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
+import { readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
 import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
@@ -38,6 +39,8 @@ import {
 } from 'react';
 import {
   HistoryViewHandoff,
+  type HistoryViewController,
+  type HistoryViewSnapshot,
   renderHistoryView,
   historyPrefetchThreshold,
   historyViewLeaves,
@@ -138,7 +141,12 @@ import {
   isShareableToolMedia,
   useShareSelectionActive,
 } from './shareSelectionStore';
-import { parsePluginInstanceId, pluginStoragePart } from '../../../shared/pluginIdentity';
+import {
+  parsePluginInstanceId,
+  pluginInstallStoragePart,
+  pluginNewInstallRelId,
+  pluginStoragePart,
+} from '../../../shared/pluginIdentity';
 import { isValidGhostId } from '../../../shared/ghost';
 import { isValidPluginNamespace } from '@cindy/plugin-protocol';
 
@@ -801,7 +809,7 @@ export function collectGhostCallsByUserTurn(
       typeof (m.toolInput as Record<string, unknown>).ghost_id === 'string'
     ) {
       const input = m.toolInput as Record<string, unknown>;
-      const gid = ghostCardInstanceId(input.ghost_id as string, input.namespace);
+      const gid = ghostSummonInstanceId(input.ghost_id as string, input.namespace);
       if (!gid) continue;
       const set = out.get(currentUserClientId) ?? new Set<string>();
       set.add(gid);
@@ -1494,11 +1502,27 @@ function ghostCardInstanceId(ghostId: string, namespace: unknown): string | null
     : null;
 }
 
+/** Summon labels retain explicit root identity; card/media anchoring keeps its existing keys. */
+function ghostSummonInstanceId(ghostId: string, namespace: unknown): string | null {
+  const id = ghostCardInstanceId(ghostId, namespace);
+  if (!id) return null;
+  const explicitRoot =
+    namespace === null ||
+    (namespace === undefined &&
+      !isValidGhostId(ghostId) &&
+      parsePluginInstanceId(ghostId)?.namespace === null);
+  return explicitRoot
+    ? pluginInstallStoragePart(pluginNewInstallRelId({ namespace: null, ghostId: id }))
+    : id;
+}
+
 export function buildRenderItems(
   allMessages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
   ghostCards?: GhostCardSnapshot,
   opts?: {
+    /** Live cards must belong to this task; explicit result IDs support history/forks. */
+    sessionId?: string;
     /**
      * 还有更老的历史页没加载(= `messages` 只是窗口、不是全量)。为真时,凡靠
      * 「父调用在不在 messages 里」做的归属判定都不可信,必须放宽而不是丢弃。
@@ -1775,6 +1799,18 @@ export function buildRenderItems(
   let pendingSegmentGhostCards: Extract<RenderItem, { type: 'ghost_card' }>[] = [];
   // 本次 build 内已被认领的活卡(claude 精确锚 / codex 启发式各认领一次)。
   const claimedLiveCallIds = new Set<string>();
+  const sessionLiveCards = opts?.sessionId
+    ? ghostCards?.liveCards.filter(lc => lc.sessionId === opts.sessionId) ?? []
+    : [];
+  // Mail is a finished document, not plugin progress. Without an exact tool ID,
+  // wait for its result rather than attach it to a schema/read call by guesswork.
+  const guessableLiveCards = sessionLiveCards.filter(lc => {
+    const entry = ghostCards?.byCallId.get(lc.callId);
+    return !(entry?.status === 'ready' && readMailCard(entry.html));
+  });
+  // Old partial history may omit a tool result. It cannot claim a new card just
+  // because the same plugin was used there. Exact IDs still work across turns.
+  const latestTurnStart = messages.findLastIndex(isRenderTurnBoundary);
   // 媒体回锚:本次 build 已上屏的 ghost_card item 按 callId 索引。后续调用的
   // tool_result 带 xdt_anchor_card_id 时按此把媒体挂回对应卡下方(item 是引用,
   // flush 进 items 后追加 media 仍然生效)。
@@ -2095,6 +2131,7 @@ export function buildRenderItems(
           suppressMediaForCard = true;
           hideRowForCard = true;
           if (entry?.status === 'ready') {
+            if (readMailCard(entry.html)?.supersededBy) return;
             const cardItem: Extract<RenderItem, { type: 'ghost_card' }> = {
               type: 'ghost_card',
               key: `ghostcard-${msg.clientId}`,
@@ -2115,7 +2152,7 @@ export function buildRenderItems(
         }
         // in-flight:只认已 ready 的活卡(推送带 html 全量到,ready 是常态)。
         const live =
-          ghostCards.liveCards.find(
+          sessionLiveCards.find(
             (lc) =>
               !claimedLiveCallIds.has(lc.callId) &&
               !settledCardIds.has(lc.callId) &&
@@ -2123,8 +2160,8 @@ export function buildRenderItems(
               typeof msg.toolUseId === 'string' &&
               lc.toolUseId === msg.toolUseId,
           ) ??
-          (candidateGhostId
-            ? ghostCards.liveCards.find(
+          (candidateGhostId && i >= latestTurnStart
+            ? guessableLiveCards.find(
                 (lc) =>
                   !claimedLiveCallIds.has(lc.callId) &&
                   !settledCardIds.has(lc.callId) &&
@@ -2135,9 +2172,11 @@ export function buildRenderItems(
               )
             : undefined);
         if (!live) return;
-        if (ghostCards.byCallId.get(live.callId)?.status !== 'ready') return;
+        const liveEntry = ghostCards.byCallId.get(live.callId);
+        if (liveEntry?.status !== 'ready') return;
         claimedLiveCallIds.add(live.callId);
         hideRowForCard = true;
+        if (readMailCard(liveEntry.html)?.supersededBy) { suppressMediaForCard = true; return; }
         const liveCardItem: Extract<RenderItem, { type: 'ghost_card' }> = {
           type: 'ghost_card',
           key: `ghostcard-${msg.clientId}`,
@@ -2410,6 +2449,7 @@ export function buildCachedRenderItems(
     taskUpdates,
     ghostCards,
     ghostCards?.version,
+    opts?.sessionId,
     opts?.historyWindowIncomplete,
     opts?.turnChangeSets,
     opts?.workingDir,
@@ -2443,6 +2483,93 @@ export function buildCachedRenderItems(
     }
   }
   return projection;
+}
+
+/** Build the displayed remote history without evaluating the raw transcript fallback. */
+export function buildMessageStreamRenderProjection({
+  historyView, historySnapshot, historyLiveMessages, isSessionStreaming, handoff,
+  taskUpdates, ghostCardSnapshot, renderOptions, generatedFilesItemCache, buildRaw,
+}: {
+  historyView: HistoryViewController<HistoryChatMessage> | null | undefined;
+  historySnapshot: HistoryViewSnapshot<HistoryChatMessage> | null;
+  historyLiveMessages: readonly HistoryChatMessage[];
+  isSessionStreaming: boolean;
+  handoff?: ReturnType<HistoryViewHandoff<HistoryChatMessage>['reconcile']> | null;
+  taskUpdates?: Parameters<typeof buildRenderItems>[1];
+  ghostCardSnapshot?: Parameters<typeof buildRenderItems>[2];
+  renderOptions?: Parameters<typeof buildRenderItems>[3];
+  generatedFilesItemCache: Map<string, GeneratedFilesRenderItemRef>;
+  buildRaw: () => RenderProjection;
+}): RenderProjection {
+  if (historyView && historySnapshot?.ready) {
+    // Build only the displayed projection; the raw fallback is lazy below.
+    const results = new Map<string, string>();
+    const items = renderHistoryView<HistoryChatMessage, RenderItem>({
+      view: historyView,
+      snapshot: historySnapshot,
+      liveMessages: historyLiveMessages,
+      streaming: isSessionStreaming,
+      isLive: (row) => row.isStreaming === true,
+      pendingHandoff: handoff?.pending,
+      staleTail: handoff?.tail,
+      isLocalMessage: (row) => row.isLocalSystemCard === true,
+      isLocalUser: (row) =>
+        row.role === 'user' &&
+        (row.isPendingPersist === true ||
+          !!row.blockedByGhost ||
+          !!row.localSendPrecedingClientIds),
+      build: (rows, _streaming, historyArtifacts) => {
+        // History chunks are freshly assembled arrays, not reusable source snapshots.
+        const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
+          ...renderOptions,
+          historyWindowIncomplete: true,
+          historyArtifacts,
+        });
+        for (const [key, value] of chunk.singleResultMap) results.set(key, value);
+        return groupWorkRuns(chunk.items, isSessionStreaming);
+      },
+      structure: {
+        placeholder: (summary) => ({
+          id: summary.firstMessageId,
+          clientId: summary.anchorClientId ?? summary.key.slice('work-'.length),
+          role: 'thinking',
+          content: '',
+          createdAt: new Date(summary.startedAtMs).toISOString(),
+          thinkingDurationMs: Math.max(0, summary.endedAtMs - summary.startedAtMs),
+          thinkingRedacted: true,
+          isStreaming: summary.isStreaming,
+        }),
+        children: (item) => (item.type === 'work_group' ? item.children : undefined),
+        sourceIds: (item) =>
+          item.type === 'message'
+            ? [item.message.clientId]
+            : item.type === 'tool_segment'
+              ? item.toolCalls.map((tool) => tool.clientId)
+              : item.type === 'agent_task' && item.toolCall
+                ? [item.toolCall.clientId]
+                : [],
+        rebuild: (item, children, deferred) =>
+          item.type === 'work_group'
+            ? { ...item, children: children as WorkGroupChildItem[], deferred }
+            : item,
+      },
+    });
+    const keys = new Set<string>();
+    const unique = items.filter((item) => {
+      if (keys.has(item.key)) return false;
+      keys.add(item.key);
+      return true;
+    });
+    return {
+      items: reuseGeneratedFilesRenderItems(unique, generatedFilesItemCache),
+      singleResultMap: results,
+    };
+  }
+  const built = buildRaw();
+  return {
+    items: reuseGeneratedFilesRenderItems(built.items, generatedFilesItemCache),
+    singleResultMap: built.singleResultMap,
+  };
 }
 
 type GeneratedFilesRenderItemRef = Extract<RenderItem, { type: 'generated_files' }>;
@@ -3088,8 +3215,17 @@ export function MessageStream({
   // MessageStream scope so history pagination and live deltas can share the
   // parsed image targets without retaining state beyond the session mount.
   const markdownImageTargetCacheRef = useRef<MarkdownImageTargetCache>(new Map());
-  const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => {
-    const built = streamProjection(
+  const { items: ungroupedRenderItems, singleResultMap } = useMemo(() => buildMessageStreamRenderProjection({
+    historyView, historySnapshot, historyLiveMessages, isSessionStreaming, handoff,
+    taskUpdates, ghostCardSnapshot,
+    generatedFilesItemCache: generatedFilesItemCacheRef.current,
+    renderOptions: {
+      sessionId, turnChangeSets, workingDir,
+      botSessionId: simplifiedBotConversation ? sessionId : undefined,
+      markdownImageTargetCache: markdownImageTargetCacheRef.current,
+      cindyMakeSessionId, cindyMakeCompletionInComposer, subagentRunStatuses,
+    },
+    buildRaw: () => streamProjection(
       displayMessages,
       [
         getDataOwnerGeneration(),
@@ -3110,6 +3246,7 @@ export function MessageStream({
       ],
       () =>
         buildCachedRenderItems(displayMessages, taskUpdates, ghostCardSnapshot, {
+          sessionId,
           historyWindowIncomplete:
             !historyLoaded || Boolean(hasMoreMessages) || historyWindowHasIsland,
           turnChangeSets,
@@ -3121,81 +3258,8 @@ export function MessageStream({
           subagentRunStatuses,
         }),
       !simplifiedBotConversation && !historyView,
-    );
-    if (historyView && historySnapshot?.ready) {
-      const results = new Map(built.singleResultMap);
-      const items = renderHistoryView<HistoryChatMessage, RenderItem>({
-        view: historyView,
-        snapshot: historySnapshot,
-        liveMessages: historyLiveMessages,
-        streaming: isSessionStreaming,
-        isLive: (row) => row.isStreaming === true,
-        pendingHandoff: handoff?.pending,
-        staleTail: handoff?.tail,
-        isLocalMessage: (row) => row.isLocalSystemCard === true,
-        isLocalUser: (row) =>
-          row.role === 'user' &&
-          (row.isPendingPersist === true ||
-            !!row.blockedByGhost ||
-            !!row.localSendPrecedingClientIds),
-        build: (rows, _streaming, historyArtifacts) => {
-          // History chunks are freshly assembled arrays, not reusable source snapshots.
-          const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
-            historyWindowIncomplete: true,
-            historyArtifacts,
-            turnChangeSets,
-            workingDir,
-            botSessionId: simplifiedBotConversation ? sessionId : undefined,
-            markdownImageTargetCache: markdownImageTargetCacheRef.current,
-            cindyMakeSessionId,
-            cindyMakeCompletionInComposer,
-            subagentRunStatuses,
-          });
-          for (const [key, value] of chunk.singleResultMap) results.set(key, value);
-          return groupWorkRuns(chunk.items, isSessionStreaming);
-        },
-        structure: {
-          placeholder: (summary) => ({
-            id: summary.firstMessageId,
-            clientId: summary.anchorClientId ?? summary.key.slice('work-'.length),
-            role: 'thinking',
-            content: '',
-            createdAt: new Date(summary.startedAtMs).toISOString(),
-            thinkingDurationMs: Math.max(0, summary.endedAtMs - summary.startedAtMs),
-            thinkingRedacted: true,
-            isStreaming: summary.isStreaming,
-          }),
-          children: (item) => (item.type === 'work_group' ? item.children : undefined),
-          sourceIds: (item) =>
-            item.type === 'message'
-              ? [item.message.clientId]
-              : item.type === 'tool_segment'
-                ? item.toolCalls.map((tool) => tool.clientId)
-                : item.type === 'agent_task' && item.toolCall
-                  ? [item.toolCall.clientId]
-                  : [],
-          rebuild: (item, children, deferred) =>
-            item.type === 'work_group'
-              ? { ...item, children: children as WorkGroupChildItem[], deferred }
-              : item,
-        },
-      });
-      const keys = new Set<string>();
-      const unique = items.filter((item) => {
-        if (keys.has(item.key)) return false;
-        keys.add(item.key);
-        return true;
-      });
-      return {
-        items: reuseGeneratedFilesRenderItems(unique, generatedFilesItemCacheRef.current),
-        singleResultMap: results,
-      };
-    }
-    return {
-      items: reuseGeneratedFilesRenderItems(built.items, generatedFilesItemCacheRef.current),
-      singleResultMap: built.singleResultMap,
-    };
-  }, [
+    ),
+  }), [
     displayMessages,
     cindyMakeSessionId,
     cindyMakeCompletionInComposer,
@@ -6499,6 +6563,7 @@ export function MessageStream({
                       // 下一次 store 变更自愈。
                       const entry = ghostCardSnapshot.byCallId.get(item.callId);
                       if (!entry || entry.status !== 'ready') return null;
+                      if (readMailCard(entry.html)?.supersededBy) return null;
                       // 常态包一层 div(结构稳定,回锚媒体到达时卡片 iframe 不重挂);
                       // 回锚媒体(如 mivo 视频)挂卡正下方,与 tool_media 同款间距。
                       return (
@@ -6599,6 +6664,7 @@ export function MessageStream({
                         localFileRefs={localFileRefs}
                         assistantAvatar={assistantAvatar}
                         simplifiedBotConversation={simplifiedBotConversation}
+                        starterOptionsLocked={Boolean(lastUserMessageClientId)}
                         sessionSource={sessionSource}
                       />
                     );
@@ -6786,6 +6852,7 @@ const MessageItem = memo(function MessageItem({
   localFileRefs,
   assistantAvatar,
   simplifiedBotConversation,
+  starterOptionsLocked,
   sessionSource,
 }: {
   message: ChatMessage;
@@ -6838,6 +6905,8 @@ const MessageItem = memo(function MessageItem({
   assistantAvatar?: ReactNode;
   /** 伙伴对话消息操作栏使用轻量常显变体。 */
   simplifiedBotConversation?: boolean;
+  /** True once the user has written anything in this task, which retires the opening's starter buttons. */
+  starterOptionsLocked?: boolean;
   sessionSource?: string | null;
 }) {
   // silent-stop 自动续跑行(isSyntheticTrigger + systemCardType):渲染成
@@ -6963,6 +7032,8 @@ const MessageItem = memo(function MessageItem({
             ghostReplyPending={message.ghostReplyPending}
             simplifiedBotConversation={simplifiedBotConversation}
             botLearning={message.botLearning}
+            botStarterOptions={message.botStarterOptions}
+            starterOptionsLocked={starterOptionsLocked}
             botTaskResults={message.turnCompleted === true ? message.botTaskResults : undefined}
           />
         </>,

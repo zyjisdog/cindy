@@ -9,6 +9,7 @@ import {
   CODEX_HISTORY_OVERSIZED_REASON,
   CONTEXT_OVERFLOW_REASON,
   PI_REQUEST_BODY_RECOVERY_EXHAUSTED,
+  type PiCacheCompatibility,
   isContextOverflowErrorMessage,
   isDeterministicHostCompactFailure,
   isRemoteCompactEncryptedContentError,
@@ -106,7 +107,7 @@ function isCompanionCompactFailure(data: unknown): boolean {
 
 /**
  * 上游拒收「可选请求增强字段」的终态错误（PI 专属自愈对象）。
- * 只认结构化 reason，或「被点名字段 + not supported + 替代字段建议」的错误文案；
+ * 只认结构化 reason，或「被点名缓存字段 + 明确拒收关系」的错误文案；
  * 普通 400 / 鉴权失败不满足，不得拿来自愈。
  */
 export function isUnsupportedRequestOptionErrorData(data: unknown): boolean {
@@ -455,6 +456,8 @@ export interface ContextOverflowRolloverDeps {
     sessionId: string,
   ): Promise<{ reason?: string; sourceUserClientId?: string | null } | null>;
   getLiveSession(sessionId: string): {
+    readonly instanceId?: string;
+    getTurnGeneration?(): number;
     isTurnRunning(): boolean;
     listBackgroundTasks?(): ReadonlyArray<unknown>;
     getUsageSnapshot?(): { contextTokens: number; contextWindow: number; needsRollover?: boolean };
@@ -485,6 +488,7 @@ export interface ContextOverflowRolloverDeps {
     recovery?: { signal?: AbortSignal; continueFromHistory?: false } | {
       signal?: AbortSignal;
       continueFromHistory: true;
+      piCacheCompatibility?: PiCacheCompatibility;
       sourceUserContent: unknown;
       sourceUserClientId: string;
       sourceCapabilitySelectionText: string;
@@ -492,12 +496,13 @@ export interface ContextOverflowRolloverDeps {
   ): Promise<{ accepted: boolean }>;
   getRecoveryAbortSignal?(sessionId: string): AbortSignal;
   /**
-   * PI provider compat 自愈：读取已学到的 per-model compat 修正。
-   * 已存在 = 这台机器已经学过这个 provider/model 的拒收，不再自动重试（避免循环）。
+   * Read persisted learning for the exact connection/wire-model/route.
+   * A live runtime receipt separately confirms whether it actually loaded the fix.
    */
   readPiNativeCompatOverride?(
     providerId: string,
     modelId: string,
+    routeKey?: string,
   ): Record<string, unknown> | undefined;
   /** PI provider compat 自愈：把本次学习到的 compat 修正落盘，供重建的 models.json 合并。
    *  返回 true 仅当条目确实落盘；false 时调用方不得重放（否则闩锁永远是假、无限重试）。 */
@@ -505,6 +510,7 @@ export interface ContextOverflowRolloverDeps {
     providerId: string,
     modelId: string,
     compat: Record<string, unknown>,
+    routeKey?: string,
   ): Promise<boolean> | boolean;
   /** Synchronous: external dispatch may release its turn marker on this same terminal event. */
   hasExternalRecoveryOwner?(sessionId: string): boolean;
@@ -525,6 +531,8 @@ export function isCanonicalBotContext(row: { source?: string | null; botRole?: s
 export function canContinueContextRecovery(row: { source?: string | null; botRole?: string | null }): boolean {
   return row.source === 'desktop' || isCanonicalBotContext(row);
 }
+
+type RecoveryTurnIdentity = { instanceId?: string; generation?: number };
 
 export type ContextRebuildReason =
   | 'context-overflow'
@@ -615,7 +623,7 @@ export function shouldRebuildForModelWindowSwitch(input: {
 }
 
 export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps): {
-  claim(sessionId: string): OverflowClaimResult;
+  claim(sessionId: string, turnIdentity?: RecoveryTurnIdentity, recoverable?: boolean): OverflowClaimResult;
   cancelRecovery(sessionId: string): void;
   tryRecover(
     sessionId: string,
@@ -644,6 +652,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   ): Promise<ModelWindowSwitchPreparationResult>;
 } {
   const inFlight = new Map<string, AbortController | undefined>();
+  const claimTurns = new WeakMap<AbortController, RecoveryTurnIdentity>();
   // One automatic continuation per source input, not one per replacement thread.
   const continuedInputs = new Map<string, string>();
   // 自愈成功时那一轮的 turn 身份：同身份再次到达 = 同一轮的重复终态投递（丢弃）；
@@ -689,6 +698,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     errorData: unknown,
     signal?: AbortSignal,
     turnIdentity?: { instanceId?: string; generation?: number },
+    externalOwnerAtFailure = false,
   ): Promise<boolean> => {
     if (signal?.aborted) return true;
     const oversized = isOversizedHistoryErrorData(errorData);
@@ -702,7 +712,7 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
     if (sessionRow.remoteHostId) return false;
     // compat 自愈只服务本机桌面会话（与 replayUserMessage 的 continueFromHistory 一致）：
     // 外部派单方有自己的重试语义，canonical bot 的派单走 owner 路径，不在这里代播。
-    if (unsupportedOption && sessionRow.source !== 'desktop') return false;
+    if (unsupportedOption && (sessionRow.source !== 'desktop' || sessionRow.agentKind !== 'pi')) return false;
     if (oversized && (!canContinueContextRecovery(sessionRow) || sessionRow.agentKind !== 'codex')) return false;
 
     return deps.withCloseSuppressed(sessionId, async () => {
@@ -719,18 +729,22 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       // 不再带该字段），并重放同一轮用户消息。只做一次：已学过的 (provider, model)
       // 再失败就交给常规错误面，绝不循环重试。
       if (unsupportedOption) {
+        if (!live && turnIdentity?.instanceId) return false;
         const compat = unsupportedRequestOptionCompatOverride(
           unsupportedRequestOptionErrorText(errorData),
         );
-        const providerId = sessionRow.providerId ?? null;
-        const modelId = sessionRow.model ?? null;
+        const receipt = (errorData as { piCacheCompatibility?: PiCacheCompatibility }).piCacheCompatibility;
+        const providerId = receipt?.providerId;
+        const modelId = receipt?.wireModelId;
+        if (!receipt || !/^[a-f0-9]{64}$/.test(receipt.routeKey)
+          || receipt.providerId !== sessionRow.providerId || receipt.modelId !== sessionRow.model) return false;
         // providerId 为 null（老会话/远端控制端未持久化）时无法确定学习键，不自愈。
         if (!compat || !providerId || !modelId || !deps.recordPiNativeCompatOverride) {
           return false;
         }
         const source = await deps.listMessages(sessionId);
         signal?.throwIfAborted();
-        const plan = planContextOverflowRollover(source, null);
+        const plan = planContextOverflowRollover(source, continuedInputs.get(sessionId));
         // 同一轮重复终态 error：上一次自愈已经重放并续跑过，这次直接丢弃（不重放、
         // 不落错误行）。必须用「实例 + 轮次」身份区分：重放失败是新一轮（新 instanceId /
         // 新 generation），必须照常 surface，否则真实的重试失败会被静默吞掉。
@@ -748,53 +762,57 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         ) {
           return true;
         }
-        const learnedBefore = deps.readPiNativeCompatOverride?.(providerId, modelId) ?? false;
-        const rebuiltKey = `${sessionId}\u0000${providerId}\u0000${modelId}`;
+        // A late terminal event must not retire a new runtime or a later turn.
+        const sourceGeneration = live?.getTurnGeneration?.();
+        const sourceUnchanged = () => {
+          const currentLive = deps.getLiveSession(sessionId);
+          return currentLive?.instanceId === live?.instanceId
+            && currentLive?.getTurnGeneration?.() === sourceGeneration
+            && (!turnIdentity?.instanceId || !currentLive?.instanceId || turnIdentity.instanceId === currentLive.instanceId)
+            && (turnIdentity?.generation === undefined || !currentLive?.getTurnGeneration || turnIdentity.generation === currentLive.getTurnGeneration())
+            && !currentLive?.isTurnRunning()
+            && !(currentLive?.listBackgroundTasks?.().length);
+        };
+        if (!sourceUnchanged()) return false;
+        const learnedBefore = deps.readPiNativeCompatOverride?.(providerId, modelId, receipt.routeKey) ?? false;
+        const rebuiltKey = JSON.stringify([sessionId, providerId, modelId, receipt.routeKey]);
         // 磁盘上已学过（别的会话先学到、或用户在别处修好）时，还要区分「已学过」和
         // 「当前 runtime 已应用」：启动时 models.json 里没有该覆盖的旧 runtime 仍然会一直
         // 400，普通发送不会刷新模型配置，所以这里要允许它应用覆盖并重建一次。已经用覆盖
         // 重建过的 runtime 再收到同一类 400 说明覆盖没解决问题，直接交常规错误面，绝不
         // 反复 close/重放。判据按 pair 记：换过模型的会话不能被旧模型的记录挡住。
-        if (learnedBefore && rebuiltWithLearnedCompat.has(rebuiltKey)) {
+        if (receipt.applied || (learnedBefore && rebuiltWithLearnedCompat.has(rebuiltKey))) {
           return false;
         }
         // 外部派单方（Orca / scheduler / IM / ghost setup）拥有自己的重试语义：不能代它
         // 重放用户消息 —— 派单正文经 wire 投影可能退化为空，重复发送还可能让两方各跑一次。
         const externalOwner =
-          plan.action !== 'stop' &&
-          (plan.skipGenericReplay || (deps.hasExternalRecoveryOwner?.(sessionId) ?? false));
-        // 先关掉旧 runtime，再置学习闩锁：闩锁置了而 runtime 没换掉的话，后续同 pair 的
-        // 请求会命中闩锁直接放弃，永久停在旧 models.json 上反复 400。
+          externalOwnerAtFailure || (plan.action !== 'stop' &&
+            (plan.skipGenericReplay || (deps.hasExternalRecoveryOwner?.(sessionId) ?? false)));
+        // Saving is independent of replay: preserve valid learning even for owner-managed turns.
+        const learned = learnedBefore || await deps.recordPiNativeCompatOverride(providerId, modelId, compat, receipt.routeKey);
+        signal?.throwIfAborted();
+        if (!learned || !sourceUnchanged()) return false;
+        const current = await deps.getSessionRow(sessionId);
+        signal?.throwIfAborted();
+        if (!current || current.status !== 'active' || current.clearedAt !== sessionRow.clearedAt
+          || current.providerId !== receipt.providerId || current.model !== receipt.modelId) return false;
+        const currentMessages = await deps.listMessages(sessionId);
+        signal?.throwIfAborted();
+        const latestUser = [...currentMessages].reverse().find((message) => message.role === 'user' && !isSyntheticUser(message));
+        if (!sourceUnchanged() || latestUser?.clientId !== sourceUser?.clientId) return false;
+        // Retire the idle stale runtime so the next owner-managed send loads the fix.
         if (live) await deps.closeSession(sessionId);
         signal?.throwIfAborted();
-        const learned =
-          learnedBefore || (await deps.recordPiNativeCompatOverride(providerId, modelId, compat));
+        // The Pi receipt also covers output not yet flushed to the desktop database.
+        if (plan.action === 'stop' || externalOwner
+          || (errorData as { piCacheRecoverySafe?: boolean }).piCacheRecoverySafe !== true) {
+          return false;
+        }
+        // Consume before any async close/replay; an error cannot re-arm this input.
+        continuedInputs.set(sessionId, plan.sourceUserClientId);
+        rebuiltWithLearnedCompat.add(rebuiltKey);
         signal?.throwIfAborted();
-        if (learned) {
-          // 关掉之后，该会话下一次发送／重放就会用带覆盖的 models.json 重建 runtime。
-          rebuiltWithLearnedCompat.add(rebuiltKey);
-        }
-        if (!learned) {
-          // 没学到就不重放：否则闩锁永远为假，同一个 400 会被无上限重放。
-          deps.log.warn('pi provider compat was not persisted; leaving the error to surface', {
-            sessionId,
-            providerId,
-            modelId,
-          });
-          return false;
-        }
-        // 零产出守卫判定不能重放（无用户消息/已有副作用）或外部 owner：只学不重放，
-        // 让下一次发送用修好的 models.json 重建。
-        if (plan.action === 'stop' || externalOwner) {
-          deps.log.info('pi provider compat learned without replay', {
-            sessionId,
-            providerId,
-            modelId,
-            compat,
-            ...(plan.action === 'stop' ? { stopReason: plan.reason } : { externalOwner: true }),
-          });
-          return false;
-        }
         const sourceWire = persistedUserContentToWireMessage(
           plan.sourceUserAgentFacingWireContent ?? plan.sourceUserContent,
         );
@@ -802,12 +820,13 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         const replay = await deps.replayUserMessage(
           sessionId,
           plan.sourceUserContent,
-          plan.sourceUserAgentFacingWireContent,
+          replayWireWithSourceNotes(sourceWire, plan),
           {
             signal,
             // 保留同一 Pi 会话历史：失败轮的 error assistant 会被 pi-ai 序列化时
             // 跳过，模型看到的仍是同一条用户请求，重放即重试。
             continueFromHistory: true,
+            piCacheCompatibility: receipt,
             sourceUserContent: plan.sourceUserContent,
             sourceUserClientId: plan.sourceUserClientId,
             sourceCapabilitySelectionText:
@@ -1337,9 +1356,30 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
       }
     },
 
-    claim(sessionId: string): OverflowClaimResult {
-      if (inFlight.has(sessionId)) return 'in-flight';
-      inFlight.set(sessionId, new AbortController());
+    claim(sessionId: string, turnIdentity?: RecoveryTurnIdentity, recoverable = true): OverflowClaimResult {
+      if (inFlight.has(sessionId)) {
+        const controller = inFlight.get(sessionId);
+        const previous = controller && claimTurns.get(controller);
+        const changedTurn = previous && turnIdentity && (
+          (previous.instanceId !== undefined && turnIdentity.instanceId !== undefined
+            && previous.instanceId !== turnIdentity.instanceId)
+          || (previous.generation !== undefined && turnIdentity.generation !== undefined
+            && previous.generation !== turnIdentity.generation)
+        );
+        if (changedTurn) {
+          // The replay already ended. Preserve its error and prevent the older
+          // acceptance callback from clearing it; never start another recovery.
+          controller?.abort();
+          return 'idle';
+        }
+        // Non-recoverable errors keep their existing normal error path.
+        // They are observed here only to abort a known older recovery.
+        return recoverable ? 'in-flight' : 'idle';
+      }
+      if (!recoverable) return 'idle';
+      const controller = new AbortController();
+      if (turnIdentity) claimTurns.set(controller, turnIdentity);
+      inFlight.set(sessionId, controller);
       return 'claimed';
     },
 
@@ -1359,16 +1399,21 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
         // IM may not persist this input (protected content), and an attached IM
         // turn can outlive its binding. Check live ownership before any await.
         if (isOversizedHistoryErrorData(errorData) && deps.hasExternalRecoveryOwner?.(sessionId)) return false;
+        // Terminal subscribers may release a headless/IM marker immediately.
+        // Keep learning, but never take over that turn's replay after an await.
+        const externalOwnerAtFailure = isUnsupportedRequestOptionErrorData(errorData)
+          && (deps.hasExternalRecoveryOwner?.(sessionId) ?? false);
         const claim = inFlight.get(sessionId) ?? new AbortController();
         inFlight.set(sessionId, claim);
+        if (turnIdentity && !claimTurns.has(claim)) claimTurns.set(claim, turnIdentity);
         const inputSignal = deps.getRecoveryAbortSignal?.(sessionId);
         signal = inputSignal ? AbortSignal.any([claim.signal, inputSignal]) : claim.signal;
         if (deps.withSessionLock) {
           return await deps.withSessionLock(sessionId, () =>
-            runRecover(sessionId, errorData, signal, turnIdentity),
+            runRecover(sessionId, errorData, signal, turnIdentity, externalOwnerAtFailure),
           );
         }
-        return await runRecover(sessionId, errorData, signal, turnIdentity);
+        return await runRecover(sessionId, errorData, signal, turnIdentity, externalOwnerAtFailure);
       } catch (error) {
         if (signal?.aborted) return true;
         deps.log.warn('context overflow rollover failed', {
