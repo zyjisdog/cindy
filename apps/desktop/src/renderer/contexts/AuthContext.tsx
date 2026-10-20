@@ -42,7 +42,6 @@ import {
 import { sessionsStore } from '@/lib/sessionsStore';
 import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
-import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setModelEnginePrefsOwner } from '@/state/modelEnginePrefs';
 import { setModelFavoritesOwner } from '@/state/modelFavorites';
 import { setRecentModelsOwner } from '@/state/recentModels';
@@ -457,7 +456,7 @@ export function AuthProvider({
   useEffect(() => {
     if (!isAuthenticated || !accountDeletionRestored) return;
     setAccountDeletionRestored(false);
-    if (isSecondaryWindow() || isSidebarWindow() || isGhostPanelWindow()) return;
+    if (isSecondaryWindow() || isSidebarWindow()) return;
     let disposed = false;
     void authServiceRef
       .current!.consumeAccountDeletionRestoredNotice()

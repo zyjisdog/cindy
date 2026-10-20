@@ -32,6 +32,7 @@ import { DEFAULT_DRAFT_SESSION_TITLE, normalizeAutoTitle } from '@cindy/maker-sh
 import { getDbClient } from '../client/current';
 import * as currentDb from '../client/current';
 import type { DbClient } from '../client/DbClient';
+import type { SessionsSetTerminalStatusResult } from '../client/tx/types';
 import { sessions, messages } from '../schema';
 import { clearSessionAttention } from '../../appBadgeService';
 import {
@@ -380,9 +381,10 @@ async function setTerminalSessionStatus(
   dbClient: DbClient,
   sessionId: string,
   status: 'archived' | 'deleted',
-): Promise<void> {
+): Promise<SessionsSetTerminalStatusResult['deletedSideChats']> {
   try {
-    await dbClient.tx('sessions.setTerminalStatus', { sessionId, status });
+    const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status });
+    return result.deletedSideChats;
   } catch (error) {
     const code = (error as { code?: string }).code;
     const message = error instanceof Error ? error.message : String(error);
@@ -390,6 +392,47 @@ async function setTerminalSessionStatus(
       throwIpcError(code, message);
     }
     throw error;
+  }
+}
+
+/** Side chats belong to the parent view; deleting it must not strand invisible running tasks. */
+async function deleteDependentSideChats(
+  parentId: string,
+  dbClient: DbClient,
+  ownerScope: OwnerScope,
+  committed?: SessionsSetTerminalStatusResult['deletedSideChats'],
+): Promise<void> {
+  if (committed) {
+    for (const child of committed) {
+      if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) return;
+      // The transaction already committed every status. Cleanup can be fenced
+      // by owner/route without stranding active children when it is interrupted.
+      await withStatusWriteLock(dbClient.drizzle, child.sessionId, 'deleted', async () => {
+        if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) return;
+        cleanupSessionRuntimeForTerminalStatus(child.sessionId, 'deleted');
+        const { closeSharedTaskForTask } = await import('../../device-link/sharedTaskRuntime.js');
+        await closeSharedTaskForTask(child.sessionId, dbClient);
+      });
+      if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) return;
+      clearSessionAttention(child.sessionId, 'explicit');
+      broadcastSessionPatched(child.sessionId, { status: 'deleted' }, ownerScope);
+      notifyAgentIslandSessionPatch(child.sessionId, { ...child, status: 'deleted' });
+      void imageCacheStore.removeSession(child.sessionId).catch((err) => {
+        log.warn('side chat image cleanup failed', { sessionId: child.sessionId, err: String(err) });
+      });
+      scheduleWorktreeRecycleForStatusChange(child.sessionId, 'deleted', { ownerScope, mediaDb: dbClient.drizzle });
+      notifyGhostSessionStatusChange(child.sessionId, 'deleted', child.workingDir);
+      cleanupSessionTerminalArtifacts(child.sessionId, 'deleted');
+      compactTerminalSessionToolResults(dbClient, child.sessionId, 'deleted');
+    }
+    return;
+  }
+  // Compatibility for callers without the transaction API (legacy adapters).
+  const children = await dbClient.drizzle.select({ id: sessions.id }).from(sessions)
+    .where(and(eq(sessions.parentSessionId, parentId), eq(sessions.source, 'side-chat'), ne(sessions.status, 'deleted')));
+  for (const child of children) {
+    if (!isOwnerScopeCurrent(ownerScope) || getDbClient() !== dbClient) return;
+    await patchSessionMetaInDb(child.id, { status: 'deleted' });
   }
 }
 
@@ -2090,6 +2133,7 @@ export async function updateSessionInDb(
     // before persisting the new directory so the next send lazily recreates the
     // runtime with the moved session's cwd instead of continuing in the old one.
     if (movingLocalNonClaudeSession) {
+      await moveGuard?.beforeWrite?.();
       moveGuard?.assertCurrent();
       if (!opts.closeIdleSessionForMove) {
         throwIpcError('INTERNAL', '会话移动 runtime 操作未配置');
@@ -2173,6 +2217,7 @@ export async function updateSessionInDb(
     const previousContextWindowBudget: number | null = hasContextWindowBudgetChange
       ? readSessionContextWindowBudget(sid)
       : null;
+    let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
     await withStatusWriteLock(
       db,
       sid,
@@ -2187,7 +2232,7 @@ export async function updateSessionInDb(
           if (typeof dbClient.tx === 'function') {
             const { status: _status, ...nonTerminalPatch } = setObj;
             await writeSessionPatch(db, sid, nonTerminalPatch, undefined);
-            await setTerminalSessionStatus(dbClient, sid, p.status as 'archived' | 'deleted');
+            deletedSideChats = await setTerminalSessionStatus(dbClient, sid, p.status as 'archived' | 'deleted');
           } else {
             const prepared = await prepareSharedTaskClosure(sid, dbClient);
             try {
@@ -2335,6 +2380,7 @@ export async function updateSessionInDb(
     }
     cleanupSessionTerminalArtifacts(sid, p.status);
     compactTerminalSessionToolResults(dbClient, sid, p.status);
+    if (p.status === 'deleted' && updated.source !== 'side-chat') await deleteDependentSideChats(sid, dbClient, ownerScope, deletedSideChats);
     return updated;
   };
   if (p.workingDir === undefined && !moveGuard) return update();
@@ -2411,6 +2457,7 @@ export async function patchSessionMetaInDb(
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
+  let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
   const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     const terminal = patch.status === 'archived' || patch.status === 'deleted';
@@ -2418,7 +2465,7 @@ export async function patchSessionMetaInDb(
       if (typeof dbClient.tx === 'function') {
         const { status: _status, ...nonTerminalPatch } = setObj;
         await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined);
-        await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted');
+        deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted');
       } else {
         const prepared = await prepareSharedTaskClosure(sessionId, dbClient);
         try {
@@ -2483,6 +2530,7 @@ export async function patchSessionMetaInDb(
     );
   }
   compactTerminalSessionToolResults(dbClient, sessionId, patch.status);
+  if (patch.status === 'deleted' && updated.source !== 'side-chat') await deleteDependentSideChats(sessionId, dbClient, ownerScope, deletedSideChats);
   return updated;
 }
 
@@ -2526,6 +2574,7 @@ export interface RenameSessionMetaItem {
 export async function renameSessionTitlesInDb(
   changes: RenameSessionMetaChange[],
   dryRun: boolean,
+  beforeMutation?: () => Promise<void>,
 ): Promise<RenameSessionMetaItem[]> {
   if (changes.length === 0) return [];
   const ownerScope = captureOwnerScope();
@@ -2569,6 +2618,7 @@ export async function renameSessionTitlesInDb(
 
   if (dryRun) return preview;
 
+  await beforeMutation?.();
   // 批量改名(MCP 工具)同样是"人给的名字",自动起名不得再覆盖;与上面两条出口
   // 一样先记号后写库,不给并发的智能标题留窗口。
   for (const change of changes) noteUserTitleWritten(change.sessionId);
@@ -2614,6 +2664,7 @@ export interface SessionStatusChangeRow {
 export async function setSessionsStatusInDb(
   sessionIds: string[],
   status: 'active' | 'archived',
+  beforeMutation?: () => Promise<void>,
 ): Promise<SessionStatusChangeRow[]> {
   if (sessionIds.length === 0) return [];
   const ownerScope = captureOwnerScope();
@@ -2629,8 +2680,12 @@ export async function setSessionsStatusInDb(
     const physicalResources = await Promise.all([...new Set(resources)].map(physicalWorktreeKey));
     return withWorktreeMutation(resources, async () => {
       if (status === 'archived') {
-        for (const id of sessionIds) await requestWorktreeRecycle(id, perSession.get(id));
+        for (const id of sessionIds) {
+          await beforeMutation?.();
+          await requestWorktreeRecycle(id, perSession.get(id));
+        }
       }
+      await beforeMutation?.();
       const rows = await dbClient.tx('sessions.setStatus', status === 'archived'
         ? { sessionIds, status, closeSharedTasks: true }
         : { sessionIds, status }).catch((err) => {

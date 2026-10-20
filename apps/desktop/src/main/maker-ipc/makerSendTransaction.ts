@@ -1,3 +1,4 @@
+import { FORWARDED_REQUEST_RECEIPT } from '../../shared/forwardedRequest.js';
 import type { AutoReviewUserIntent } from '@cindy/maker-core';
 import {
   PI_CACHE_RECOVERY_EXPECTATION,
@@ -43,6 +44,7 @@ import {
 } from './mobileClientPromptNote.js';
 import { buildWireMessageSourceNote, readWireSourceDevice, readWireSourcePlugin } from './messageSourceNote.js';
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
+import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
 import { getResolvedMainLocale } from '../i18n.js';
 import { buildUiLanguageErrorNote, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
 import type { RepeatableWireNotes, WireNotePlan } from './wireNoteMemory.js';
@@ -300,6 +302,7 @@ type MakerSendOptions = {
    */
   sourceDevice?: MessageSourceDevice;
   persistUserMessage?: {
+    [FORWARDED_REQUEST_RECEIPT]?: AgentInputQueuedMessage['autoReviewUserText'];
     botTaskCoordination?: AgentInputQueuedMessage['botTaskCoordination'];
     sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
     /** 插件来源(只写入 agentMeta.sourcePlugin 并生成 `[消息来源]`,不传给 maker-core)。 */
@@ -571,10 +574,10 @@ export interface MakerSendTransactionDeps {
    */
   readHostDeviceIdentity?(): MessageSourceHostDevice;
   /**
-   * 个人版制作任务(sessions.source='cindy-make')判定,由 host 按持久化来源现读。
-   * 命中时每轮把任务说明追加到 wire 用户消息(不落库、不显示),见 cindy-make/taskNote.ts。
+   * Host-owned task source, read from persistence. Scoped task instructions go only
+   * into the wire message; the composer and saved user text remain unchanged.
    */
-  isCindyMakeSession?(sessionId: string): Promise<boolean>;
+  readTaskSource?(sessionId: string): Promise<string | null>;
   /**
    * 逐轮环境说明去重(见 wireNoteMemory.ts):返回本轮真正要前置的段;与上一次已被
    * 引擎接受的内容相同的段不再重复。`force` 在交接首条(原生上下文刚重建)时整体重发。
@@ -603,6 +606,7 @@ type ResolveSessionResult =
   | { kind: 'failure'; result: DesktopMakerSendResult };
 
 function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
+  [FORWARDED_REQUEST_RECEIPT]?: AgentInputQueuedMessage['autoReviewUserText'];
   botTaskCoordination?: AgentInputQueuedMessage['botTaskCoordination'];
   sharedTaskAuthor?: AgentInputQueuedMessage['sharedTaskAuthor'];
   sourcePlugin?: AgentInputQueuedMessage['sourcePlugin'];
@@ -626,6 +630,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   if (!persist || typeof persist.clientId !== 'string') return null;
   const sourcePlugin = readWireSourcePlugin(persist.sourcePlugin);
   return {
+    ...(persist[FORWARDED_REQUEST_RECEIPT] && typeof persist[FORWARDED_REQUEST_RECEIPT] === 'object' ? { [FORWARDED_REQUEST_RECEIPT]: persist[FORWARDED_REQUEST_RECEIPT] } : {}),
     ...(persist.botTaskCoordination ? { botTaskCoordination: persist.botTaskCoordination } : {}),
     ...(persist.sharedTaskAuthor ? { sharedTaskAuthor: persist.sharedTaskAuthor } : {}),
     ...(sourcePlugin ? { sourcePlugin } : {}),
@@ -1523,8 +1528,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           })
         : null;
       // 个人版制作任务说明:与手机说明同层、同占位规则(原生命令必须留在消息开头)。
+      const taskSource = await deps.readTaskSource?.(sessionId);
       const cindyMakeNote =
-        (await deps.isCindyMakeSession?.(sessionId).catch(() => false)) === true &&
+        taskSource === 'cindy-make' &&
         allowsEnvironmentNotes
           ? buildCindyMakeTaskNote()
           : null;
@@ -1535,6 +1541,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // (原生上下文刚重建)整体重发;只有引擎接受后才记为已发送。斜杠命令轮次本来就不带
       // 说明,也不改写记忆——它不代表模型已经看过新的环境。
       const repeatableNotes: RepeatableWireNotes = {
+        'side-chat': allowsEnvironmentNotes && taskSource === 'side-chat'
+          ? SIDE_CHAT_CONTEXT : null,
         'client-environment': mobileClientNote,
         'cindy-make': cindyMakeNote,
         'ui-language': uiLanguageNote,
@@ -1552,6 +1560,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       let outgoing = plannedNotes['ui-language']
         ? prependNoteToWireUserMessage(withCindyMakeNote as HandoffWireMessage, plannedNotes['ui-language'])
         : withCindyMakeNote;
+      if (plannedNotes['side-chat']) {
+        outgoing = prependNoteToWireUserMessage(outgoing as HandoffWireMessage, plannedNotes['side-chat']);
+      }
       const appContext = shouldPrependMobileClientPromptNote(normalized, sess.agentKind)
         ? await mcpAppModelContext(sessionId)
         : undefined;
@@ -1872,7 +1883,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                         ...(sourceDevice ? { sourceDevice } : {}),
                         ...(persistUserMessage.sourcePlugin ? { sourcePlugin: persistUserMessage.sourcePlugin } : {}),
                         uuid: so.messageUuid,
-                        ...(so.origin?.kind === 'scheduler'
+                        ...(persistUserMessage[FORWARDED_REQUEST_RECEIPT]
+                          ? { autoReviewUserText: persistUserMessage[FORWARDED_REQUEST_RECEIPT] }
+                          : so.origin?.kind === 'scheduler'
                           ? { autoReviewUserText: { kind: 'scheduled-continuation' } }
                           : so[AUTO_REVIEW_DELEGATED_CONTINUATION]
                             ? { autoReviewUserText: { kind: 'delegated-continuation' } }

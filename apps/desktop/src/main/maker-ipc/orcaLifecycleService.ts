@@ -353,8 +353,9 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
   async function activateLeadTeam(params: {
     leadSessionId: string;
     teamId: string;
-  }): Promise<void> {
+  }, assertCurrent: () => Promise<void>): Promise<void> {
     await deps.setSessionOrcaRole(params.leadSessionId, 'lead');
+    await assertCurrent();
     deps.clearKnownNonOrcaSession(params.leadSessionId);
     await deps.setLeadVendorOptions({
       leadSessionId: params.leadSessionId,
@@ -373,7 +374,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     await assertAdmission();
     if (existing) {
       try {
-        await activateLeadTeam({ leadSessionId: params.leadSessionId, teamId: existing.id });
+        await activateLeadTeam({ leadSessionId: params.leadSessionId, teamId: existing.id }, assertAdmission);
         await assertAdmission();
       } catch (err) {
         return internalFailure(err);
@@ -385,7 +386,7 @@ export function createOrcaLifecycleService(deps: OrcaLifecycleDeps): OrcaLifecyc
     initializingTeamIds.add(team.id);
     try {
       await assertAdmission();
-      await activateLeadTeam({ leadSessionId: params.leadSessionId, teamId: team.id });
+      await activateLeadTeam({ leadSessionId: params.leadSessionId, teamId: team.id }, assertAdmission);
       await assertAdmission();
     } catch (err) {
       return failCreatedTeamOnly({ teamId: team.id, leadSessionId: params.leadSessionId, err });

@@ -274,14 +274,14 @@ describe('session runtime control wiring', () => {
       'stampTrustedDesktopQueuedOrigin(stampMobileClientOrigin(updated, editor.isMobile), remote, true)',
     );
     expect(updateText).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
-    expect(updateText).toContain('stampQueuedEditProvenance(updated, remote, editor)');
+    expect(updateText).toContain('stampQueuedEditProvenance(sid, updated, remote, editor)');
     const updateContent = handlerBody(
       registerSource,
       'MAKER_INVOKE.INPUT_UPDATE_CONTENT,',
       'MAKER_INVOKE.INPUT_MOVE,',
     );
     expect(updateContent).toContain('if (!remote) assertTrustedAppRendererEvent(event);');
-    expect(updateContent).toContain('stampQueuedEditProvenance(updated, remote, editor)');
+    expect(updateContent).toContain('stampQueuedEditProvenance(sid, updated, remote, editor)');
     const enqueue = handlerBody(
       registerSource,
       'MAKER_INVOKE.INPUT_ENQUEUE,',
@@ -369,7 +369,7 @@ describe('session runtime control wiring', () => {
       'setAppSessionCommitBoundaryHook(() => {',
       '// ── Custom protocol registration',
     );
-    expect(body).toContain('ghostPanelWindowsController.closeForOwnerChange();');
+    expect(body).toContain('sidebarTabWindowsController.destroyAllWindows();');
     expect(body.indexOf('clearAllSessionAttention();')).toBeGreaterThan(-1);
     expect(body.indexOf('clearAllSessionAttention();')).toBeLessThan(
       body.indexOf('authManager.setStableOwnerPostCommitTask('),
