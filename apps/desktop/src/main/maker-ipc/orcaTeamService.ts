@@ -42,7 +42,7 @@ export interface OrcaWorkerRecordSnapshot {
     model: string;
     effort: string | null;
     permissionMode: string;
-    fastMode: boolean;
+    fastMode: boolean | 'ultrafast';
   };
 }
 

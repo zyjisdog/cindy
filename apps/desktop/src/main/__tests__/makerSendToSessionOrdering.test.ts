@@ -627,8 +627,8 @@ describe('sendToSession ordering', () => {
       'restoreControlStores();',
       'throw persistenceError;',
     );
-    // #5044 在 selection 上加了可选 thinking 载体；upstream 用例的旧字符串同步。
-    expect(preloadSource).toContain('selection?: { effort: string | null; fastMode: boolean; thinking?: boolean },');
+    // #5044 在 selection 上加了可选 thinking 载体；上游扩了 ultrafast 档，断言取并集后的形状。
+    expect(preloadSource).toContain("selection?: { effort: string | null; fastMode: boolean | 'ultrafast'; thinking?: boolean },");
     expectOrder(
       preloadSource,
       'expectedAgentSwitchRevision,',
@@ -641,15 +641,17 @@ describe('sendToSession ordering', () => {
       'const release = await acquireSendToSessionLock(sessionId, undefined, () => stage);',
       'applyPendingAgentSwitchIfIdle(',
     );
-    for (const operation of [
-      'reconcileBotModelRoute', 'applyPendingAgentSwitchIfIdle',
-      'applyScheduledModelSelection', 'prepareUnhealthySession',
+    for (const [operation, call] of [
+      ['reconcileBotModelRoute', 'reconcileBotModelRoute'],
+      ['applyPendingAgentSwitchIfIdle', 'applyPendingAgentSwitchIfIdle'],
+      ['applyScheduledModelSelection', 'applyScheduledProfile'],
+      ['prepareUnhealthySession', 'prepareUnhealthySession'],
     ]) {
-      expectOrder(directSendSwitchBlock, `stage = 'direct-send:${operation}'`, `${operation}(`);
+      expectOrder(directSendSwitchBlock, `stage = 'direct-send:${operation}'`, `${call}(`);
     }
     expectOrder(directSendSwitchBlock, 'prepareUnhealthySession', "stage = 'direct-send:caller-dispatch'");
     expectOrder(directSendSwitchBlock, 'applyPendingAgentSwitchIfIdle(', 'prepareUnhealthySession');
-    expectOrder(directSendSwitchBlock, 'prepareUnhealthySession', 'return { release, selection: resolvedSelection };');
+    expectOrder(directSendSwitchBlock, 'prepareUnhealthySession', 'return { release, selection: resolvedSelection,');
   });
 
   it('仅 Device Link 归一化 SET_MODEL 的 JSON null 可选占位,本地仍走严格校验', () => {

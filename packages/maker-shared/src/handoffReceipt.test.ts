@@ -30,7 +30,7 @@ describe("handoff receipt client ids", () => {
   it("round-trip: 生成→解析还原 dispatcher 与 nonce", () => {
     const clientId = handoffReceiptInputClientId("disp-1", NONCE);
     expect(clientId).toBe(`${HANDOFF_RECEIPT_INPUT_PREFIX}disp-1:${NONCE}`);
-    expect(parseHandoffReceiptInputClientId(clientId)).toEqual({
+    expect(parseHandoffReceiptInputClientId(clientId ?? '')).toEqual({
       dispatcherSessionId: "disp-1",
       nonce: NONCE,
     });

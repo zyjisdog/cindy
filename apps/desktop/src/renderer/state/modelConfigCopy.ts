@@ -8,7 +8,7 @@
  *     链路的 vendor 口径(`SelectableVendor`);
  *   - effort 存 canonical key(`'high'` / `'low'`…),显示文案不回灌;非法值只丢该字段,
  *     缺省语义 = 跟随该 (模型, 引擎) 的推荐档;
- *   - fast 只在**开启**时存 `true`(关闭即缺省,不落「等于默认」的快照);
+ *   - fast 只在**开启**时存 `true` / `'ultrafast'`(关闭即缺省,不落「等于默认」的快照);
  *   - 身份(去重 / 星标匹配) = providerId + modelId + agent + effort + fast,缺省字段参与,
  *     与「跟随推荐」区分。
  *
@@ -42,7 +42,7 @@ export interface ModelConfigCopy {
   /** 思考深度**档位 key**('low' | 'high' | …);缺省 = 跟随该 (模型, 引擎) 的推荐档。 */
   effort?: Effort;
   /** Fast(插队加速)。**只在开启时存 true**,关闭即缺省 —— 不落「等于默认」的快照。 */
-  fast?: true;
+  fast?: true | 'ultrafast';
 }
 
 /**
@@ -75,7 +75,7 @@ export function normalizeModelConfigCopy(raw: {
   if (!isSelectableVendor(raw.agent)) return null;
   const config: ModelConfigCopy = { providerId, modelId, agent: raw.agent };
   if (isCanonicalModelEffort(raw.effort)) config.effort = raw.effort;
-  if (raw.fast === true) config.fast = true;
+  if (raw.fast === true || raw.fast === 'ultrafast') config.fast = raw.fast;
   return config;
 }
 
@@ -91,6 +91,6 @@ export function modelConfigCopyIdentity(config: ModelConfigCopy): string {
     config.modelId,
     config.agent,
     config.effort ?? '',
-    config.fast === true ? '1' : '0',
+    config.fast === 'ultrafast' ? '2' : config.fast === true ? '1' : '0',
   ].join(' ');
 }

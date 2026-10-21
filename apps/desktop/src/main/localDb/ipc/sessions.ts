@@ -741,7 +741,7 @@ export async function applyAgentSwitchToSessionRow(
     sdkSessionId?: string | null;
     /** 目标引擎下的 effort / fastMode(意图登记时 renderer 按目标目录解析,apply 一并落库)。 */
     effort?: string;
-    fastMode?: boolean;
+    fastMode?: boolean | 'ultrafast';
     contextWindow?: number | null;
     /** 远程 Agent 换电脑:undefined = 不动,null = 改回任务所在电脑。 */
     agentDeviceId?: string | null;
@@ -775,6 +775,7 @@ export async function applyAgentSwitchToSessionRow(
     .returning({
       id: sessions.id, agentKind: sessions.agentKind, model: sessions.model,
       providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode,
+      scheduledModelBaseline: sessions.scheduledModelBaseline,
     });
   if (!committed || !isOwnerScopeCurrent(ownerScope)) return;
   broadcastSessionPatched(
@@ -899,12 +900,23 @@ export async function persistSessionFields(
   const setObj = sessionPatchToRow(rowPatch as Parameters<typeof sessionPatchToRow>[0], {
     bumpUpdatedAt: false,
   });
-  if (Object.keys(setObj).length > 0) {
+  if (Object.keys(setObj).length === 0) {
+    if (!hasBudgetChange) return;
+  } else {
     await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
-  } else if (!hasBudgetChange) {
-    return;
   }
-  if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, clean, ownerScope);
+  let runtimeProjection = {};
+  if (['model', 'providerId', 'effort', 'fastMode'].some((key) => key in clean)) {
+    const [row] = await db.select({
+      id: sessions.id, agentKind: sessions.agentKind, model: sessions.model,
+      providerId: sessions.providerId, effort: sessions.effort, fastMode: sessions.fastMode,
+      scheduledModelBaseline: sessions.scheduledModelBaseline,
+    }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    if (row?.scheduledModelBaseline) {
+      runtimeProjection = projectSessionRuntimeFields({ ...row, agentKind: normalizeDbAgentKind(row.agentKind) });
+    }
+  }
+  if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, { ...clean, ...runtimeProjection }, ownerScope);
   // 远程 set-* 落库后同样要把新预算应用到被控端活实例（语义与 updateSessionInDb 一致）。
   if (hasBudgetChange && registeredSessionIpcOpts.applyContextWindowBudget) {
     try {

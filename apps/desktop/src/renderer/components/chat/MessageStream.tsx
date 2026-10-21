@@ -367,7 +367,6 @@ import {
 import { ChatImageView } from './ChatImageView';
 import { ImageGalleryContext, type GalleryImage } from './ImageGalleryContext';
 import { GhostFulfillmentContext } from './GhostSummonCard';
-import { AgentOnOtherDeviceContext } from './AgentOnOtherDeviceContext';
 import { ChatSessionFileProvider, useChatSessionFileValue } from './ChatSessionFileContext';
 import { toRemoteMediaOrigin } from '@/lib/sessionFileOrigin';
 import { rewriteToRemoteMediaOrigin, type RemoteMediaOrigin } from '@/../shared/remoteMediaUrl';
@@ -452,8 +451,6 @@ interface MessageStreamProps {
    *  so message-level controls can gate features unsupported on remote
    *  (e.g. rewind on cc-remote daemon sessions). */
   remoteHostId?: string | null;
-  /** 任务的 Agent 在另一台电脑运行(消息级分叉暂不可用)。 */
-  agentOnOtherDevice?: boolean;
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
   /** Session working directory; passed down so MarkdownRenderer / UserMessage
@@ -2943,7 +2940,6 @@ export function MessageStream({
   sessionTitle,
   agentKind,
   remoteHostId,
-  agentOnOtherDevice = false,
   sessionSource,
   workingDir,
   assistantAvatar,
@@ -6376,7 +6372,6 @@ export function MessageStream({
 
   return (
     <ChatSessionFileProvider value={sessionFileValue}>
-      <AgentOnOtherDeviceContext.Provider value={agentOnOtherDevice}>
       <GhostFulfillmentContext.Provider value={ghostCallsByUserTurn}>
         <ImageGalleryContext.Provider value={sessionImageSrcs}>
           <div className="relative h-full w-full">
@@ -6809,7 +6804,6 @@ export function MessageStream({
           </div>
         </ImageGalleryContext.Provider>
       </GhostFulfillmentContext.Provider>
-      </AgentOnOtherDeviceContext.Provider>
     </ChatSessionFileProvider>
   );
 }

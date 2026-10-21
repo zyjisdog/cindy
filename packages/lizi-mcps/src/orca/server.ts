@@ -105,7 +105,7 @@ export interface OrcaMcpDeps {
     model?: string;
     providerId?: string;
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
-    fast?: boolean;
+    fast?: boolean | 'ultrafast';
     label: string;
     workingDir?: string;
     executionDeviceId?: string;
