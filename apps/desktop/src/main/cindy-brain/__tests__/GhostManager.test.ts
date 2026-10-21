@@ -104,6 +104,35 @@ function goodManifest(id = 'hello'): Record<string, unknown> {
 }
 
 describe('GhostManager enable revision boundary', () => {
+  // Unit regression: an unreadable installation subtree used to become an empty
+  // scan and persist active:false. Exercise list(), retain the approved install
+  // and registry bytes, then recover without reinstalling (compatibility §5).
+  it.each(['root', 'namespaces', 'namespace'] as const)(
+    'does not persist missing installations when the %s directory cannot be read',
+    async (scope) => {
+      await manager.install(await makeCindy('unreadable.cindy', goodManifest()));
+      expect(manager.list()[0].enabled).toBe(true);
+      const registryPath = path.join(workDir, 'ghosts-install-state', 'plugin-instances.v2.json');
+      const before = fs.readFileSync(registryPath, 'utf8');
+      const target = scope === 'root' ? rootDir : scope === 'namespaces'
+        ? path.join(rootDir, '_ns') : path.join(rootDir, '_ns', '_root');
+      const realReaddir = fs.readdirSync;
+      const read = vi.spyOn(fs, 'readdirSync').mockImplementation(((dir: never, options: never) => {
+        if (String(dir) === target) throw Object.assign(new Error('scan unavailable'), { code: 'EACCES' });
+        return realReaddir(dir, options);
+      }) as never);
+      try {
+        if (scope === 'root') expect(() => manager.list()).toThrow('scan unavailable');
+        else {
+          expect(manager.list()).toEqual([]);
+          expect(manager.isInstallationScanComplete()).toBe(false);
+        }
+        expect(fs.readFileSync(registryPath, 'utf8')).toBe(before);
+      } finally { read.mockRestore(); }
+      expect(manager.list()[0]).toMatchObject({ enabled: true, approval: { state: 'approved' } });
+    },
+  );
+
   // Regression: one list() used two validated receipt reads per plugin. Unit
   // coverage also rejects a cross-call cache: the next scan must see revocation.
   it('reads each receipt once per scan and observes changed approval on the next scan', async () => {
@@ -380,6 +409,30 @@ describe('GhostManager · 存量插件一次性迁移(§5 升级无感)', () => 
     expect(await manager.approveTaskCapability(instanceId, selected.approval.revision, () => true)).toBe(true);
     expect(manager.list().find(ghost => installedGhostStoragePart(ghost) === instanceId)?.taskCapabilityApproved).toBe(true);
     expect(manager.list().find(ghost => installedGhostStoragePart(ghost) !== instanceId)?.taskCapabilityApproved).toBeUndefined();
+  });
+
+  it('binds independent target consent to the approved instance and preserves it only for the same capability', async () => {
+    const manifest = { ...goodManifest(), slots: ['tool', 'agent'], agent: { tasks: true, targets: true } };
+    const pkg = await makeCindy('targets.cindy', manifest, { 'main.js': '// plugin' });
+    await manager.install(pkg, { taskCapabilityApproved: true });
+    await manager.install(pkg, { namespace: 'acme', taskCapabilityApproved: true });
+    const selected = manager.list().find(ghost => ghost.namespace === 'acme')!;
+    if (selected.approval.state !== 'approved') throw new Error('fixture not approved');
+    const instanceId = installedGhostStoragePart(selected);
+    expect(selected.targetCapabilityApproved).toBeUndefined();
+    expect(await manager.approveTaskCapability(instanceId, 'stale', () => true, 'targets')).toBe(false);
+    expect(await manager.approveTaskCapability(instanceId, selected.approval.revision, () => false, 'targets')).toBe(false);
+    expect(await manager.approveTaskCapability(instanceId, selected.approval.revision, () => true, 'targets')).toBe(true);
+    expect(manager.list().find(ghost => ghost.namespace === 'acme')?.targetCapabilityApproved).toBe(true);
+    expect(manager.list().find(ghost => ghost.namespace !== 'acme')?.targetCapabilityApproved).toBeUndefined();
+    const update = await makeCindy('targets-update.cindy', { ...manifest, version: '1.0.1' }, { 'main.js': '// update' });
+    const updated = await manager.update(update, { namespace: 'acme', expectedInstalledApproval: ghostInstallApprovalToken(selected.approval) });
+    expect(updated).toHaveProperty('ghost.targetCapabilityApproved', true);
+    if (!('ghost' in updated) || updated.ghost.approval.state !== 'approved') throw new Error('fixture update failed');
+    const removed = await makeCindy('targets-removed.cindy', { ...manifest, version: '1.0.2', agent: { tasks: true } }, { 'main.js': '// update' });
+    const result = await manager.update(removed, { namespace: 'acme', expectedInstalledApproval: ghostInstallApprovalToken(updated.ghost.approval) });
+    expect(result).toHaveProperty('ghost.taskCapabilityApproved', true);
+    expect(result).not.toHaveProperty('ghost.targetCapabilityApproved');
   });
 
   it.each(['future', { future: true }, ['future'], null, false])('keeps historical unknown tasks %j enabled without task approval', async (tasks) => {

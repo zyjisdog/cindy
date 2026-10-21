@@ -57,6 +57,7 @@ import { rememberSsoOrgIdentifier } from '@/state/ssoOrgHistory';
 import { setDeferredUiAssignmentOwner } from '@/features/cc-agent/deferredUiAssignment';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
 import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
+import { invalidateRemoteCatalogSnapshots } from '@/lib/remoteCatalogSnapshot';
 import { awaitDesktopLoginStateLoad, type DesktopLoginState } from '../../shared/authIpc';
 import { getDataOwnerGeneration, setDataOwnerGeneration } from './dataOwnerGeneration';
 
@@ -144,6 +145,7 @@ function publishDataOwnerGeneration(
   const ownerChanged = previousOwnerId !== dataOwnerId;
   if (ownerChanged) {
     resetTaskTagCatalogCache();
+    invalidateRemoteCatalogSnapshots();
   }
   // The pre-commit fence may already publish null. A committed owner change
   // must still close sessions even when that published owner stays null.

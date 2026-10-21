@@ -121,7 +121,7 @@ export interface PrepareSessionEventDeps {
   readonly silentStopTurnLeaseGate: Pick<SilentStopTurnLeaseGate, 'turnLeaseIdForEvent'>;
   readonly agentInputCoordinatorHolder: Pick<
     AgentInputCoordinator,
-    'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId' | 'getActiveInputClientIds' | 'isActiveTaskCoordination'
+    'onTurnEvent' | 'noteSuppressedTerminalError' | 'getActiveInputClientId' | 'getActiveInputClientIds' | 'getAcceptedInputProvenance' | 'isActiveTaskCoordination'
   > | null;
   /** send_to_session 完成回执回投;实现在 register(setup 作用域),fire-and-forget。 */
   readonly deliverHandoffReceipts?: (
@@ -231,6 +231,11 @@ export function prepareSessionEvent(
     : false;
   const activeInputId = event.turnScope === 'background' ? null
     : deps.agentInputCoordinatorHolder?.getActiveInputClientId(session.id, event.sessionTurnGeneration);
+  const provenance = deps.agentInputCoordinatorHolder?.getAcceptedInputProvenance(session.id);
+  // Capture ownership before onTurnEvent releases the accepted receipt. Automatic
+  // retries keep the original group execution; human steering owns its own input.
+  const groupLaneInputClientId = activeInputId && provenance?.clientId === activeInputId && provenance.autoResume
+    ? provenance.retrySourceClientId ?? activeInputId : activeInputId ?? null;
   // The host's accepted input owns provenance across all three SDKs. Explicit
   // false restores normal replies when the user steers a private message turn.
   let attributedEvent = activeInputId
@@ -242,7 +247,7 @@ export function prepareSessionEvent(
           botTaskCoordination: taskCoordination && !event.runtimeRecovery,
           // A group-lane turn is delivered into the group chat; its hidden Session never
           // raises completion/error attention of its own (docs/product-rules/bot-group-chat.md §3).
-          ...(isBotGroupClientId(activeInputId) ? { botGroupLane: true } : {}),
+          ...(groupLaneInputClientId && isBotGroupClientId(groupLaneInputClientId) ? { botGroupLane: true } : {}),
         },
       }
     : event;
@@ -613,6 +618,7 @@ export function prepareSessionEvent(
     event,
     attributedEvent,
     botTaskResultInputIds,
+    groupLaneInputClientId,
     taskCoordination,
     broadcastEvent,
     eventAgentMeta,

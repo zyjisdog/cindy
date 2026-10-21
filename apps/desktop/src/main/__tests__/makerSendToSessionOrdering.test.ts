@@ -627,10 +627,13 @@ describe('sendToSession ordering', () => {
       'restoreControlStores();',
       'throw persistenceError;',
     );
+    // Protect the SET_MODEL wire argument order. Other preload APIs (including
+    // voice preferences) also accept `selection` and are outside this contract.
     // #5044 在 selection 上加了可选 thinking 载体；上游扩了 ultrafast 档，断言取并集后的形状。
-    expect(preloadSource).toContain("selection?: { effort: string | null; fastMode: boolean | 'ultrafast'; thinking?: boolean },");
+    const preloadSetModel = extractBetween(preloadSource, '    setModel: (', '    switchSessionAgent: (');
+    expect(preloadSetModel).toContain("selection?: { effort: string | null; fastMode: boolean | 'ultrafast'; thinking?: boolean },");
     expectOrder(
-      preloadSource,
+      preloadSetModel,
       'expectedAgentSwitchRevision,',
       'selection,',
     );
@@ -674,7 +677,7 @@ describe('sendToSession ordering', () => {
     const makerSendCreateDbMessageBlock = extractBetween(
       source,
       'const createUserMessageDurably:',
-      'const { sendToAgentAccepted: sendToAgentAcceptedUnlocked }',
+      '    sendToAgentAccepted: sendToAgentAcceptedUnlocked,',
     );
     const makerSendPreviewHookBlock = extractBetween(
       source,
