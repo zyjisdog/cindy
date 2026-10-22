@@ -13163,6 +13163,7 @@ assertRouteCurrent();
     // ── AgentSessionHandle ──────────────────────────────────────────────────
     const handle: AgentSessionHandle = {
       disabledSkillPaths: disabledSkillSnapshot,
+      getAutoReviewOwner: () => currentApprovalConfig().approvalsReviewer === 'auto_review' ? 'native' : 'cindy',
       reviewAutoPermissionAction: async (action) => {
         const decision = await reviewAutoAction(action);
         if (decision.unavailable) autoReviewUnavailableNotice.notify();

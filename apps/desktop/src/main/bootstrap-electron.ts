@@ -773,6 +773,10 @@ import {
   allowBotWorkbenchPendingPermission,
   applyCodexSpawnConfigChangeWithRestart,
   clearDeferredCodexRestartForOwnerBoundary,
+  restoreUsageLimitWaits,
+  suspendUsageLimitWaits,
+  flushUsageLimitWaits,
+  reconcileScheduledUsageLimitWaits,
   scheduleDeferredCodexRestart,
   clearWorkingDirectoryRecoveryForOwnerBoundary,
   collectAgentInputQueueScanTexts,
@@ -1294,6 +1298,8 @@ async function attemptStartSchedulerOnce(): Promise<void> {
   }
   const automationGitBaselineHooks = createAutomationUserTurnGitBaselineHooks();
   try {
+    await restoreUsageLimitWaits();
+    if (getGoalTeardownGeneration() !== goalGenBefore) return;
     const scheduler = await startScheduler({
       maker,
       getDb: () => getDbClient().drizzle,
@@ -1319,6 +1325,10 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     // 内通过 registerScheduleHandlers() 提前挂好,handler 内部 awaitReady 等本行
     // setSchedulerReady 调用。
     if (!_scheduleIpcRegistered.has(scheduler)) {
+      scheduler.on('changed', event => {
+        void reconcileScheduledUsageLimitWaits(event.scheduleId).catch(error =>
+          console.warn('[usage-limit] schedule reconciliation failed', error));
+      });
       attachSchedulerEventListeners(scheduler, getScheduleStorage());
       registerProjectAutomationIpc(getProjectAutomationLoader());
       _scheduleIpcRegistered.add(scheduler);
@@ -1921,7 +1931,9 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     // 等 relogin 后的 setSchedulerReady 喂入**新实例**(与 worker bug #1 的 relogin
     // 路径同构,这里关掉 teardown 路径的对偶窗口)。
     // 不 reject _pending — 让在途请求继续等下次 setSchedulerReady,30s 超时兜底。
+    suspendUsageLimitWaits();
     resetSchedulerReady();
+    await flushUsageLimitWaits();
     agentIslandService = getAgentIslandService();
     agentIslandService?.resetRuntimeState();
     // ② 再停旧 scheduler。scheduler 持有旧 user 的 storage drizzle 引用,必须在
@@ -10007,10 +10019,12 @@ onQuit(
 onQuit(
   'session-active-turn-freeze',
   () => {
+    suspendUsageLimitWaits();
     freezeSessionActiveTurnMarkers();
   },
   'sync',
 );
+onQuit('usage-limit-waits-flush', flushUsageLimitWaits, 'async');
 onQuit(
   'reap-claude-children',
   () => {
