@@ -34,7 +34,7 @@ interface RuntimeSetModelSession {
   ) => boolean | Promise<boolean>;
   previewModelSwitch?: (
     model: string,
-    opts?: { providerId?: string | null },
+    opts?: { providerId?: string | null; contextWindowBudget?: number | null },
   ) => Promise<{
     action: 'hot' | 'refresh' | 'rebuild' | 'unavailable';
     targetContextWindow: number | null;
@@ -216,8 +216,16 @@ export async function applyRuntimeSetModelChange(
   // that its native session needs replacement.
   const piRouteChanged = sess?.agentKind === 'pi' &&
     (sess.model !== model || currentProviderId !== nextProviderId);
+  // 预算必须与下面 setModel 拿到的**同一份**目标值：外层预演决定要不要重建，而
+  // switchModel 会先把预算写成新值再预演。用旧预算就会判「可热切」，内层按新预算
+  // 发现保留量不匹配便抛错，宿主此时已错过重建分支 —— 首次发送必失败（Greptile P1）。
   const piPreview = piRouteChanged || (sess?.agentKind === 'pi' && input.refreshPiConfiguration === true)
-    ? await sess.previewModelSwitch?.(model, { providerId: nextProviderId })
+    ? await sess.previewModelSwitch?.(model, {
+        providerId: nextProviderId,
+        ...(typeof input.contextWindowBudget === 'number'
+          ? { contextWindowBudget: input.contextWindowBudget }
+          : {}),
+      })
     : undefined;
   if ((piRouteChanged || (sess?.agentKind === 'pi' && input.refreshPiConfiguration === true)) && !piPreview) {
     throw new Error('Pi model switch preview is unavailable; runtime selection was not changed');

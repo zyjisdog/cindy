@@ -6647,15 +6647,27 @@ export class PiAgent extends BaseAgent {
         providerRefreshStages.delete(nonce);
       }
     };
-    const reserveForWindow = (window: number, source: string | null | undefined, model: string): number => {
+    const reserveForWindow = (
+      window: number,
+      source: string | null | undefined,
+      model: string,
+      budget: number | null = sessionContextWindowBudget,
+    ): number => {
       const settings = JSON.parse(buildPiSettingsJsonContent(window, sessionPiAutoCompactPct, [],
-        effectiveWorkingContextWindow(source, model)));
+        budget ?? this.deps.resolveModelContextLimit?.(source, model) ?? undefined));
       return settings.compaction?.reserveTokens ?? 16_384;
     };
     const previewPiModelSwitch = async (
       model: string,
-      target?: { providerId?: string | null },
+      target?: { providerId?: string | null; contextWindowBudget?: number | null },
     ): Promise<PiModelSwitchPreview> => {
+      // 预算必须在预演里就用**目标**值：外层预演决定要不要重建，而 setModel 会先把预算
+      // 写成新值再预演。两者用不同预算时，外层判「可热切」、内层发现保留量不匹配便抛错，
+      // 宿主此时已错过重建分支 —— 第一次发送必失败（Greptile P1）。
+      // 预演只读：不写 sessionContextWindowBudget，只把它当本次预算输入。
+      const previewBudget = target && Object.hasOwn(target, 'contextWindowBudget')
+        ? target.contextWindowBudget ?? null
+        : sessionContextWindowBudget;
       const requestedProviderId = target && Object.hasOwn(target, 'providerId')
         ? target.providerId
         : mutableProviderId;
@@ -6783,8 +6795,8 @@ export class PiAgent extends BaseAgent {
         { remote, fileOps, preview: true,
           allowedModelIds: hosted?.guestProvider?.modelIds,
           contextWindow: targetContextWindow ?? ctx.contextWindow ?? startupContextWindow,
-          workingContextWindow: effectiveWorkingContextWindow(sourceId, model),
-          sessionContextWindowBudget,
+          workingContextWindow: previewBudget ?? this.deps.resolveModelContextLimit?.(sourceId, model) ?? undefined,
+          sessionContextWindowBudget: previewBudget,
           piCompactionPct: sessionPiAutoCompactPct,
           runtimeBinaryPath: sessionRuntimeBinaryPath,
           packages: nativePackagePaths, disabledSkills: disabledSkillLaunch,
@@ -6823,7 +6835,7 @@ export class PiAgent extends BaseAgent {
       const targetModel = nativeModel?.wireId ?? nativeModel?.id ?? model;
       if (targetContextWindow && targetProvider &&
           resolvePiNativeReserve(liveRuntimeSettings, targetProvider, targetModel) !==
-            reserveForWindow(targetContextWindow, sourceId, model)) {
+            reserveForWindow(targetContextWindow, sourceId, model, previewBudget)) {
         return { action: 'rebuild', targetContextWindow, windowVerified: false,
           reason: 'Pi must load the changed native compaction settings before selecting this model' };
       }
