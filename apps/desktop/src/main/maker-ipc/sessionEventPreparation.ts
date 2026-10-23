@@ -1,5 +1,6 @@
 import { taskResultClientIdForInput } from '../../shared/botCollaboration.js';
 import { HANDOFF_RECEIPT_INPUT_PREFIX } from '@cindy/maker-shared/handoff-receipt';
+import { readChannelToolScope } from '../im/shared/channelToolScope.js';
 import { createHandoffReceiptGate } from './handoffReceipts.js';
 import { isQuietScheduledOutput } from '../scheduler-host/silent-output.js';
 import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
@@ -160,7 +161,8 @@ export function prepareSessionEvent(
   // on-demand detail IPC; forwarding the raw diff through maker:event would duplicate a
   // potentially multi-megabyte payload to every renderer and device-link controller.
   if (event.type === 'turn_diff') return;
-  if (event.type === 'compact_boundary') deps.botCompactRuntimeRefreshCoordinator.noteBoundary(session);
+  // Native compaction keeps its current runtime. Only explicit resource/configuration
+  // changes register a companion refresh; compaction itself is not such a change.
   if (event.type === 'compact_boundary') deps.workingMemoryRefresh?.markCompacted(session.id);
   if (event.type === 'compact_boundary') deps.wireNoteMemory?.reset(session.id);
   if (
@@ -254,6 +256,14 @@ export function prepareSessionEvent(
         },
       }
     : event;
+  // Personal IM dispatches directly, outside AgentInputCoordinator. Preserve
+  // its accepted durable input on the reply before the turn lease is released.
+  if (!activeInputId && event.turnScope !== 'background') {
+    const inputClientId = readChannelToolScope({ sessionId: session.id, sessionInstanceId: session.instanceId })?.inputClientId;
+    if (inputClientId) attributedEvent = {
+      ...attributedEvent, agentMeta: { ...attributedEvent.agentMeta, replyToClientId: inputClientId },
+    };
+  }
   if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
     const reason =
       !session.remoteHostId && session.agentKind === 'claude-code'

@@ -1002,7 +1002,7 @@ function InlineTreeRow({
         className={cn(
           'min-w-0 flex-1 bg-transparent text-13 leading-none outline-none',
           'border border-[var(--cmd-palette-item-meta)] rounded-sm px-1 py-0.5',
-          'text-sidebar-item-active-foreground placeholder:text-[var(--cmd-palette-item-meta)]',
+          'text-sidebar-item-active-foreground placeholder:text-[var(--text-placeholder)]',
         )}
       />
     </div>

@@ -97,6 +97,8 @@ const makerPiManagerIntegrationInclude = [
 ];
 const desktopE2eInclude = [
   'src/main/maker-host/__tests__/*.e2e.test.ts',
+  // Guest fork through a provider group with a real Claude Code; skipped without apps/claude-code-bin.
+  'src/main/remote-agent/__tests__/groupRelayClaudeFork.e2e.test.ts',
 ];
 const mobileGuardInclude = [
   // Swift/delegate authorization, recording lifecycle, and native clipping are cross-runtime contracts.
@@ -149,6 +151,8 @@ const mobileGuardInclude = [
 // in the explicit guard tier. Keeping an exact allowlist makes it impossible
 // for a new source scan to silently become part of the ordinary unit gate.
 const desktopGuardInclude = [
+  // Cross-hook voice stop/refine ownership and composer hydration race wiring.
+  'src/renderer/__tests__/voiceInputEnterToSend.test.ts',
   'src/renderer/__tests__/sessionAgentSwitchRemoteRouting.contract.test.ts',
   // 插件链与 globals.css 的源码文本契约：单测层不得 readFileSync（test-hygiene
   // sourceReads），审查页与聊天页共用的注册顺序契约集中在这里。
@@ -364,6 +368,14 @@ export default {
             '**/*.bench.ts',
           ],
         },
+        integration: {
+          status: 'manual',
+          reason: 'Local application Agent protocol tests open real loopback sockets and temporary authorization stores.',
+          execution: 'exclusive',
+          coverage: 'allowlist',
+          command: vitestBin('run', '--maxWorkers=2'),
+          include: ['src/main/local-agent/__tests__/*.integration.test.ts'],
+        },
         'git-integration': {
           status: 'manual',
           reason: 'Full real-Git coverage is explicit because it spawns hundreds of local subprocesses and is coordinated across worktrees.',
@@ -534,6 +546,8 @@ export default {
     requiredUnitWorkspace('@cindy/maker-scheduler', 'packages/maker-scheduler'),
     requiredUnitWorkspace('@cindy/maker-shared', 'packages/maker-shared'),
     requiredUnitWorkspace('@cindy/model-providers', 'packages/model-providers'),
+    noCollectableWorkspace('@jackwener/opencli', 'packages/opencli-vendor',
+      'Pinned production adapter sources; execution, host credentials and discovery are tested through @cindy/mcps and the browser-control-runtime.'),
     {
       name: '@cindy/orca-workflow',
       cwd: 'packages/orca-workflow',
