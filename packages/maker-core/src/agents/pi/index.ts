@@ -4227,6 +4227,7 @@ export class PiAgent extends BaseAgent {
     };
     let activeEffortSnapshot = initialEffortSnapshot;
     let mutableEffort: Effort | null = startupEffort ?? null;
+
     // 用户明确关掉思考（setThinkingEnabled(false) / 切模显式 thinkingEnabled:false /
     // 启动 opts.thinkingEnabled === false）的意图标记：无载体切模不得据此悄悄重新开启。
     // 只跟随显式意图变化；目标不支持思考而下发 off 不算用户意图，不置位。
@@ -7685,6 +7686,7 @@ export class PiAgent extends BaseAgent {
       // 只在真的打开时更新档位记忆：关掉思考不丢档位——档位是用户的独立选择，
       // 再打开应回到原档位，而不是回落到启动时的档位。
       if (wanted) mutableEffort = targetEffort ?? 'xhigh';
+
     };
     const switchModel = async (
       model: string,
@@ -8958,6 +8960,7 @@ export class PiAgent extends BaseAgent {
         // 切模进行中用户关闭思考时，若这里不排队直接发，切模收尾仍会按更早的
         // thinkingEnabled:true 载体重新下发开启并清掉关闭标记——用户看到关闭成功、
         // 实际被覆盖（2026-10-17 Greptile P1）。串行后意图按时间序线性化，后发者胜。
+        // applyThinkingEnabled 已含「目标模型无思考档位时下发 off + 不动档位记忆」的防御。
         await runExclusivePiRpc(() => applyThinkingEnabled(enabled));
       },
 
