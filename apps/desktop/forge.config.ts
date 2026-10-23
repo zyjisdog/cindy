@@ -212,6 +212,14 @@ const NATIVE_RUNTIME_DEPS = [
   // 无需带闭包。注: 这是 vendored runtime 里仅有的两个运行时外部 require 之一
   // (另一个是 playwright-core),已全覆盖。
   'undici',
+  // turndown (opencli-vendor 的 HTML→Markdown 抽取): browser recipe 的
+  // browser-recipes 产物在运行时 require turndown 与 gfm 插件, 转 Markdown 时
+  // turndown 内部再 require @mixmark-io/domino 建 DOM。三者都是纯 JS,
+  // 与 playwright-core 同因放在本表 —— 缺任一则 packaged app 启动即
+  // `Cannot find module '@mixmark-io/domino'` 直接退出 (dev 靠 hoist 不暴露)。
+  'turndown',
+  'turndown-plugin-gfm',
+  '@mixmark-io/domino',
 ];
 
 /**
