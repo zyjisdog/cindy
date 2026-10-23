@@ -195,7 +195,7 @@ export function registerSendToSessionTool(
         .string()
         .min(1)
         .describe(
-          "要发送的消息。伙伴代用户下达任务要求时，宿主另附可核实的用户原话；只补充必要上下文，保留原意和范围。普通任务与自动化消息按正文发送。",
+          "要发送的消息。伙伴代用户下达任务要求时，宿主另附可核实的用户原话；只补充必要上下文，保留原意和范围，不复述授权、不要求对方回传。普通任务与自动化消息按正文发送。",
         ),
       message_purpose: z
         .enum(["coordination", "user-visible"])

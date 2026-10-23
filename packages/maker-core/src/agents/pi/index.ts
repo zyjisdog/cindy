@@ -5786,6 +5786,7 @@ export class PiAgent extends BaseAgent {
             pid,
             kind: 'pi',
             role: 'task-host',
+            sessionId: opts.sessionId ?? null,
           });
         },
         opts.remoteHostId,

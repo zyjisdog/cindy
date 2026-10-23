@@ -297,6 +297,7 @@ export interface OrcaTeamServiceDeps {
     leadSessionId: string;
     labels: ReadonlyArray<string | null>;
   }) => Promise<boolean>;
+
   updateWorkerStatus(workerId: string, status: OrcaWorkerStatus): Promise<void>;
   markWorkerIdle(workerId: string): Promise<void>;
   markWorkerIdleIfStatus(workerId: string, expectedStatus: 'done'): Promise<boolean>;
