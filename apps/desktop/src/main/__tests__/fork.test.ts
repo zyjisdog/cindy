@@ -52,7 +52,14 @@ vi.mock('electron', async () => {
   return {
   app: {
     // #4598 让 fork 继承任务预算，预算存储经 appSessionState 读 userData/temp。
-    getPath: (name: string) => (name === 'temp' ? tmpdir() : join(tmpdir(), 'cindy-fork-test')),
+    // userData 必须指向真实临时目录（userDataDirRef，随 tempDirs 清理），
+    // 否则 session-context-budget-store 会写进真实 userData。
+    getPath: (name: string) =>
+      name === 'temp'
+        ? tmpdir()
+        : name === 'userData'
+          ? userDataDirRef.current
+          : join(tmpdir(), 'cindy-fork-test'),
   },
   ipcMain: {
     handle: (

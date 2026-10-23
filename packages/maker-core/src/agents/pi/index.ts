@@ -7714,7 +7714,7 @@ export class PiAgent extends BaseAgent {
       // docs/research/pi-native-model-refresh.md 与 docs/dev-rules/pi-harness.md
       // 「只适配官方 Pi」）。任务级窗口预算因此不走热改：预算变化由宿主判定有效窗口变化后
       // 重启引擎（createOpts 重新注入），或在预演里判定需要重建后走既有恢复分支。
-// 上游已把压缩预留的重算/比对交给 queryNativeRuntime + liveRuntimeSettings（本次
+      // 上游已把压缩预留的重算/比对交给 queryNativeRuntime + liveRuntimeSettings（本次
       // 306 个提交里重构），本 PR 不再自带 projectedReserve 预检，避免两套口径重复。
       // 思考档位对账必须在同路由 no-op **之前**(与图片能力同一位置):否则用户
       // 「声明完不动模型」永远走那条早返回,活着的子进程仍是启动时的零档位快照。
