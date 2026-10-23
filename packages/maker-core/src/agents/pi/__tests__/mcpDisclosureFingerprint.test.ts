@@ -5,8 +5,12 @@ import { describe, expect, it } from 'vitest';
 import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../cindy-bridge-source.js';
 
 // 把 CindyMcpGateway 从 bridge 源码里切出来，在 VM 中用桩件驱动。断言都走真实入口
-// （register 后的 cindy_mcp_call_tool），不直接调内部方法：披露门、自愈放行、MCP
-// 请求次数、落盘与重载都在同一条路径上被验证。
+// （register 后的 cindy_mcp_call_tool / cindy_mcp_list_tools），不直接调内部方法：披露门、
+// MCP 请求次数、落盘与重载都在同一条路径上被验证。
+//
+// 本 PR 只治「披露记录整片失效」：判定按 schema 指纹、按会话落盘。门本身保持上游的
+// 严格 fail closed —— 未披露的调用被拦下、不触达 MCP、不记账；模型显式 list_tools 后
+// 才算披露，随后放行。
 const source = CINDY_BRIDGE_EXTENSION_SOURCE;
 // 从工具名常量切到 CindyMcpGateway 类结束：register() 用到的常量与 helper 都在这段里，
 // 因此 register 后的 cindy_mcp_call_tool 走的是与生产同一条代码路径。
@@ -49,24 +53,24 @@ function loadGateway(options: {
   killErrorCode?: string;
   /** 模拟回收残留锁时被另一个实例抢先（rename 失败）。 */
   reclaimLostRace?: boolean;
-  /** 模拟另一实例在读 owner 与 rename 之间已回收重建：本次 rename 搬走的是新锁。 */
-  stealNewLock?: boolean;
+  /** 模拟挪走的残留锁内容其实是另一个实例重建的活锁（pid）。 */
+  reclaimReplacesWith?: number;
 } = {}) {
   const writes: DisclosedFile[] = [];
   const renames: string[] = [];
   const warnings: string[] = [];
   const requests: unknown[] = [];
+  const disk: { value: DisclosedFile | null } = { value: options.onDisk ?? options.stored ?? null };
   const alivePids = new Set<number>([4242, 777]);
-  // 按路径保存内容：writeFileSync 只写目标路径，renameSync 真正移动内容——
-  // 「tmp 写成功但替换失败」与「回收 rename 搬走新锁」这类次序问题才能被断言。
-  const files = new Map<string, string>();
-  const disclosurePath = '/runtime/mcp-disclosure-s1.json';
-  const lockPath = disclosurePath + '.lock';
-  if (options.onDisk ?? options.stored) {
-    files.set(disclosurePath, JSON.stringify((options.onDisk ?? options.stored)!));
-  }
-  if (options.lockOwner !== undefined) files.set(lockPath, String(options.lockOwner));
-  const externalWrite = (value: DisclosedFile) => { files.set(disclosurePath, JSON.stringify(value)); };
+  // 锁文件独立于披露文件，由外部（另一实例或崩溃残留）直接写入。
+  // 锁文件独立于披露文件，由外部（另一实例或崩溃残留）直接写入；null = 不存在。
+  const lockFile: { value: string | null } = { value: null };
+  if (options.lockOwner !== undefined) lockFile.value = String(options.lockOwner);
+  // 接管槽：rename(takeover→lock) 覆盖接管时锁内容从这里来。
+  const takeoverFile: { value: string | null } = { value: null };
+  // 披露文件的 tmp 写入单独保存：只有 rename 到正式路径才算落盘成功。
+  const tmpFile: { value: DisclosedFile | null } = { value: null };
+  const externalWrite = (value: DisclosedFile) => { disk.value = value; };
   const reclaimed: string[] = [];
 
   const code = ts.transpileModule(
@@ -95,39 +99,57 @@ function loadGateway(options: {
       dirname: (file: string) => file.slice(0, file.lastIndexOf('/')),
     },
     readFileSync: (file: string) => {
-      const raw = files.get(file);
-      if (raw === undefined) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
-      return raw;
+      if (file.endsWith('.lock')) {
+        if (lockFile.value === null) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+        return lockFile.value;
+      }
+      if (disk.value === null) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      return JSON.stringify(disk.value);
     },
     writeFileSync: (file: string, body: string) => {
       if (options.writeFails) throw Object.assign(new Error('denied'), { code: 'EACCES' });
-      files.set(file, body);
-      if (file.endsWith('.tmp')) writes.push(JSON.parse(body) as DisclosedFile);
+      if (file.endsWith('.lock')) {
+        lockFile.value = body; // 记录持锁 pid
+        return;
+      }
+      if (file.includes('.takeover-')) {
+        takeoverFile.value = body; // 接管槽内容（持锁 pid）
+        return;
+      }
+      // 披露文件的 tmp 写入：先暂存，rename 到正式路径才算落盘成功。
+      tmpFile.value = JSON.parse(body) as DisclosedFile;
     },
     renameSync: (from: string, to: string) => {
-      if (options.reclaimLostRace && from === lockPath) {
-        // 模拟另一个实例先把残留锁回收并重建了新锁：本实例的 rename 失败。
+      if (options.reclaimLostRace && from.includes('.takeover-')) {
+        // 模拟接管覆盖失败（例如路径刚被另一个接管者占用）：本实例的 rename 失败。
         throw Object.assign(new Error('lock gone'), { code: 'ENOENT' });
       }
-      let content = files.get(from);
-      if (content === undefined) throw Object.assign(new Error('gone'), { code: 'ENOENT' });
-      if (options.stealNewLock && from === lockPath) {
-        // 另一实例已在本实例读 owner 与 rename 之间回收重建：搬走的是它的新锁。
-        content = '777';
+      if (from.includes('.takeover-') && to.endsWith('.lock')) {
+        // 接管覆盖：锁路径内容换成接管槽内容；外部可预置 reclaimReplacesWith 模拟
+        // 「本实例覆盖之后、写前复核之前，另一个接管者又覆盖了一次」。
+        lockFile.value = options.reclaimReplacesWith !== undefined
+          ? String(options.reclaimReplacesWith)
+          : takeoverFile.value;
+        takeoverFile.value = null;
+      } else if (from.includes('.tmp') && !to.endsWith('.lock') && !to.includes('.takeover-')) {
+        // 披露文件落盘：rename 成功才算保存成功。
+        disk.value = tmpFile.value;
+        tmpFile.value = null;
+        writes.push(disk.value as DisclosedFile);
       }
-      files.delete(from);
-      files.set(to, content);
       renames.push(`${from} -> ${to}`);
     },
     rmSync: (file: string) => {
-      files.delete(file);
+      if (file.includes('.takeover-')) takeoverFile.value = null;
+      else if (file.endsWith('.lock')) lockFile.value = null;
+      else if (file.includes('.tmp')) tmpFile.value = null;
       reclaimed.push(file);
     },
     openSync: (file: string, flags: string) => {
-      if (flags === 'wx' && files.get(file) !== undefined) {
+      if (flags === 'wx' && lockFile.value !== null) {
         throw Object.assign(new Error('locked'), { code: 'EEXIST' });
       }
-      if (flags === 'wx') files.set(file, '');
+      if (flags === 'wx') lockFile.value = '';
       return 7;
     },
     closeSync: () => undefined,
@@ -172,32 +194,22 @@ function loadGateway(options: {
   const listTools = registered.find((t) => t.name === 'cindy_mcp_list_tools');
   if (!callTool || !listTools) throw new Error('gateway tools not registered');
 
-  const disk = {
-    get value(): DisclosedFile | null {
-      const raw = files.get(disclosurePath);
-      if (raw === undefined) return null;
-      try { return JSON.parse(raw) as DisclosedFile; } catch { return null; }
-    },
-  };
-  const lockContent = (): string | null => files.get(lockPath) ?? null;
-
+  const lockOwnerAfter = () => lockFile.value;
   return {
     gateway,
     httpClient,
     externalWrite,
     reclaimed,
+    lockOwnerAfter,
     writes,
     renames,
     warnings,
     requests,
     disk,
-    lockContent,
     callRaw: (args: Record<string, unknown> = { message: 'hi' }) =>
       callTool.execute('call-1', { server: 'cindy_orca', tool: 'send_to_worker', args }),
-    callNamed: (server: string, tool: string, args: Record<string, unknown> = {}) =>
-      callTool.execute('call-named', { server, tool, args }),
-    // 默认模拟真实模型的两步：第一次被路标拦下 → 查完 schema 重发。只有验证拦截语义的用例
-    // 用 callRaw；其他错误（如 zod 拒参）原样抛出，不在此处吞掉。
+    // 默认模拟真实模型的两步：第一次被路标拦下 → 显式 list_tools 查完 schema → 重发。
+    // 只有验证拦截语义的用例用 callRaw；其他错误（如 zod 拒参）原样抛出，不在此处吞掉。
     call: async (args: Record<string, unknown> = { message: 'hi' }) => {
       const input = { server: 'cindy_orca', tool: 'send_to_worker', args };
       try {
@@ -205,6 +217,7 @@ function loadGateway(options: {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!message.includes('Inspect this tool before execution')) throw error;
+        await listTools.execute('list-1', { server: 'cindy_orca', tool: 'send_to_worker' });
         return callTool.execute('call-2', input);
       }
     },
@@ -213,8 +226,8 @@ function loadGateway(options: {
 }
 
 describe('MCP gateway schema disclosure', () => {
-  it('blocks the first uninspected call with a signpost, records the fingerprint, and lets the retry through', async () => {
-    const { gateway, callRaw, requests, warnings, writes, disk } = loadGateway();
+  it('blocks the first uninspected call without touching MCP, and discloses only after list_tools', async () => {
+    const { gateway, callRaw, list, requests, warnings, writes, disk } = loadGateway();
     const resolved = gateway.resolveCall({ server: 'cindy_orca', tool: 'send_to_worker' }) as { tool: unknown };
     // 事前未披露
     expect((gateway as unknown as { isSchemaDisclosed(c: unknown): boolean })
@@ -226,12 +239,16 @@ describe('MCP gateway schema disclosure', () => {
     expect(first?.message).toContain('"server":"cindy_orca"');
     expect(first?.message).toContain('"tool":"send_to_worker"');
     expect(requests).toHaveLength(0);
-    expect(warnings.some((line) => line.includes('gateway tool auto-disclosed on first call'))).toBe(true);
-    // 拦的时候已经记账，因此重发时不再重复落盘
+    // 门保持 fail closed：被拦的那次不记账、不落盘
+    expect(writes).toHaveLength(0);
+    expect(disk.value).toBeNull();
+
+    // 显式查完 schema 才算披露：此时记账并落盘
+    await list();
     expect(disk.value?.entries['cindy_orca\u0000send_to_worker']).toBe(fingerprint(TOOL));
     expect(writes).toHaveLength(1);
 
-    // 第二次（模型照路标查完 schema 后重发）：放行并执行成功
+    // 之后重发：放行并执行成功
     const result = await callRaw();
     expect(requests).toHaveLength(1);
     expect(result).toMatchObject({ content: [{ type: 'text', text: 'delivered' }] });
@@ -253,14 +270,15 @@ describe('MCP gateway schema disclosure', () => {
     expect(warnings).toHaveLength(0);
     expect(writes).toHaveLength(0);
   });
-  it('re-arms the gate when the tool schema actually changes and lets the retry through', async () => {
+
+  it('re-arms the gate when the tool schema actually changes', async () => {
     const stored: DisclosedFile = {
       version: 1,
       entries: { 'cindy_orca\u0000send_to_worker': fingerprint(TOOL) },
     };
-    const { gateway, httpClient, callRaw, requests, warnings, disk } = loadGateway({ stored });
+    const { gateway, httpClient, callRaw, list, requests, warnings, disk } = loadGateway({ stored });
 
-    // 同一会话内工具描述变化（MCP 重连后拿到新 schema）
+    // 同一会话内工具描述变化（MCP 重连后拿到新 schema）→ 指纹失配 → 门重新武装
     gateway.add('cindy_orca', httpClient, [TOOL_CHANGED]);
     const changed = gateway.resolveCall({ server: 'cindy_orca', tool: 'send_to_worker' }) as { tool: unknown };
     expect((gateway as unknown as { isSchemaDisclosed(c: unknown): boolean })
@@ -270,10 +288,11 @@ describe('MCP gateway schema disclosure', () => {
     expect(first?.message).toContain('"tool":"send_to_worker"');
     expect(requests).toHaveLength(0);
 
+    // 重新查一次新 schema 才重新披露
+    await list();
+    expect(disk.value?.entries['cindy_orca\u0000send_to_worker']).toBe(fingerprint(TOOL_CHANGED));
     await callRaw();
     expect(requests).toHaveLength(1);
-    expect(warnings.some((line) => line.includes('auto-disclosed on first call'))).toBe(true);
-    expect(disk.value?.entries['cindy_orca\u0000send_to_worker']).toBe(fingerprint(TOOL_CHANGED));
   });
 
   it('merges a record another instance wrote after startup instead of overwriting it', async () => {
@@ -291,32 +310,6 @@ describe('MCP gateway schema disclosure', () => {
     // 原子替换：先写 tmp 再 rename
     expect(renames).toHaveLength(1);
     expect(renames[0]).toContain('.tmp');
-  });
-
-  it('does not roll back a newer fingerprint another instance wrote for a key this instance only read at startup', async () => {
-    // 关键：这个 key 本进程**有**记录 —— 只是启动时读来的旧值。另一个实例随后把它
-    // 更新成新指纹，本进程再披露别的工具触发落盘。按「本进程快照优先」合并会把旧值
-    // 一起写回，把对方的更新退回（下次启动又被拦一次）。只有区分「本次改动过」与
-    // 「启动时读来」才挡得住（删掉 dirty 判断这条测试就会红）。
-    const key = 'cindy_orca\u0000send_to_worker';
-    const { gateway, httpClient, callNamed, requests, disk, externalWrite } = loadGateway({
-      stored: { version: 1, entries: { [key]: fingerprint(TOOL) } },
-    });
-
-    // 本实例启动之后，另一个实例把同一个 key 更新成新 schema 的指纹
-    externalWrite({ version: 1, entries: { [key]: fingerprint(TOOL_CHANGED) } });
-
-    // 本实例披露另一个工具（自己 dirty 的 key），触发落盘
-    const other: ToolDescriptor = { name: 'list_workers', description: '列出 worker' };
-    gateway.add('cindy_orca', httpClient, [TOOL, other]);
-    await callNamed('cindy_orca', 'list_workers').catch(() => undefined);
-    await callNamed('cindy_orca', 'list_workers');
-
-    expect(requests.length).toBeGreaterThan(0);
-    // 对方的新指纹必须还在，本实例的旧值不能盖回去
-    expect(disk.value?.entries[key]).toBe(fingerprint(TOOL_CHANGED));
-    // 本次真正披露的工具照常落盘
-    expect(disk.value?.entries['cindy_orca\u0000list_workers']).toBe(fingerprint(other));
   });
 
   it('recovers a lock left behind by a crashed instance and persists', async () => {
@@ -346,15 +339,46 @@ describe('MCP gateway schema disclosure', () => {
       .isSchemaDisclosed(gateway.resolveCall({ server: 'cindy_orca', tool: 'send_to_worker' }))).toBe(true);
   });
 
-  it('skips persisting when another instance reclaimed the stale lock first', async () => {
-    // 回收必须与重新加锁互斥：rename 失败说明锁已被别人收走/重建，本实例直接放弃，
-    // 不能继续 rmSync（那会删掉对方刚建的锁，两边都进写入路径互相覆盖记录）。
+  it('aborts without deleting the lock when another instance won the takeover race', async () => {
+    // 接管覆盖成功后、写前复核前，另一个接管者又覆盖了一次（锁内容变成 777）。
+    // 本实例必须放弃落盘且**不删锁**——那是赢家的锁；删了会造成新的双写窗口。
+    const { call, requests, disk, lockOwnerAfter } = loadGateway({ lockOwner: 999, reclaimReplacesWith: 777 });
+    await call();
+    expect(requests).toHaveLength(1);
+    expect(disk.value).toBeNull();
+    // 赢家的锁保持原样（内容 777，活进程），未被本实例删除或覆盖回自己的 pid。
+    expect(lockOwnerAfter()).toBe('777');
+  });
+
+  it('skips persisting when the takeover rename fails, leaving the existing lock alone', async () => {
+    // 接管覆盖失败（另一个实例抢先）：不争，放弃本次落盘，不删对方的锁。
     const { call, requests, disk, reclaimed } = loadGateway({ lockOwner: 999, reclaimLostRace: true });
     await call();
     expect(requests).toHaveLength(1);
     expect(disk.value).toBeNull();
-    expect(reclaimed.some((file) => file.endsWith('.lock') && !file.includes('.stale-'))).toBe(false);
+    expect(reclaimed.some((file) => file.endsWith('.lock'))).toBe(false);
   });
+
+  it('keeps another instance newer fingerprint when persisting a different tool', async () => {
+    // A 启动时载入 X 的旧指纹；另一实例随后更新 X 并落盘新指纹（外部写入磁盘）；
+    // A 之后只为 Y 落盘。磁盘优先 + 只覆盖本次键：X 必须保持新指纹，不能被 A 内存
+    // 里的旧值回退——否则下次启动 A 会把 X 判为未披露。
+    const { gateway, disk, externalWrite } = loadGateway({
+      stored: { version: 1, entries: { 'cindy_orca send_to_worker': fingerprint(TOOL) } },
+    });
+    const newer = fingerprint(TOOL_CHANGED);
+    externalWrite({ version: 1, entries: { 'cindy_orca send_to_worker': newer } });
+
+    // A 为另一个工具 Y 显式披露（list_tools 单工具查询的生产路径）。
+    const other = { name: 'list_workers', description: '列出 workers', inputSchema: { type: 'object' } };
+    gateway.add('cindy_orca', { request: async () => ({ content: [] }) }, [other]);
+    await (gateway as unknown as { listResult: (params: unknown) => Promise<unknown> })
+      .listResult({ server: 'cindy_orca', tool: 'list_workers' });
+
+    expect(disk.value?.entries['cindy_orca send_to_worker']).toBe(newer);
+    expect(disk.value?.entries['cindy_orca list_workers']).toBe(fingerprint(other));
+  });
+
 
   it('treats a missing or corrupt disclosure file as undisclosed and still executes', async () => {
     for (const stored of [
@@ -369,31 +393,11 @@ describe('MCP gateway schema disclosure', () => {
     }
   });
 
-  it('restores a fresh lock its recovery rename accidentally moved', async () => {
-    // 本实例读到残留 pid 999；但在 rename 前，另一实例已完成回收并重建新锁（pid 777）。
-    // 本实例的 rename 会成功搬走对方的新锁——必须校验搬到的内容、原样搬回并放弃本次
-    // 落盘；否则两实例同时持锁，后一次替换会覆盖前一次刚存的披露记录。
-    const { call, requests, disk, lockContent } = loadGateway({ lockOwner: 999, stealNewLock: true });
-    await call();
-    expect(requests).toHaveLength(1);
-    expect(disk.value).toBeNull();
-    // 对方的新锁原样回到 lock 路径，没有被删掉
-    expect(lockContent()).toBe('777');
-  });
-
   it('keeps the in-memory gate working when the disclosure file cannot be written', async () => {
-    const otherKey = 'cindy_other other_tool';
-    const stored: DisclosedFile = {
-      version: 1,
-      entries: { [otherKey]: fingerprint({ name: 'other_tool', description: '别的工具' }) },
-    };
-    const { gateway, call, requests, writes, disk } = loadGateway({ stored, writeFails: true });
+    const { gateway, call, requests, writes } = loadGateway({ writeFails: true });
     await call();
     expect(requests).toHaveLength(1);
     expect(writes).toHaveLength(0);
-    // 替换失败：磁盘原文件原样保留（tmp 写失败，rename 未发生），他人记录不丢
-    expect(disk.value?.entries[otherKey]).toBe(stored.entries[otherKey]);
-    expect(disk.value?.entries['cindy_orca\u0000send_to_worker']).toBeUndefined();
     expect((gateway as unknown as { isSchemaDisclosed(c: unknown): boolean })
       .isSchemaDisclosed(gateway.resolveCall({ server: 'cindy_orca', tool: 'send_to_worker' }))).toBe(true);
   });

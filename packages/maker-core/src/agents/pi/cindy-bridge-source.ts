@@ -33,14 +33,7 @@ import {
   SENSITIVE_CREDENTIAL_PATH_PATTERN_SPECS,
 } from "../shared/sensitive-credential-paths.js";
 import { projectPiPackageCommandDiagnostic, projectPiManagedCommandFailure } from "../base-agent.js";
-import { PI_BASH_STATIC_SECRET_ENV_NAMES } from "./pi-bash-secret-envs.js";
 import { shellInputRedirectionParserSource } from "../shared/shell-input-redirections.js";
-import {
-  CINDY_PI_BACKGROUND_COMMAND_CONTROL_TITLE,
-  CINDY_PI_BACKGROUND_COMMANDS_ENV,
-  PI_BACKGROUND_COMMAND_MAX_CHARS,
-} from "./pi-background-commands.js";
-import { PI_BACKGROUND_COMMAND_RECEIPT_PREFIX } from "@cindy/maker-shared/agent-task";
 import { CINDY_SUBAGENT_TOOL_NAME } from "./cindy-subagent-source.js";
 
 const SHELL_INPUT_REDIRECTION_PARSER_SOURCE = shellInputRedirectionParserSource();
@@ -156,12 +149,6 @@ function isCindyShellTool(toolName: unknown): boolean {
 }
 const MANAGED_RG_PATH_ENV = 'CINDY_PI_MANAGED_RG_PATH';
 const SUBAGENT_RUN_DIR_ENV = 'CINDY_PI_SUBAGENT_RUN_DIR';
-// 后台命令(host-owned):开关 env、控制通道 title、回执前缀与长度上限全部由
-// host 侧单一来源插值,避免 bridge 与 host / maker-shared 各自维护字面量。
-const BACKGROUND_COMMANDS_ENV = ${JSON.stringify(CINDY_PI_BACKGROUND_COMMANDS_ENV)};
-const BACKGROUND_COMMAND_CONTROL_TITLE = ${JSON.stringify(CINDY_PI_BACKGROUND_COMMAND_CONTROL_TITLE)};
-const BACKGROUND_COMMAND_RECEIPT_PREFIX = ${JSON.stringify(PI_BACKGROUND_COMMAND_RECEIPT_PREFIX)};
-const MAX_BACKGROUND_COMMAND_CHARS = ${PI_BACKGROUND_COMMAND_MAX_CHARS};
 const PI_PACKAGE_MANAGEMENT_ENV = 'CINDY_PI_PACKAGE_MANAGEMENT';
 const PI_BASH_PACKAGE_HOME_ENV = 'CINDY_PI_BASH_PACKAGE_HOME';
 const PI_PACKAGE_MANAGEMENT_TITLE = 'cindy:pi-package';
@@ -173,7 +160,19 @@ const projectPiManagedCommandFailure = ${projectPiManagedCommandFailure.toString
 // 按请求解析，但绝不能继承进 LLM 可调用的 bash 子进程。名单由 host 按本次会话
 // 实际注入的动态 BYOM env 生成；permission file 同样隐藏，避免一次获批的 bash
 // 通过改写权限档给后续工具永久提权。
-const SECRET_ENV_NAMES = new Set<string>(${JSON.stringify(PI_BASH_STATIC_SECRET_ENV_NAMES)});
+const SECRET_ENV_NAMES = new Set<string>([
+  'CINDY_PI_SECRET_ENV_NAMES',
+  'CINDY_PI_PERMISSION_FILE',
+  'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
+  'CINDY_PI_FAST_MODELS',
+  'CINDY_PI_TURN_TOOL_POLICY',
+  PI_PACKAGE_MANAGEMENT_ENV,
+  PI_BASH_PACKAGE_HOME_ENV,
+  MANAGED_RG_PATH_ENV,
+  SUBAGENT_RUN_DIR_ENV,
+  'PI_CODING_AGENT_DIR',
+  'CINDY_PI_HOSTED',
+]);
 try {
   const names = JSON.parse(process.env.CINDY_PI_SECRET_ENV_NAMES ?? '[]');
   if (Array.isArray(names)) {
@@ -2880,42 +2879,42 @@ function mcpGatewayKey(serverName: string, toolName: string): string {
  * 跳过这一次落盘——本进程内存里的披露仍然有效。
  */
 function acquireDisclosureLock(lockPath: string): boolean {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      // fd 只参与 wx 独占创建这一步；锁语义是文件存在性 + pid 内容，写完即可释放。
-      const fd = openSync(lockPath, 'wx', 0o600);
-      try { writeFileSync(lockPath, String(process.pid)); } catch { /* pid 写不进去时只当普通锁 */ }
-      try { closeSync(fd); } catch { /* 关闭失败不影响已持有的锁 */ }
-      return true;
-    } catch {
-      if (attempt === 1) return false;
-      const owner = readLockOwner(lockPath);
-      if (owner === undefined || owner === process.pid || isProcessAlive(owner)) return false;
-      // 回收：把残留锁**原子地挪走**，只有 rename 成功的那个实例才有权回收。否则两个
-      // 实例会先各自读到旧 owner，然后都执行 rmSync——A 删掉旧锁并重新加锁后，B 仍然
-      // 会把 A 的新锁删掉，两边同时进入写入路径，后一次替换覆盖前一次刚存的披露记录。
-      const stale = lockPath + '.stale-' + process.pid;
-      try { rmSync(stale, { force: true }); } catch { /* 上次没清掉的回收槽 */ }
-      try {
-        renameSync(lockPath, stale);
-      } catch {
-        return false; // 已被另一个实例回收或重建：不争，跳过本次落盘。
-      }
-      // rename 只证明「搬走了某个锁」，不证明搬的是刚读到的残留锁：另一实例可能在
-      // 我们读 owner 与 rename 之间已完成回收并重建，这次 rename 搬走的是它的新锁。
-      // 校验搬到的内容，不是刚看到的残留持有者就原样搬回去并放弃本次落盘；恢复也
-      // 失败（第三者又抢先建了锁）时残件留给下次回收——本锁无授权语义，宁可多一轮
-      // 自愈，也不冒两个实例同时持锁互相覆盖记录的风险。
-      let recoveredOwner: number | undefined;
-      try { recoveredOwner = readLockOwner(stale); } catch { /* 内容读不出按不匹配处理 */ }
-      if (recoveredOwner !== owner) {
-        try { renameSync(stale, lockPath); } catch { /* 第三者已建新锁：残件留待下次回收 */ }
-        return false;
-      }
-      try { rmSync(stale, { force: true }); } catch { /* 残留回收槽不影响正确性 */ }
+  // 1) 常规获取：wx 独占创建（锁路径无文件时）。
+  try {
+    // fd 只参与 wx 独占创建这一步；锁语义是文件存在性 + pid 内容，写完即可释放。
+    const fd = openSync(lockPath, 'wx', 0o600);
+    let pidWritten = false;
+    try { writeFileSync(lockPath, String(process.pid)); pidWritten = true; } catch { /* 磁盘满等 */ }
+    try { closeSync(fd); } catch { /* 关闭失败不影响已持有的锁 */ }
+    if (!pidWritten) {
+      // 空锁谁也无法认领（owner 读不出来会被永远拒绝回收），留在路径上就是死锁。
+      // 删掉刚建的空锁、放弃本次落盘；下次调用（磁盘恢复或重启后）重新走获取。
+      try { rmSync(lockPath, { force: true }); } catch { /* 下次写入再清 */ }
+      return false;
     }
+    return true;
+  } catch { /* 锁已存在 → 走接管判定 */ }
+  const owner = readLockOwner(lockPath);
+  if (owner === undefined || owner === process.pid || isProcessAlive(owner)) return false;
+  // 2) 死锁接管：用 tmp + rename **原子覆盖**锁文件，路径上的锁从不消失——
+  //    「挪走再重建」会让锁路径短暂为空，第三个实例可以趁虚 wx 成功，与被挪走
+  //    锁的原持有者同时写入；事后校验 pid 也救不回这个窗口。覆盖式 rename 串行
+  //    执行，最后落盘者是唯一候选持有者；persistDisclosures 在写入前还会重读锁
+  //    内容复核是自己 pid，被后来者覆盖的候选会放弃且不删锁。
+  const takeover = lockPath + '.takeover-' + process.pid;
+  try { rmSync(takeover, { force: true }); } catch { /* 上次残留的接管槽 */ }
+  try {
+    writeFileSync(takeover, String(process.pid), { flag: 'wx' });
+  } catch {
+    return false; // 接管槽被并发占用：不争。
   }
-  return false;
+  try {
+    renameSync(takeover, lockPath);
+  } catch {
+    try { rmSync(takeover, { force: true }); } catch { /* 忽略 */ }
+    return false;
+  }
+  return true;
 }
 
 function readLockOwner(lockPath: string): number | undefined {
@@ -2939,6 +2938,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+
 function recordInput(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -2958,20 +2958,8 @@ function schemaHint(schema: Record<string, unknown>): string {
 class CindyMcpGateway {
   private readonly tools = new Map<string, ConnectedMcpTool>();
   private readonly unavailableServers = new Map<string, string>();
-  /**
-   * 已披露工具：key -> 当前 schema 指纹（sha256）。
-   *
-   * 披露语义按 schema 指纹判定而不是按 pi 运行时版本：schema 没变就不是新东西，
-   * 不该因为 pi 升级把整片披露作废（2026-10-13 实测：pi 1.0.2 -> 1.2.0 后，会话里
-   * 每个 gateway 工具都要重新披露，而模型常常无视提示连续重试同一调用，最后放弃
-   * 并对外宣称已派单）。schema 真变了（MCP 重连后描述/入参变化）指纹自动失配、
-   * 重新关门，安全边界不丢。落盘在宿主给的 runtime 目录，按 Cindy session 分文件，
-   * 因此重启后同 schema 直接沿用；读不到或损坏按未披露处理（fail-closed）。
-   */
+  /** 已披露工具：键为 server + NUL + tool，值为该工具当前 schema 的指纹。 */
   private readonly disclosedSchemas = new Map<string, string>();
-  /** 本进程**本次运行**新增/更新过的 key。落盘时只有这些覆盖磁盘值。 */
-  private readonly dirtyDisclosureKeys = new Set<string>();
-  private disclosureNotePending = false;
   private botMemoryFacadeEnabled = false;
   private botHelperFacadeEnabled = false;
 
@@ -3012,48 +3000,46 @@ class CindyMcpGateway {
     }
   }
 
-  /**
-   * 落盘：以**磁盘上的记录**为基，只让本进程本次真正新增/更新的记录覆盖它。
-   * 多实例可共用运行目录（同会话可能同时开着另一个 Cindy 实例），写本进程的全量
-   * 快照会把另一个实例刚更新的指纹退回旧值：实例 A 启动时读入旧指纹，B 随后保存
-   * 新指纹，之后 A 披露别的工具时把 A 的旧值一并写回，下次启动又被拦一次。
-   * 只合并「本进程没有的 key」同样挡不住这一种 —— 那个 key 本进程有，只是值是旧的，
-   * 所以必须区分「本次改动过」(dirty) 与「启动时读来的旧值」。
-   * 锁用同目录独占创建，跨进程可见；拿不到锁就退化为不写（本进程内存里的披露仍然有效）。
-   */
-  private persistDisclosures(): void {
+  private persistDisclosures(changedKey: string): void {
     const file = this.disclosureFile();
     if (!file) return;
     const temp = file + '.' + process.pid + '.tmp';
     try {
       const lockPath = file + '.lock';
       if (!acquireDisclosureLock(lockPath)) return;
+      // 候选持有者复核：接管式回收的覆盖 rename 可能被另一个接管者再覆盖。锁内容
+      // 不是自己 pid 就说明已输掉接管竞态 —— 放弃本次落盘，且**不删锁**（那是赢家的）。
+      if (readLockOwner(lockPath) !== process.pid) return;
       try {
-        let base: Map<string, string> | null = null;
+        // 以**锁内读到的磁盘记录为基础**，只覆盖本次实际披露的那个键。整份内存记录
+        // 优先会把另一个实例刚保存的新指纹改回本进程启动时载入的旧值：A 载入 X=f1，
+        // B 更新 X 落盘 f2，A 之后只为 Y 落盘时会把 X 回退成 f1——B 那边对 X 的披露
+        // 就被作废了。内存里的旧值不写回；本进程对 X 的认知只影响下次启动载入。
+        const merged: Record<string, string> = {};
         try {
           const existing = JSON.parse(readFileSync(file, 'utf8')) as {
             version?: unknown; entries?: unknown;
           };
           if (existing?.version === 1 && existing.entries && typeof existing.entries === 'object') {
-            base = new Map<string, string>();
             for (const [key, fingerprint] of Object.entries(existing.entries as Record<string, unknown>)) {
               if (typeof fingerprint === 'string' && /^[a-f0-9]{64}$/.test(fingerprint)) {
-                base.set(key, fingerprint);
+                merged[key] = fingerprint;
               }
             }
           }
         } catch {
-          // 磁盘记录缺失/损坏：无从判断谁更新，退回本进程快照（宁可多披露一次）。
+          // 磁盘记录缺失/损坏：按只有本次变更处理。
         }
-        const merged = base ?? new Map<string, string>(this.disclosedSchemas);
-        for (const key of this.dirtyDisclosureKeys) {
-          const fingerprint = this.disclosedSchemas.get(key);
-          if (fingerprint) merged.set(key, fingerprint);
-        }
-        writeFileSync(temp, JSON.stringify({ version: 1, entries: Object.fromEntries(merged) }), { mode: 0o600 });
+        const current = this.disclosedSchemas.get(changedKey);
+        if (current) merged[changedKey] = current;
+        writeFileSync(temp, JSON.stringify({ version: 1, entries: merged }), { mode: 0o600 });
         renameSync(temp, file);
       } finally {
-        try { rmSync(lockPath, { force: true }); } catch { /* 残留锁由下次写入回收 */ }
+        // 只有确认仍持有（内容是本进程 pid）才释放：被接管者覆盖后删锁会把
+        // 赢家的锁一起删掉。
+        if (readLockOwner(lockPath) === process.pid) {
+          try { rmSync(lockPath, { force: true }); } catch { /* 残留锁由下次写入回收 */ }
+        }
       }
     } catch {
       // 落盘失败只影响下次启动的体验，不影响本次门与自愈。
@@ -3212,36 +3198,15 @@ class CindyMcpGateway {
   }
 
   /**
-   * Sorted, prompt-ready server/tool names worth re-surfacing after compaction:
-   * only tools that still exist AND whose stored fingerprint still matches the
-   * live schema — a removed or schema-drifted tool must not be advertised as
-   * safe to call directly (the gate would re-close on it and waste a round-trip).
-   */
-  disclosedKeysForPrompt(limit = 48): string {
-    const all: string[] = [];
-    for (const [key, fingerprint] of this.disclosedSchemas) {
-      const tool = this.tools.get(key);
-      if (!tool || this.schemaFingerprint(tool) !== fingerprint) continue;
-      const sep = key.indexOf('\u0000');
-      all.push(sep === -1 ? key : key.slice(0, sep) + '/' + key.slice(sep + 1));
-    }
-    all.sort();
-    const shown = all.slice(0, limit);
-    if (all.length > limit) shown.push('… +' + (all.length - limit) + ' more');
-    return shown.join(', ');
-  }
-
-  /**
-   * 按当前 schema 记一次披露并落盘。自愈路径与 list_tools 显式披露共用这里，
-   * 所以“被自愈放行”的工具与“看过 schema 的工具”在下一次启动后待遇一致。
+   * 按当前 schema 记一次披露并落盘。披露判定按 schema 指纹而非 Pi 版本：Pi 升级不会
+   * 作废未变 schema 的披露；schema 真变动时指纹失配，门重新武装。
    */
   markSchemaDisclosed(call: ResolvedMcpGatewayCall): boolean {
     const key = mcpGatewayKey(call.tool.serverName, call.tool.name);
     const fingerprint = this.schemaFingerprint(call.tool);
     if (this.disclosedSchemas.get(key) === fingerprint) return false;
     this.disclosedSchemas.set(key, fingerprint);
-    this.dirtyDisclosureKeys.add(key);
-    this.persistDisclosures();
+    this.persistDisclosures(key);
     return true;
   }
 
@@ -3330,11 +3295,7 @@ class CindyMcpGateway {
           availableTools: tools.map((tool) => tool.name),
         };
       } else {
-        this.markSchemaDisclosed({
-          qualifiedName: 'mcp__' + serverName + '__' + toolName,
-          args: {},
-          tool: selected,
-        });
+        this.markSchemaDisclosed({ tool: selected, args: {} } as ResolvedMcpGatewayCall);
         payload = {
           ok: true,
           tools: [{
@@ -3431,31 +3392,9 @@ class CindyMcpGateway {
       );
     }
     if (!this.isSchemaDisclosed(resolved)) {
-      // 拦一次，把路标递到模型手上，同时记账。
-      //
-      // 记账解决的是本 PR 的原问题：披露按 pi 版本存档时，pi 一升级整片作废，模型
-      // 反复撞同一堵墙直至放弃（2026-10-13 实测）。按 schema 指纹记账后，只有真正
-      // 新增或 schema 真变动的工具才拦，同一工具的第二次调用直接放行。
-      //
-      // 拦这一次的理由是零拦截实测出来的代价（2026-10-15）：模型没有任何信号知道
-      // 该去查 schema，参数名和信封层级只能靠服务端报错反推——实测把
-      // target_session_id 猜成 worker_id、把 args 里的字段平铺到调用根，连续撞
-      // -32602 后才放弃。回执里指名 server/tool，模型才会去 list_tools。
-      //
-      // 放行的语义是“这个工具的 schema 我见过了”，不是“这组参数是对的”：参数仍
-      // 由工具自身 inputSchema 校验。所以模型若无视路标直接原样重发，最坏结果与
-      // 零拦截现状相同（被 zod 拒），本改动不会让错参数通过，只是单调地多给一次
-      // 正确答案。
-      this.markSchemaDisclosed(resolved);
-      console.warn(
-        '[cindy-bridge] gateway tool auto-disclosed on first call: '
-        + resolved.tool.serverName + '/' + resolved.tool.name
-        + '; signposting inspection instead of staying silent',
-      );
       throw new Error(
-        'Inspect this tool before execution by calling cindy_mcp_list_tools with '
-        + JSON.stringify({ server: resolved.tool.serverName, tool: resolved.tool.name })
-        + '. The current schema has already been recorded; re-send the same call to proceed.',
+        'Inspect this tool before execution by calling cindy_mcp_list_tools with ' +
+        JSON.stringify({ server: resolved.tool.serverName, tool: resolved.tool.name }) + '.',
       );
     }
     return this.executeResolvedCall(resolved, signal);
@@ -3504,31 +3443,6 @@ class CindyMcpGateway {
     this.botHelperFacadeEnabled = options.botMemoryFacade === true;
     this.botMemoryFacadeEnabled = options.botMemoryFacade === true
       && this.tools.has(mcpGatewayKey('cindy_memory', 'call_tool'));
-    // Token hygiene: post-compaction the model loses the memory of which MCP tools
-    // it already inspected and re-runs cindy_mcp_list_tools "to be safe". Inject a
-    // one-shot custom message into the first run after each successful compaction
-    // instead of editing the system prompt every run; the message then lives in
-    // context like any other turn until the next compaction summarizes it away.
-    this.disclosureNotePending = false;
-    pi.on?.('session_compact', () => { this.disclosureNotePending = true; });
-    pi.on?.('before_agent_start', () => {
-      if (!this.disclosureNotePending) return undefined;
-      this.disclosureNotePending = false;
-      const keys = this.disclosedKeysForPrompt();
-      if (!keys) return undefined;
-      return {
-        message: {
-          customType: 'cindy-mcp-disclosure-state',
-          content: [{
-            type: 'text',
-            text: 'MCP tools whose schemas you already inspected for this session (persisted across restarts): '
-              + keys + '. Call them directly; do not re-run cindy_mcp_list_tools to re-inspect them. '
-              + '(One-shot reminder after context compaction.)',
-          }],
-          display: false,
-        },
-      };
-    });
 
     if (this.botMemoryFacadeEnabled) {
       pi.registerTool({
@@ -3793,8 +3707,8 @@ class CindyMcpGateway {
       label: 'Discover Cindy MCP tools',
       description:
         'List every connected Cindy/MCP capability without loading their parameter schemas into startup context. ' +
-        'Omit arguments to discover names and descriptions. Pass a tool exact server and tool names here to inspect ' +
-        'that single input schema before its first use in this conversation.',
+        'Omit arguments to discover names and descriptions. Before invoking a tool, pass its exact server and tool ' +
+        'names here once to inspect that single input schema, then use cindy_mcp_call_tool.',
       parameters: {
         type: 'object',
         properties: {
@@ -4391,179 +4305,6 @@ export default async function cindyBridge(piApi: any) {
       '. Values above the maximum are rejected as invalid.'
     );
   }
-  // ── 后台命令(host-owned)────────────────────────────────────────────
-  // 模型侧开关 + 控制通道 bearer:host 只对「本地普通会话」注入
-  // CINDY_PI_BACKGROUND_COMMANDS=<每会话签发的随机 token>(SSH 远端不注入 —— 命令会跑在
-  // 控制端本机,路径与工作区都不对)。这条通道会以 **父会话的 env 与 cwd** spawn 进程、
-  // shell 路径也由请求方指定,而 extension_ui_request 的 title/payload 在 Pi 进程内对
-  // 所有扩展可见 —— 只凭 title 伪造不出 host 认的请求(同 Pi 包管理 token 口径)。
-  //
-  // 与包管理 token **不同的一点**:读入后不删 env。扩展重载(#3070;同处 bash home 就
-  // 因此加了 stash)会重新执行本模块,删了 env 就等于把能力在小到不可见的地方偷偷关掉:
-  // 模型下一次 background:true 会直接拿到「Background commands are unavailable」
-  // (2026-09-18 真机实测)。读取面已经封住,不必靠删 env 防泄漏 —— 该键在
-  // PI_BASH_STATIC_SECRET_ENV_NAMES 与 piSecretEnvNames 里,前台/后台 bash 的 spawn 边界
-  // 都会剥掉,子代理 runner 也另行剥离;子进程(也就是模型能控的那侧)拿不到它。
-  function isCindyBackgroundCommandToken(value) {
-    // 形状与 host 侧签发一致:randomBytes(32).toString('base64url')。
-    return typeof value === 'string' && /^[A-Za-z0-9_-]{40,256}$/.test(value);
-  }
-  var cindyBackgroundCommandTokenMemo = null;
-  function cindyBackgroundCommandToken() {
-    if (cindyBackgroundCommandTokenMemo === null) {
-      var raw = process.env[BACKGROUND_COMMANDS_ENV];
-      cindyBackgroundCommandTokenMemo = isCindyBackgroundCommandToken(raw) ? raw : '';
-    }
-    return cindyBackgroundCommandTokenMemo;
-  }
-  function cindyBackgroundCommandsEnabled() {
-    return cindyBackgroundCommandToken() !== '';
-  }
-  /**
-   * 参数面是否真的能用:能力开关 **且** 能解析出 shell。旧 Pi 不导出 getShellConfig
-   * 时没有后台执行通道 —— 那就连参数都不暴露(否则模型按 schema 调下去必定失败)。
-   */
-  function cindyBackgroundCommandAvailable() {
-    return cindyBackgroundCommandsEnabled() && resolveBackgroundCommandShellSpec() !== undefined;
-  }
-  function cindyBackgroundCommandDescription() {
-    return (
-      'Run this command in the background. Cindy starts it and returns a task id immediately; ' +
-      'the process keeps running while you continue. Use it for long-running work you do not need ' +
-      'to wait for (dev servers, watchers, long builds). The user sees it in the background tasks ' +
-      'panel and can stop it there. timeout does not apply to background commands.'
-    );
-  }
-  function cindyBashToolDescription() {
-    return cindyBackgroundCommandAvailable()
-      ? ' Set background:true to run a command in the background; Cindy starts it, shows it in ' +
-        'the background tasks panel, and the user can stop it there.'
-      : '';
-  }
-  /**
-   * shell 解析走 Pi 自己的 getShellConfig(与前台 bash 同一条解析链:settings.json
-   * 的 shellPath → Windows Git Bash → PATH),并把结果原样交给 host。旧 Pi 不导出
-   * 该函数时返回 undefined —— 后台参数不暴露,fail closed。
-   */
-  function readConfiguredShellPath() {
-    try {
-      const home = process.env.PI_CODING_AGENT_DIR;
-      if (!home || !path.isAbsolute(home)) return undefined;
-      const parsed = JSON.parse(readFileSync(path.join(home, 'settings.json'), 'utf8'));
-      const value = parsed && typeof parsed.shellPath === 'string' ? parsed.shellPath.trim() : '';
-      return value || undefined;
-    } catch (err) {
-      return undefined;
-    }
-  }
-  function resolveBackgroundCommandShellSpec() {
-    const resolveShellConfig = piCodingAgent.getShellConfig;
-    if (typeof resolveShellConfig !== 'function') return undefined;
-    try {
-      const spec = resolveShellConfig(readConfiguredShellPath());
-      if (!spec || typeof spec.shell !== 'string' || !spec.shell) return undefined;
-      return {
-        shell: spec.shell,
-        args: Array.isArray(spec.args)
-          ? spec.args.filter(function (arg) { return typeof arg === 'string'; })
-          : [],
-        commandTransport: spec.commandTransport === 'stdin' ? 'stdin' : 'standard',
-      };
-    } catch (err) {
-      return undefined;
-    }
-  }
-  /**
-   * bridge → host 控制请求(同 subagent runner 的 ctx.ui.input 通道)。
-   * 响应是 host 写入的 JSON 字符串;任何非 ok 都转成可读错误交给模型。
-   */
-  async function requestBackgroundCommand(payload, ctx) {
-    if (!ctx || !ctx.ui || typeof ctx.ui.input !== 'function') {
-      throw new Error('Cindy background commands are unavailable in this session.');
-    }
-    const raw = await ctx.ui.input(
-      BACKGROUND_COMMAND_CONTROL_TITLE,
-      JSON.stringify(Object.assign({ token: cindyBackgroundCommandToken() }, payload)),
-    );
-    let response = null;
-    try { response = JSON.parse(typeof raw === 'string' ? raw : '{}'); } catch (err) { response = null; }
-    if (!response || response.ok !== true) {
-      throw new Error(response && typeof response.error === 'string' && response.error
-        ? response.error
-        : 'Cindy could not start the background command.');
-    }
-    return response;
-  }
-  function compactBackgroundCommandTitle(command) {
-    const oneLine = String(command).replace(/\s+/g, ' ').trim();
-    return oneLine.length > 96 ? oneLine.slice(0, 95) + '\u2026' : oneLine;
-  }
-  function backgroundCommandReceiptText(response) {
-    return (
-      BACKGROUND_COMMAND_RECEIPT_PREFIX + ': ' + response.taskId + '\n' +
-      'Output: ' + response.logPath + '\n' +
-      'The command keeps running after this call returns. The user can stop it from the ' +
-      'background tasks panel; timeout does not apply to background commands.'
-    );
-  }
-  async function startCindyBackgroundCommand(toolCallId, params, signal, ctx) {
-    const command = typeof params.command === 'string' ? params.command : '';
-    if (!command.trim()) throw new Error('A background command requires a non-empty command.');
-    if (command.length > MAX_BACKGROUND_COMMAND_CHARS) {
-      throw new Error(
-        'Background command is too long (limit ' + MAX_BACKGROUND_COMMAND_CHARS + ' characters).',
-      );
-    }
-    const shell = resolveBackgroundCommandShellSpec();
-    if (!shell) throw new Error('Cindy could not resolve a shell for the background command.');
-
-    const requestedTaskId = String(toolCallId || '');
-    let response;
-    try {
-      response = await requestBackgroundCommand({
-        action: 'start',
-        taskId: requestedTaskId,
-        command: command,
-        cwd: process.cwd(),
-        shell: shell,
-        title: compactBackgroundCommandTitle(command),
-      }, ctx);
-    } catch (error) {
-      // turn 被中止时这次 control 请求会直接 reject —— 但 host 可能已经把命令跑起来了
-      // (响应在返程丢了)。taskId 就是我们发过去的 toolCallId,按它 best-effort 收回:
-      // 否则会留下一个模型完全不知道、只能靠面板发现的孤儿进程。
-      if (signal && signal.aborted) {
-        void requestBackgroundCommand({ action: 'stop', taskId: requestedTaskId }, ctx)
-          .catch(function () {});
-      }
-      throw error;
-    }
-    if (signal && signal.aborted) {
-      // 启动确认后、工具回执交付前 turn 被中止:best-effort 收回刚起的进程,
-      // 不让一个模型已经拿不到回执的命令留在后台。
-      void requestBackgroundCommand({ action: 'stop', taskId: response.taskId }, ctx)
-        .catch(function () {});
-      throw new Error('Background command was cancelled before it was reported.');
-    }
-    return {
-      content: [{ type: 'text', text: backgroundCommandReceiptText(response) }],
-      details: { backgroundTaskId: response.taskId, backgroundLogPath: response.logPath },
-    };
-  }
-  /** Claude 系模型习惯带 CC 的参数名 run_in_background;归一化成 background 后走同一路径。 */
-  function mapBackgroundCommandAlias(args) {
-    if (!args || typeof args !== 'object') return args;
-    if (args.run_in_background === undefined) return args;
-    const next = Object.assign({}, args);
-    if (next.background === undefined) next.background = args.run_in_background;
-    delete next.run_in_background;
-    return next;
-  }
-  function wantsBackgroundCommand(params) {
-    return Boolean(params)
-      && typeof params === 'object'
-      && (params.background === true || params.run_in_background === true);
-  }
   const bashTool = createBashTool(process.cwd(), {
     // PI_SESSION_FILE 会暴露 agentHome，继而让一次获批的 shell 定位并篡改
     // permission file；其余 PI_SESSION_* 元数据对完成编码任务也不是必需能力。
@@ -4579,22 +4320,11 @@ export default async function cindyBridge(piApi: any) {
     bashParameters &&
     typeof bashParameters === 'object' &&
     bashParameters.properties &&
-    typeof bashParameters.properties === 'object'
+    typeof bashParameters.properties === 'object' &&
+    bashParameters.properties.timeout &&
+    typeof bashParameters.properties.timeout === 'object'
   ) {
-    if (
-      bashParameters.properties.timeout &&
-      typeof bashParameters.properties.timeout === 'object'
-    ) {
-      bashParameters.properties.timeout.description = cindyBashTimeoutDescription();
-    }
-    if (cindyBackgroundCommandAvailable()) {
-      // 公开 schema 只保留 background;run_in_background 是 execute 前的别名归一
-      // (prepareArguments),不当作 deprecated 字段写进 schema。
-      bashParameters.properties.background = {
-        type: 'boolean',
-        description: cindyBackgroundCommandDescription(),
-      };
-    }
+    bashParameters.properties.timeout.description = cindyBashTimeoutDescription();
   }
   if (typeof bashTool.description === 'string') {
     bashTool.description =
@@ -4603,26 +4333,16 @@ export default async function cindyBridge(piApi: any) {
       CINDY_PI_BASH_DEFAULT_TIMEOUT_SECONDS +
       's default and a ' +
       CINDY_PI_BASH_MAX_TIMEOUT_SECONDS +
-      's maximum.' +
-      cindyBashToolDescription();
+      's maximum.';
   }
   pi.registerTool({
     ...bashTool,
-    prepareArguments: mapBackgroundCommandAlias,
-    execute: async (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown, ctx: unknown) => {
+    execute: async (id: string, params: unknown, signal: AbortSignal, onUpdate: unknown) => {
       const nextParams = applyCindyBashTimeoutParams(params);
       if (bashCommandMutatesPiPackages(nextParams)) {
         throw new Error(
           'Direct Pi management changes are routed through the host. Use cindy_pi_command to run the Pi command through Cindy.',
         );
-      }
-      if (wantsBackgroundCommand(nextParams)) {
-        if (!cindyBackgroundCommandsEnabled()) {
-          throw new Error(
-            'Background commands are unavailable in this session. Run the command in the foreground.',
-          );
-        }
-        return startCindyBackgroundCommand(id, nextParams, signal, ctx);
       }
       return bashTool.execute(id, nextParams as any, signal, onUpdate as any);
     },
@@ -4668,13 +4388,6 @@ export default async function cindyBridge(piApi: any) {
         if (bashCommandMutatesPiPackages(nextParams)) {
           throw new Error(
             'Direct Pi management changes are routed through the host. Use cindy_pi_command to run the Pi command through Cindy.',
-          );
-        }
-        if (wantsBackgroundCommand(nextParams)) {
-          // powershell 没有 host 侧后台执行通道:显式拒绝,避免未知参数被忽略后
-          // 静默变成前台等待(模型以为已后台运行)。
-          throw new Error(
-            'Background execution is supported by the bash tool only in this session. Run the command in the foreground.',
           );
         }
         return powershellTool.execute(id, nextParams as any, signal, onUpdate as any);
@@ -4959,9 +4672,13 @@ export default async function cindyBridge(piApi: any) {
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? mcpGateway.resolveBotMemory(event.input)
         : null;
-    // 分类只认“解析成功”：自愈放行的首次调用发生在记账之前，若在这里按披露状态
-    // 判定，它会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
-    const gatewayCall = resolvedGatewayCall;
+    const gatewayCall = resolvedGatewayCall && mcpGateway.isSchemaDisclosed(resolvedGatewayCall)
+      ? resolvedGatewayCall
+      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
+        ? resolvedGatewayCall
+        : event.toolName === CINDY_BOT_MEMORY_TOOL
+          ? resolvedGatewayCall
+        : null;
     // Invalid, unknown, or not-yet-inspected gateway input cannot execute a
     // capability. Let execute() return its deterministic discovery/schema error
     // without showing a misleading permission prompt for the wrapper itself.
@@ -5043,9 +4760,13 @@ export default async function cindyBridge(piApi: any) {
         : event.toolName === CINDY_BOT_MEMORY_TOOL
           ? mcpGateway.resolveBotMemory(event.input)
         : null;
-    // 分类只认“解析成功”：自愈放行的首次调用发生在记账之前，若在这里按披露状态
-    // 判定，它会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
-    const gatewayCall = resolvedGatewayCall;
+    const gatewayCall = resolvedGatewayCall && mcpGateway.isSchemaDisclosed(resolvedGatewayCall)
+      ? resolvedGatewayCall
+      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
+        ? resolvedGatewayCall
+        : event.toolName === CINDY_BOT_MEMORY_TOOL
+          ? resolvedGatewayCall
+        : null;
     const captureToolName = gatewayCall?.qualifiedName ?? event.toolName;
     const captureInput = gatewayCall?.args ?? event.input ?? {};
     if (!isCindyShellTool(captureToolName) && !String(captureToolName ?? '').startsWith('mcp__')) return;

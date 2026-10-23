@@ -1624,18 +1624,13 @@ describe('cindy-bridge extension source', () => {
     );
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("qualifiedName: 'mcp__' + serverName + '__' + toolName");
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private readonly disclosedSchemas');
-    // Post-compaction amnesia drives voluntary re-inspection: the persisted
-    // disclosure set is re-surfaced as a one-shot custom message on the first run
-    // after each successful compaction, never as a per-run system-prompt edit.
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on?.('session_compact'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("pi.on?.('before_agent_start'");
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain("customType: 'cindy-mcp-disclosure-state'");
-    // 披露按 schema 指纹持有 + 自愈放行（2026-10-13 pi 升级后整片失效、模型反复
-    // 撞墙后放弃的真机事故）；权限/采集分类只认“解析成功”，不再按披露状态。
+    // 披露判定按 schema 指纹（Pi 升级不再整片失效）+ 按会话落盘；门本身保持上游的
+    // 严格 fail closed：未披露的调用被拦下、不触达 MCP、不记账。
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('private schemaFingerprint(');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('markSchemaDisclosed(call: ResolvedMcpGatewayCall)');
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('gateway tool auto-disclosed on first call');
-    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('const gatewayCall = resolvedGatewayCall;');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('mcpGateway.isSchemaDisclosed(resolvedGatewayCall)');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('Inspect this tool before execution');
+    expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('const gatewayCall = resolvedGatewayCall && mcpGateway.isSchemaDisclosed(resolvedGatewayCall)');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionToolName = gatewayCall?.qualifiedName');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain('permissionInput = gatewayCall?.args');
     expect(CINDY_BRIDGE_EXTENSION_SOURCE).toContain(
@@ -2319,65 +2314,6 @@ describe('cindy-bridge extension source', () => {
   );
 });
 
-it('re-surfaces the disclosure set once after compaction instead of editing every run prompt', () => {
-  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-  const compiled = ts.transpileModule(
-    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
-      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
-    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
-  ).outputText;
-  const context: Record<string, any> = {
-    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
-    mcpContentToPi: (content: unknown) => content,
-    createHash,
-  };
-  runInNewContext(compiled, context);
-  const handlers = new Map<string, (event: any) => any>();
-  const gateway = new context.Gateway();
-  gateway.register({ registerTool: () => {}, on: (event: string, cb: (event: any) => any) => handlers.set(event, cb) });
-  expect(handlers.has('session_compact')).toBe(true);
-  expect(handlers.has('before_agent_start')).toBe(true);
-
-  // No compaction yet: the run prompt stays untouched (zero per-run token cost).
-  expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
-
-  // A successful compaction arms exactly one reminder with the current keys.
-  const client = { request: async () => ({ content: [] }) };
-  const callTool = { name: 'call_tool', description: 'd', inputSchema: { type: 'object' } };
-  const sendWorker = { name: 'send_to_worker', description: 'd', inputSchema: { type: 'object' } };
-  gateway.add('cindy_memory', client, [callTool]);
-  gateway.add('cindy_orca', client, [sendWorker]);
-  gateway.disclosedSchemas.set('cindy_memory\u0000call_tool', gateway.schemaFingerprint(callTool));
-  gateway.disclosedSchemas.set('cindy_orca\u0000send_to_worker', gateway.schemaFingerprint(sendWorker));
-  handlers.get('session_compact')!({ reason: 'threshold' });
-  const note = handlers.get('before_agent_start')!({ systemPrompt: 'base' });
-  expect(note?.message?.customType).toBe('cindy-mcp-disclosure-state');
-  expect(note?.message?.display).toBe(false);
-  const text = note?.message?.content?.[0]?.text ?? '';
-  expect(text).toContain('cindy_memory/call_tool');
-  expect(text).toContain('cindy_orca/send_to_worker');
-  expect(text).toContain('do not re-run cindy_mcp_list_tools');
-  // One-shot: the second run after the same compaction stays clean.
-  expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
-
-  // A removed tool or a drifted schema must not be advertised as safe to call:
-  // only keys whose tool still exists with a matching fingerprint are listed.
-  gateway.disclosedSchemas.set('cindy_ghosts\u0000gone_tool', gateway.schemaFingerprint(callTool));
-  gateway.disclosedSchemas.set('cindy_memory\u0000call_tool', 'stale-fingerprint');
-  handlers.get('session_compact')!({ reason: 'manual' });
-  const filtered = handlers.get('before_agent_start')!({ systemPrompt: 'base' });
-  const filteredText = filtered?.message?.content?.[0]?.text ?? '';
-  expect(filteredText).toContain('cindy_orca/send_to_worker');
-  expect(filteredText).not.toContain('gone_tool');
-  expect(filteredText).not.toContain('cindy_memory/call_tool');
-
-  // An empty disclosure set consumes the flag without emitting an empty note.
-  gateway.disclosedSchemas.clear();
-  handlers.get('session_compact')!({ reason: 'manual' });
-  expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
-  expect(handlers.get('before_agent_start')!({ systemPrompt: 'base' })).toBeUndefined();
-});
-
 it('routes Bot shortcuts through the scoped helper entry without exposing them to ordinary Pi tasks', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
   const compiled = ts.transpileModule(
@@ -2386,6 +2322,9 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
   ).outputText;
   const context: Record<string, any> = {
+    // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
+    // 指纹计算用的 createHash 必须由宿主注入。
+    createHash,
     recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
     mcpContentToPi: (content: unknown) => content,
   };
@@ -2452,239 +2391,6 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
   }
 });
 
-// ---------------------------------------------------------------------------
-// 后台命令(bridge 侧):参数归一 / shell 解析 / 控制请求 / 回执
-// ---------------------------------------------------------------------------
-
-interface BackgroundCommandHelpers {
-  cindyBackgroundCommandsEnabled: () => boolean;
-  cindyBackgroundCommandAvailable: () => boolean;
-  mapBackgroundCommandAlias: (args: unknown) => unknown;
-  wantsBackgroundCommand: (params: unknown) => boolean;
-  compactBackgroundCommandTitle: (command: string) => string;
-  resolveBackgroundCommandShellSpec: () => {
-    shell: string;
-    args: string[];
-    commandTransport: string;
-  } | undefined;
-  startCindyBackgroundCommand: (
-    toolCallId: string,
-    params: Record<string, unknown>,
-    signal: { aborted?: boolean } | undefined,
-    ctx: unknown,
-  ) => Promise<{ content: Array<{ type: string; text: string }>; details: Record<string, unknown> }>;
-}
-
-/**
- * 抽取生成 bridge 里的后台命令辅助函数放进沙箱执行:验证参数别名归一、
- * shell 解析兵底、host 控制请求形状与回执前缀,不启动真 Pi 进程。
- */
-function loadBackgroundCommandHelpers(options: {
-  env?: Record<string, string | undefined>;
-  shellConfig?: unknown;
-  configuredShellPath?: string;
-} = {}): { helpers: BackgroundCommandHelpers; shellRequests: unknown[]; env: Record<string, string | undefined> } {
-  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-  // 整个后台命令块(含 bearer 读取)都在这个区块标记之后 —— 按函数名切片会漏掉
-  // 读 token 的那几个辅助函数。
-  const start = source.indexOf('// ── 后台命令(host-owned)');
-  const end = source.indexOf('const bashTool = createBashTool', start);
-  if (start < 0 || end <= start) {
-    throw new Error('background command helpers were not found in the generated bridge');
-  }
-  const shellRequests: unknown[] = [];
-  const env: Record<string, string | undefined> = {
-    ...(options.env ?? { CINDY_PI_BACKGROUND_COMMANDS: BACKGROUND_COMMAND_TOKEN }),
-  };
-  if (options.configuredShellPath !== undefined && env.PI_CODING_AGENT_DIR === undefined) {
-    env.PI_CODING_AGENT_DIR = path.join(tmpdir(), 'cindy-pi-bg-config-home');
-  }
-  // 用 node:vm 求值而不是函数构造器:同样是「把生成的 bridge 片段当脚本跑」,但新代码
-  // 不再出现安全扫描器点名的高风险原语(文件里两处存量用法不在本 PR 范围,保持不动)。
-  const factory = runInNewContext(
-    `(function (process, path, readFileSync, piCodingAgent, BACKGROUND_COMMANDS_ENV,
-      BACKGROUND_COMMAND_CONTROL_TITLE, BACKGROUND_COMMAND_RECEIPT_PREFIX, MAX_BACKGROUND_COMMAND_CHARS) {
-      ${source.slice(start, end)}
-      return { cindyBackgroundCommandsEnabled, cindyBackgroundCommandAvailable, mapBackgroundCommandAlias, wantsBackgroundCommand,
-        compactBackgroundCommandTitle, resolveBackgroundCommandShellSpec, startCindyBackgroundCommand };
-    })`,
-  ) as (...args: unknown[]) => BackgroundCommandHelpers;
-  const helpers = factory(
-    { env, cwd: () => process.cwd() },
-    path,
-    (file: string) => {
-      if (options.configuredShellPath === undefined) throw new Error(`ENOENT ${file}`);
-      return JSON.stringify({ shellPath: options.configuredShellPath });
-    },
-    {
-      getShellConfig: (customShellPath: unknown) => {
-        shellRequests.push(customShellPath);
-        return options.shellConfig;
-      },
-    },
-    'CINDY_PI_BACKGROUND_COMMANDS',
-    'cindy:bash-background',
-    'Cindy background command started',
-    32_000,
-  );
-  return { helpers, shellRequests, env };
-}
-
-/** host 每会话签发的 bearer 形状(randomBytes(32).toString('base64url'))。 */
-const BACKGROUND_COMMAND_TOKEN = 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v';
-
-it('normalises the PI background command alias and rejects a misleading foreground run', () => {
-  const { helpers } = loadBackgroundCommandHelpers();
-  expect(helpers.cindyBackgroundCommandsEnabled()).toBe(true);
-  expect(loadBackgroundCommandHelpers({ env: {} }).helpers.cindyBackgroundCommandsEnabled()).toBe(false);
-  // bearer 不匹配(旧式布尔开关 / 空值)一律当作未启用 —— title 与 payload 在 Pi
-  // 进程内可见,能伪造请求的东西拿不到 token 就驱动不了 host。
-  expect(loadBackgroundCommandHelpers({ env: { CINDY_PI_BACKGROUND_COMMANDS: '1' } })
-    .helpers.cindyBackgroundCommandsEnabled()).toBe(false);
-  expect(loadBackgroundCommandHelpers({ env: { CINDY_PI_BACKGROUND_COMMANDS: 'short' } })
-    .helpers.cindyBackgroundCommandsEnabled()).toBe(false);
-  // Claude 系模型的 CC 参数名归一到 background;显式 background 优先。
-  expect(helpers.mapBackgroundCommandAlias({ command: 'x', run_in_background: true }))
-    .toEqual({ command: 'x', background: true });
-  expect(helpers.mapBackgroundCommandAlias({ command: 'x', run_in_background: false, background: true }))
-    .toEqual({ command: 'x', background: true });
-  expect(helpers.mapBackgroundCommandAlias({ command: 'x' })).toEqual({ command: 'x' });
-  // 幂等:别名已被消费时不再改写
-  const mapped = helpers.mapBackgroundCommandAlias({ command: 'x', run_in_background: true });
-  expect(helpers.mapBackgroundCommandAlias(mapped)).toEqual(mapped);
-  expect(helpers.wantsBackgroundCommand({ background: true })).toBe(true);
-  expect(helpers.wantsBackgroundCommand({ run_in_background: true })).toBe(true);
-  expect(helpers.wantsBackgroundCommand({ background: false })).toBe(false);
-  expect(helpers.wantsBackgroundCommand({ command: 'x' })).toBe(false);
-  expect(helpers.wantsBackgroundCommand(null)).toBe(false);
-  expect(helpers.wantsBackgroundCommand('x')).toBe(false);
-  // 标题压平空白并截断
-  expect(helpers.compactBackgroundCommandTitle('  pnpm\n\n dev   server ')).toBe('pnpm dev server');
-  expect(helpers.compactBackgroundCommandTitle('x'.repeat(200)).length).toBe(96);
-});
-
-it('resolves the shell through Pi and hands the start request to the host', async () => {
-  const { helpers, shellRequests, env } = loadBackgroundCommandHelpers({
-    shellConfig: { shell: '/bin/bash', args: ['-lc', 7], commandTransport: 'stdin' },
-    configuredShellPath: 'C:/Program Files/Git/bin/bash.exe',
-  });
-  expect(helpers.resolveBackgroundCommandShellSpec()).toEqual({
-    shell: '/bin/bash',
-    args: ['-lc'],
-    commandTransport: 'stdin',
-  });
-  expect(shellRequests).toEqual(['C:/Program Files/Git/bin/bash.exe']);
-
-  // 旧 Pi 不导出 getShellConfig:解析失败,fail closed(参数也不会被暴露)。
-  const missing = loadBackgroundCommandHelpers({ shellConfig: undefined });
-  expect(missing.helpers.resolveBackgroundCommandShellSpec()).toBeUndefined();
-
-  const requests: Array<Record<string, unknown>> = [];
-  const ctx = {
-    ui: {
-      input: async (_title: string, payload: string) => {
-        requests.push(JSON.parse(payload) as Record<string, unknown>);
-        return JSON.stringify({ ok: true, taskId: 'call-1', logPath: '/logs/call-1.log' });
-      },
-    },
-  };
-  const result = await helpers.startCindyBackgroundCommand(
-    'call-1',
-    { command: 'pnpm dev', timeout: 300, background: true },
-    { aborted: false },
-    ctx,
-  );
-  expect(requests).toHaveLength(1);
-  expect(requests[0]).toMatchObject({
-    action: 'start',
-    taskId: 'call-1',
-    command: 'pnpm dev',
-    shell: { shell: '/bin/bash', args: ['-lc'], commandTransport: 'stdin' },
-    title: 'pnpm dev',
-  });
-  // 每个控制请求都带 bearer(host 逐请求校验)。bearer **不删 env**:扩展重载后会重新执行
-  // bridge 模块,删了 env 就在重载后静默关掉能力(真机实测过);防泄漏靠 bash / 子代理的
-  // spawn 边界剥离名单,不靠删 env。
-  expect(requests[0]!.token).toBe(BACKGROUND_COMMAND_TOKEN);
-  expect(env.CINDY_PI_BACKGROUND_COMMANDS).toBe(BACKGROUND_COMMAND_TOKEN);
-  expect(helpers.cindyBackgroundCommandsEnabled()).toBe(true);
-  expect(result.content[0]!.text.startsWith('Cindy background command started')).toBe(true);
-  expect(result.content[0]!.text).toContain('/logs/call-1.log');
-  expect(result.details).toEqual({ backgroundTaskId: 'call-1', backgroundLogPath: '/logs/call-1.log' });
-});
-
-it('rejects an empty or over-long background command and reclaims an aborted start', async () => {
-  const { helpers } = loadBackgroundCommandHelpers({
-    shellConfig: { shell: '/bin/bash', args: [] },
-  });
-  const requests: Array<Record<string, unknown>> = [];
-  const ctx = {
-    ui: {
-      input: async (_title: string, payload: string) => {
-        requests.push(JSON.parse(payload) as Record<string, unknown>);
-        return JSON.stringify({ ok: true, taskId: 'call-9', logPath: '/logs/call-9.log' });
-      },
-    },
-  };
-  await expect(helpers.startCindyBackgroundCommand('c', { command: '   ' }, undefined, ctx))
-    .rejects.toThrow(/non-empty command/);
-  await expect(helpers.startCindyBackgroundCommand('c', { command: 'x'.repeat(32_001) }, undefined, ctx))
-    .rejects.toThrow(/too long/);
-  expect(requests).toHaveLength(0);
-
-  // 启动确认后 turn 被中止:best-effort 发 stop,再向模型抛取消。
-  await expect(helpers.startCindyBackgroundCommand('call-9', { command: 'pnpm dev' }, { aborted: true }, ctx))
-    .rejects.toThrow(/cancelled/);
-  expect(requests.map((request) => request.action)).toEqual(['start', 'stop']);
-  expect(requests[1]).toMatchObject({ action: 'stop', taskId: 'call-9' });
-});
-
-it('reclaims a background command whose start response was lost to an aborted turn', async () => {
-  const { helpers } = loadBackgroundCommandHelpers({
-    shellConfig: { shell: '/bin/bash', args: [] },
-  });
-  const requests: Array<Record<string, unknown>> = [];
-  const ctx = {
-    ui: {
-      // turn 中止时这次 control 请求直接 reject(响应还没回来),与「先拿到响应再发现
-      // aborted」是两条路:host 可能已经把命令跑起来了。
-      input: async (_title: string, payload: string) => {
-        requests.push(JSON.parse(payload) as Record<string, unknown>);
-        throw new Error('control request aborted');
-      },
-    },
-  };
-  await expect(
-    helpers.startCindyBackgroundCommand('call-7', { command: 'pnpm dev' }, { aborted: true }, ctx),
-  ).rejects.toThrow(/aborted/);
-  // taskId 就是我们发过去的 toolCallId:必须按它 best-effort 收回,否则会留下一个
-  // 模型完全不知道、只能靠面板发现的孤儿进程。
-  expect(requests.map((request) => request.action)).toEqual(['start', 'stop']);
-  expect(requests[1]).toMatchObject({ action: 'stop', taskId: 'call-7' });
-});
-
-it('keeps the background command capability across an extension reload', () => {
-  // 重载 = 新模块实例重新执行 env 读取。env 保留才能让重载后的能力不变(否则模型下一次
-  // background:true 直接拿到 unavailable)。
-  const env: Record<string, string | undefined> = { CINDY_PI_BACKGROUND_COMMANDS: BACKGROUND_COMMAND_TOKEN };
-  const first = loadBackgroundCommandHelpers({ env });
-  expect(first.helpers.cindyBackgroundCommandsEnabled()).toBe(true);
-  const reloaded = loadBackgroundCommandHelpers({ env });
-  expect(reloaded.helpers.cindyBackgroundCommandsEnabled()).toBe(true);
-});
-
-it('fails closed when the host rejects the background command', async () => {
-  const { helpers } = loadBackgroundCommandHelpers({
-    shellConfig: { shell: '/bin/bash', args: [] },
-  });
-  const ctx = {
-    ui: {
-      input: async () => JSON.stringify({ ok: false, error: 'too many background commands' }),
-    },
-  };
-  await expect(helpers.startCindyBackgroundCommand('call-1', { command: 'pnpm dev' }, undefined, ctx))
-    .rejects.toThrow(/too many background commands/);
-});
 
 describe('Pi same-turn library native mapping', () => {
   it('reads the current permission snapshot after a tool result and removes revoked roots', async () => {
@@ -2764,10 +2470,11 @@ it('lets cindy_mcp_call_tool omit args and forwards an empty object for no-param
     { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
   ).outputText;
   const context: Record<string, any> = {
+    // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
+    // 指纹计算用的 createHash 必须由宿主注入（PR #6002 的 schemaFingerprint 走 sha256）。
+    createHash,
     recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
     mcpContentToPi: (content: unknown) => content,
-    // PR #6002 的 schemaFingerprint 走 sha256；切片从 import 之后开始，故需注入。
-    createHash,
   };
   runInNewContext(compiled, context);
   const requests: Array<{ method: string; params: any }> = [];
@@ -2778,7 +2485,8 @@ it('lets cindy_mcp_call_tool omit args and forwards an empty object for no-param
   const gateway = new context.Gateway();
   gateway.add('cindy_memory', client, [
     { name: 'list_tools', inputSchema: { type: 'object' } },
-    { name: 'call_tool', inputSchema: { type: 'object' } },
+    // 真实 cindy server 的 call_tool schema 形状指纹: name:string + args:object + required 含 name。
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
   ]);
   const ordinary: any[] = [];
   gateway.register({ registerTool: (tool: unknown) => ordinary.push(tool) });
@@ -2788,17 +2496,177 @@ it('lets cindy_mcp_call_tool omit args and forwards an empty object for no-param
   expect(callTool.parameters.required).toEqual(['server', 'tool']);
   expect(callTool.parameters.required).not.toContain('args');
   // 披露门: 先按 schema 检视一次再调用 (与生产路径同序)。
-  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
-  await gateway.executeCall({ server: 'cindy_memory', tool: 'call_tool' });
+  // 目标选 list_tools 而不是 call_tool: 后者的参数必填 name, 「完全省略 args」对它本来就
+  // 是非法调用, 用它当夹具会把「省略即转发 {}」与「信封缺 name」两件事混在一起。
+  await gateway.listResult({ server: 'cindy_memory', tool: 'list_tools' });
+  await gateway.executeCall({ server: 'cindy_memory', tool: 'list_tools' });
   expect(requests).toHaveLength(1);
   expect(requests[0].method).toBe('tools/call');
-  expect(requests[0].params).toEqual({ name: 'call_tool', arguments: {} });
-  // 对照: 显式传 args 时仍原样转发 (既有行为不变)。
+  expect(requests[0].params).toEqual({ name: 'list_tools', arguments: {} });
+  // 对照: 显式传 args 时仍原样转发 (既有行为不变), 含通用 call_tool 的 {name, args} 信封。
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
   await gateway.executeCall({ server: 'cindy_memory', tool: 'call_tool', args: { name: 'memory_list', args: {} } });
   expect(requests[1].params).toEqual({
     name: 'call_tool',
     arguments: { name: 'memory_list', args: {} },
   });
+  // 2026-10-15 回归: args 就是「所选工具自己的参数」, 直调形态合法, schema 不得收窄;
+  // 同时必须把通用 call_tool 的信封 {name, args} 作为提示属性挂在 args 上 —— 此前 args 是
+  // 无声明字段的自由袋子, 模型看不到信封就把内层字段平铺进来并丢掉 name。
+  const argsSchema = callTool.parameters.properties.args;
+  expect(argsSchema.additionalProperties).toBe(true);
+  expect(argsSchema.properties).toHaveProperty('name');
+  expect(argsSchema.properties).toHaveProperty('args');
+  expect(argsSchema.properties.name.type).toBeUndefined();
+  expect(argsSchema.properties.args.type).toBeUndefined();
+});
+
+it('tells the model the call_tool envelope instead of forwarding a flattened envelope', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
+    // 指纹计算用的 createHash 必须由宿主注入。
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  gateway.add('cindy_memory', client, [
+    { name: 'list_tools', inputSchema: { type: 'object' } },
+    // 真实 cindy server 的 call_tool schema 形状指纹: name:string + args:object + required 含 name。
+    { name: 'call_tool', inputSchema: { type: 'object', properties: { name: { type: 'string' }, args: { type: 'object' } }, required: ['name'] } },
+  ]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'cindy_memory', tool: 'call_tool' });
+  // 模型把内层参数平铺进 args、丢掉 name: 不触达 MCP, 一次说清正确形态。
+  await expect(gateway.executeCall({
+    server: 'cindy_memory',
+    tool: 'call_tool',
+    args: { filename: 'project_x.md' },
+  })).rejects.toThrow(/envelope \{"name": <tool>, "args"/);
+  expect(requests).toHaveLength(0);
+  // 直调形态不受影响: 所选工具不是 call_tool 时, args 仍原样转发 (含参数名恰好叫 args/name)。
+  gateway.add('cindy_workspace', client, [{ name: 'status', inputSchema: { type: 'object' } }]);
+  await gateway.listResult({ server: 'cindy_workspace', tool: 'status' });
+  await gateway.executeCall({ server: 'cindy_workspace', tool: 'status', args: { args: ['x'], name: 'y' } });
+  expect(requests[0].params).toEqual({ name: 'status', arguments: { args: ['x'], name: 'y' } });
+});
+
+it('does not apply the Cindy envelope rule to a third-party tool also named call_tool', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
+    // 指纹计算用的 createHash 必须由宿主注入。
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    return { content: [{ type: 'text', text: 'ok' }] };
+  } };
+  const gateway = new context.Gateway();
+  // 用户自接的第三方 MCP: 工具同样叫 call_tool, 但信封是 {tool_name, arguments}。
+  gateway.add('third_party', client, [{
+    name: 'call_tool',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tool_name: { type: 'string' },
+        arguments: { type: 'object', additionalProperties: true },
+      },
+      required: ['tool_name'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'third_party', tool: 'call_tool' });
+  // 模型完全照检视到的 schema 调用: 必须放行到服务端, 不能被 Cindy 的信封规则连坐。
+  await gateway.executeCall({
+    server: 'third_party',
+    tool: 'call_tool',
+    args: { tool_name: 'inner', arguments: { a: 1 } },
+  });
+  expect(requests[0].params).toEqual({
+    name: 'call_tool',
+    arguments: { tool_name: 'inner', arguments: { a: 1 } },
+  });
+  // 同一 server 里, schema 形状指纹齐全 (name+args+required) 的工具仍走信封自纠错
+  // (判据是形状不是名字)。
+  gateway.add('mixed', client, [{
+    name: 'call_tool',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, args: { type: 'object' } },
+      required: ['name'],
+    },
+  }]);
+  await gateway.listResult({ server: 'mixed', tool: 'call_tool' });
+  await expect(gateway.executeCall({ server: 'mixed', tool: 'call_tool', args: { filename: 'x.md' } }))
+    .rejects.toThrow(/envelope \{"name": <tool>, "args"/);
+  expect(requests).toHaveLength(1);
+});
+
+it('leaves a direct tool alone when its required name is not the Cindy envelope', async () => {
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const compiled = ts.transpileModule(
+    source.slice(source.indexOf('const CINDY_MCP_LIST_TOOLS'), source.indexOf('async function connectServer'))
+      + '\n(globalThis as any).Gateway = CindyMcpGateway;',
+    { compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  const context: Record<string, any> = {
+    // 沙箱没有模块系统：bridge 顶部的 node:crypto import 在切片后丢失，
+    // 指纹计算用的 createHash 必须由宿主注入。
+    createHash,
+    recordInput: (value: unknown) => value && typeof value === 'object' ? value : {},
+    mcpContentToPi: (content: unknown) => content,
+  };
+  runInNewContext(compiled, context);
+  const requests: Array<{ method: string; params: any }> = [];
+  const client = { request: async (method: string, params: unknown) => {
+    requests.push({ method, params });
+    // 服务端按真实 schema 报缺 content —— 这才是模型该看到的修正信息。
+    throw Object.assign(new Error('MCP error -32602: missing content'), { invalidParams: true });
+  } };
+  const gateway = new context.Gateway();
+  // 第三方直调工具: name 是文件名, content 是正文, 没有 args 信封。
+  gateway.add('files', client, [{
+    name: 'write_file',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, content: { type: 'string' } },
+      required: ['name', 'content'],
+    },
+  }]);
+  gateway.register({ registerTool: () => undefined });
+  await gateway.listResult({ server: 'files', tool: 'write_file' });
+  // 缺 name 时必须原样走到服务端, 由服务端报它真实的参数要求 (缺 name 与缺 content);
+  // 桥不得把它引向「把 name 当工具名、其余塞进 args」的错误形状。
+  // 关键: 参数里**不能带 name** —— 带了它新旧判据都不会进信封分支, 撤掉修复这测试照样绿,
+  // 就盖不住「普通工具又收到信封提示」这个回归。
+  // 错误正文过 safeMcpFailure 脱敏 (不外泄上游 body), 所以断言错误来自服务端那条路径,
+  // 关键证据是下面两条: 请求确实发出了, 且 arguments 逐字未被桥改写。
+  await expect(gateway.executeCall({ server: 'files', tool: 'write_file', args: { content: 'text' } }))
+    .rejects.toThrow(/write_file failed/);
+  expect(requests).toHaveLength(1);
+  expect(requests[0].params).toEqual({ name: 'write_file', arguments: { content: 'text' } });
 });
 
 it('removes cache fields only for an exact learned Chat Completions route and preserves Fast', () => {
