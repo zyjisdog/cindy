@@ -2579,7 +2579,7 @@ export interface AgentSessionHandle {
   /** Read-only Pi preflight before the host changes its persisted route or context. */
   previewModelSwitch?(
     model: string,
-    opts?: { providerId?: string | null },
+    opts?: { providerId?: string | null; contextWindowBudget?: number | null },
   ): Promise<PiModelSwitchPreview>;
 
   /**
