@@ -35,6 +35,7 @@ import {
 import { projectPiPackageCommandDiagnostic, projectPiManagedCommandFailure } from "../base-agent.js";
 import { shellInputRedirectionParserSource } from "../shared/shell-input-redirections.js";
 import { CINDY_SUBAGENT_TOOL_NAME } from "./cindy-subagent-source.js";
+import { PI_BASH_STATIC_SECRET_ENV_NAMES } from './pi-bash-secret-envs.js';
 
 const SHELL_INPUT_REDIRECTION_PARSER_SOURCE = shellInputRedirectionParserSource();
 const CREDENTIAL_WORD_BOUNDARY = '\u0001';
@@ -160,19 +161,7 @@ const projectPiManagedCommandFailure = ${projectPiManagedCommandFailure.toString
 // 按请求解析，但绝不能继承进 LLM 可调用的 bash 子进程。名单由 host 按本次会话
 // 实际注入的动态 BYOM env 生成；permission file 同样隐藏，避免一次获批的 bash
 // 通过改写权限档给后续工具永久提权。
-const SECRET_ENV_NAMES = new Set<string>([
-  'CINDY_PI_SECRET_ENV_NAMES',
-  'CINDY_PI_PERMISSION_FILE',
-  'CINDY_PI_MODEL_REQUEST_PREFS_FILE',
-  'CINDY_PI_FAST_MODELS',
-  'CINDY_PI_TURN_TOOL_POLICY',
-  PI_PACKAGE_MANAGEMENT_ENV,
-  PI_BASH_PACKAGE_HOME_ENV,
-  MANAGED_RG_PATH_ENV,
-  SUBAGENT_RUN_DIR_ENV,
-  'PI_CODING_AGENT_DIR',
-  'CINDY_PI_HOSTED',
-]);
+const SECRET_ENV_NAMES = new Set<string>(${JSON.stringify(PI_BASH_STATIC_SECRET_ENV_NAMES)});
 try {
   const names = JSON.parse(process.env.CINDY_PI_SECRET_ENV_NAMES ?? '[]');
   if (Array.isArray(names)) {
