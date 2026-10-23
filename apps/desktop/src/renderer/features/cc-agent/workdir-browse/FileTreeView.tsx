@@ -409,6 +409,10 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     width: 0,
   });
   const contentLayerRef = useRef<HTMLDivElement | null>(null);
+  // 虚拟窗口变化（纵向滚动挂载 / 回收行）也要重测：仅靠 rows 变化触发时，
+  // 首次滚到更宽的深层行不会记入 extent，滚开后范围缩回、scrollLeft 被拉回
+  // （评审 P2）。测得值单调不减，重测本身廉价（读一次 scrollWidth）。
+  const virtualItems = virtualizer.getVirtualItems();
   useLayoutEffect(() => {
     if (extent.storeKey !== tree.storeKey) {
       setExtent({ storeKey: tree.storeKey, width: 0 });
@@ -417,8 +421,13 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     const inner = contentLayerRef.current;
     if (!inner) return;
     const measured = inner.scrollWidth;
-    if (measured > extent.width) setExtent({ storeKey: tree.storeKey, width: measured });
-  }, [rows, tree.storeKey, extent]);
+    // 短名时 scrollWidth 只是视口宽（w-full 内容层被撑到容器宽、没有真实溢出），
+    // 不能把它记成内容宽 —— 否则面板缩窄后占位仍按旧视口宽撑着，向右滚是空白
+    //（评审 P2）。只在内容真正溢出视口时才增长。
+    if (measured > inner.clientWidth && measured > extent.width) {
+      setExtent({ storeKey: tree.storeKey, width: measured });
+    }
+  }, [rows, tree.storeKey, extent, virtualItems]);
 
   // 滚动位置：onScroll 持续记录锚点；挂载 / 换 store / 重新激活时自动恢复。
   // treeIdentityKey 单独传入：hook 用它区分「同树换视口」（可继承位置）与
@@ -468,6 +477,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     },
     [],
   );
+
   // 右键菜单项：按 entry 类型 + 宿主提供了哪些 handler 动态生成。
   const menuActions = useMemo<TreeMenuAction[]>(() => {
     if (!menu) return [];
@@ -640,7 +650,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
               style={{ width: extent.width }}
             />
           )}
-          {virtualizer.getVirtualItems().map((vi) => {
+          {virtualItems.map((vi) => {
             const row = rows[vi.index];
             if (!row) return null;
             let content: ReactNode;
@@ -1007,3 +1017,4 @@ function InlineTreeRow({
     </div>
   );
 }
+
