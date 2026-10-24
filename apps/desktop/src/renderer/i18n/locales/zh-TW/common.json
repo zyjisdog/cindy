@@ -3222,6 +3222,7 @@
           "claudeDesc": "Claude Code 遵循 Anthropic 協議(用 x-api-key 鑑權)。填該來源用於 Claude Code 的 baseURL、金鑰與模型，留空則此來源不提供 Claude Code。",
           "codex": "Codex",
           "codexDesc": "Codex 使用 OpenAI Responses 協議。上游可選擇原生 Responses，或由 Cindy 橋接 Chat Completions、Anthropic Messages。填該來源用於 Codex 的 baseURL、金鑰與模型，留空則此來源不提供 Codex。",
+          "codexUpstream": "目前上游協議：",
           "pi": "Pi",
           "piDesc": "Pi 是多協議 harness：你的自定義或本地模型（Ollama、vLLM、自建端點）原生直連，不經 Cindy 的相容 Proxy。先在下方選 API 型別，再填該來源給 Pi 用的 base URL、金鑰與模型；留空則本來源不配置 Pi。"
         },
@@ -3507,6 +3508,7 @@
           },
           "effortMixed": "各引擎的檔位不同；選擇後套用至支援該檔位的引擎。",
           "protocol": {
+            "automatic": "自動選擇",
             "reference": "原生協定",
             "compatibility": "相容模式",
             "compatibilityHint": "相容模式可能出現執行不穩定或功能異常，建議有經驗的使用者使用。",
@@ -9124,6 +9126,7 @@
       "descriptionOn": "{{name}}會在任務有變化時查看摘要並提醒你。",
       "movedFrom": "已從{{name}}移到這裡",
       "heldBy": "現在由{{name}}負責，打開就移到這裡。",
+      "routineScopeHint": "把你自己建立的任務也交給我跟進；下方內建跟進負責回應這些任務的變化。",
       "heldByNobody": "尚未開啟",
       "restoreDefault": "恢復預設（{{name}}）",
       "saveFailed": "沒能儲存，請重試",
@@ -10802,11 +10805,12 @@
     },
     "modelSelector": {
       "displayPricing": {
+        "million": "百萬",
         "free": "免費",
         "estimated": "約 {{price}}",
         "startingAt": "{{price}} 起",
         "units": {
-          "token": "token",
+          "token": "tokens",
           "character": "字元",
           "image": "張",
           "second": "秒",
@@ -10886,9 +10890,10 @@
         "stt": "語音轉寫",
         "realtime": "即時語音",
         "embedding": "向量",
+        "decision": "決策",
         "compression": "壓縮",
         "ungrouped": "未分組",
-        "other": "其它"
+        "other": "其他"
       },
       "search": {
         "placeholder": "搜尋 {{source}} 的模型…",
@@ -11309,6 +11314,12 @@
       "alwaysAllowScopedHint": "作用於整個任務，且只限這裡列出的範圍。",
       "alwaysAllowSessionHint": "作用於整個任務，不只是這一次請求。",
       "autoReviewUnavailable": "自動審批沒完成，請確認要不要允許這次操作。",
+      "autoReviewReason": "自動審批需要你決定：{{reason}}",
+      "titleCommand": "允許執行這條指令？",
+      "titleFileRead": "允許讀取檔案？",
+      "titleFileWrite": "允許修改檔案？",
+      "titleBrowser": "允許瀏覽器執行這一步？",
+      "titlePlugin": "允許使用插件「{{plugin}}」？",
       "ruleSeparator": "、",
       "submitting": "正在送出確認…",
       "submissionFailed": "未收到確認結果。請檢查連線，若確認框仍在，可重新點擊。",
@@ -14028,6 +14039,13 @@
     },
     "builtinTemplates": {
       "schedule": {
+        "everyMinute": "每分鐘",
+        "hourlyAt": "每小時第 {{minutes}} 分",
+        "atTimes": "{{times}}",
+        "atHoursMinutes": "{{hours}} 時的第 {{minutes}} 分",
+        "monthDays": "每月 {{days}} 日",
+        "daysOrWeekdays": "{{days}}或每週 {{weekdays}}",
+        "inMonths": "{{months}}",
         "daily": "每天 {{time}}",
         "weekdays": "工作日 {{time}}",
         "weekly": "{{weekday}} {{time}}",
@@ -16098,6 +16116,9 @@
     "compression": "用於精簡冗長內容。"
   },
   "routines": {
+    "onEvent": "事件：{{source}} · {{event}}",
+    "triggerDetails": "查看觸發條件（{{count}} 項，符合任一項即執行）",
+    "noTriggers": "尚未設定觸發條件",
     "unsavedTitle": "尚有未儲存的修改",
     "unsavedDescription": "離開後會捨棄這次對例行任務的修改。",
     "discard": "放棄修改",
@@ -16169,8 +16190,8 @@
     "timeoutMs": "檢查逾時（毫秒，留空不限時）",
     "advancedSettings": "進階設定",
     "builtinFollowUp": {
-      "name": "跟進（內建）",
-      "hint": "任務卡住、等你、出錯、撞上用量上限或做完時叫醒它；內建，只能暫停或恢復。"
+      "name": "跟進已接手的任務（內建）",
+      "hint": "任務卡住、等你、出錯、達到用量上限或完成時跟進。只處理已交給我的任務。"
     },
     "builtinTodoCheck": {
       "name": "每天查待辦（內建）",

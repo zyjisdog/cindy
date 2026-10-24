@@ -1,7 +1,5 @@
 export const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 export const PI_IMAGE_INPUT_UNSUPPORTED_MARKER = `[${PI_IMAGE_INPUT_UNSUPPORTED_CODE}]`;
-export const PI_IMAGE_CAPABILITY_REFRESH_FAILED_CODE = 'PI_IMAGE_CAPABILITY_REFRESH_FAILED';
-export const PI_IMAGE_CAPABILITY_REFRESH_FAILED_MARKER = `[${PI_IMAGE_CAPABILITY_REFRESH_FAILED_CODE}]`;
 
 /** Stable Desktop main -> renderer/device-link marker; presentation localizes at display time. */
 export function isPiImageInputUnsupportedError(value: unknown): boolean {
@@ -15,6 +13,17 @@ export function isPiImageInputUnsupportedError(value: unknown): boolean {
   );
 }
 
+/** The existing Pi prompt RPC expiry signal, shared by native recovery and group settlement. */
+export function isPiPromptRpcTimeoutError(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const rec = data as { message?: unknown; sdkError?: unknown };
+  return [rec.message, rec.sdkError].some(
+    value => typeof value === 'string' && /pi rpc timeout after \d+ms: prompt\b/i.test(value),
+  );
+}
+
+export const PI_IMAGE_CAPABILITY_REFRESH_FAILED_CODE = 'PI_IMAGE_CAPABILITY_REFRESH_FAILED';
+export const PI_IMAGE_CAPABILITY_REFRESH_FAILED_MARKER = `[${PI_IMAGE_CAPABILITY_REFRESH_FAILED_CODE}]`;
 /** 图片能力已改但子进程还没加载（回合在跑 / 重载被拒），可重试。 */
 export function isPiImageCapabilityRefreshFailedError(value: unknown): boolean {
   const message = value instanceof Error ? value.message : String(value ?? '');
@@ -28,11 +37,3 @@ export function isPiImageCapabilityRefreshFailedError(value: unknown): boolean {
   );
 }
 
-/** The existing Pi prompt RPC expiry signal, shared by native recovery and group settlement. */
-export function isPiPromptRpcTimeoutError(data: unknown): boolean {
-  if (!data || typeof data !== 'object') return false;
-  const rec = data as { message?: unknown; sdkError?: unknown };
-  return [rec.message, rec.sdkError].some(
-    value => typeof value === 'string' && /pi rpc timeout after \d+ms: prompt\b/i.test(value),
-  );
-}

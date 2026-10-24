@@ -7,8 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { XdtHelperToolResult } from '../lizi_xdtHelperToolRegistry.js';
-import { registerCreateWorkerTool } from '../xdt-helper/create_worker.js';
-import type { CreateWorkerDeps } from '../xdt-helper/create_worker.js';
+import { registerCreateWorkerTool, type CreateWorkerDeps } from '../xdt-helper/create_worker.js';
 
 function parse(result: XdtHelperToolResult) {
   const [block] = result.content;

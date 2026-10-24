@@ -3222,6 +3222,7 @@
           "claudeDesc": "Claude Code는 Anthropic 프로토콜을 따릅니다(x-api-key 인증). 이 제공자의 Claude Code용 baseURL・키・모델을 입력하세요. 비워 두면 이 제공자는 Claude Code를 제공하지 않습니다.",
           "codex": "Codex",
           "codexDesc": "Codex는 OpenAI Responses 프로토콜을 사용합니다. Responses를 네이티브로 사용하거나 Chat Completions 또는 Anthropic Messages를 Cindy로 브리지하는 방식을 선택할 수 있습니다. 이 제공자의 Codex용 기본 URL, 키와 모델을 입력하세요. 비워 두면 Codex에서 사용하지 않습니다.",
+          "codexUpstream": "현재 업스트림 프로토콜: ",
           "pi": "Pi",
           "piDesc": "Pi는 멀티 프로토콜 하네스입니다: 사용자 지정/로컬 모델(Ollama, vLLM, 자체 호스팅 엔드포인트)은 Cindy 호환 프록시를 거치지 않고 네이티브로 연결됩니다. 아래에서 API 유형을 선택한 뒤 이 제공자의 Pi용 base URL, 키, 모델을 입력하세요. 비워 두면 이 제공자에 Pi를 설정하지 않습니다."
         },
@@ -3507,6 +3508,7 @@
           },
           "effortMixed": "엔진마다 추론 강도가 다릅니다. 선택한 단계를 지원하는 엔진에 적용합니다.",
           "protocol": {
+            "automatic": "자동 선택",
             "reference": "기본 API",
             "compatibility": "호환 모드",
             "compatibilityHint": "호환 모드에서는 작동이 불안정하거나 일부 기능에 문제가 생길 수 있습니다. 숙련된 사용자에게 권장합니다.",
@@ -9124,6 +9126,7 @@
       "descriptionOn": "{{name}} 님이 세션에 변화가 생기면 요약을 확인하고 알려드립니다.",
       "movedFrom": "{{name}}에서 여기로 옮겼습니다",
       "heldBy": "지금은 {{name}}이(가) 맡고 있습니다. 켜면 여기로 옮겨집니다.",
+      "routineScopeHint": "직접 만든 세션도 맡깁니다. 아래 기본 후속 확인이 담당 세션의 변화에 대응합니다.",
       "heldByNobody": "꺼짐",
       "restoreDefault": "기본값으로 복원({{name}})",
       "saveFailed": "저장하지 못했습니다. 다시 시도하세요",
@@ -10802,11 +10805,12 @@
     },
     "modelSelector": {
       "displayPricing": {
+        "million": "100만",
         "free": "무료",
         "estimated": "약 {{price}}",
         "startingAt": "{{price}}부터",
         "units": {
-          "token": "토큰",
+          "token": "tokens",
           "character": "문자",
           "image": "장",
           "second": "초",
@@ -10887,6 +10891,7 @@
         "stt": "음성 인식",
         "realtime": "실시간 음성",
         "embedding": "임베딩",
+        "decision": "의사결정",
         "compression": "압축",
         "ungrouped": "미분류",
         "other": "기타"
@@ -11309,6 +11314,12 @@
       "alwaysAllowScopedHint": "이 세션 전체에 적용되며, 여기에 표시된 범위에만 해당합니다.",
       "alwaysAllowSessionHint": "이번 요청 한 번이 아니라 이 세션 전체에 적용됩니다.",
       "autoReviewUnavailable": "자동 리뷰를 끝내지 못했습니다. 이 작업을 허용할지 확인해 주세요.",
+      "autoReviewReason": "자동 승인이 판단을 요청했어요: {{reason}}",
+      "titleCommand": "이 명령 실행을 허용할까요?",
+      "titleFileRead": "파일 읽기를 허용할까요?",
+      "titleFileWrite": "파일 변경을 허용할까요?",
+      "titleBrowser": "이 브라우저 작업을 허용할까요?",
+      "titlePlugin": "{{plugin}} 플러그인 사용을 허용할까요?",
       "ruleSeparator": ", ",
       "submitting": "확인을 제출하는 중…",
       "submissionFailed": "확인 결과를 받지 못했습니다. 연결을 확인하고 확인 창이 남아 있으면 다시 클릭하세요.",
@@ -14028,6 +14039,13 @@
     },
     "builtinTemplates": {
       "schedule": {
+        "everyMinute": "매분",
+        "hourlyAt": "매시 {{minutes}}분",
+        "atTimes": "{{times}}",
+        "atHoursMinutes": "{{hours}}시 {{minutes}}분",
+        "monthDays": "매월 {{days}}일",
+        "daysOrWeekdays": "{{days}} 또는 매주 {{weekdays}}",
+        "inMonths": "{{months}}",
         "daily": "매일 {{time}}",
         "weekdays": "평일 {{time}}",
         "weekly": "{{weekday}} {{time}}",
@@ -16098,6 +16116,9 @@
     "compression": "긴 내용을 간결하게 줄입니다."
   },
   "routines": {
+    "onEvent": "이벤트: {{source}} · {{event}}",
+    "triggerDetails": "실행 조건 보기 ({{count}}개 중 하나 충족 시 실행)",
+    "noTriggers": "설정된 실행 조건 없음",
     "unsavedTitle": "저장하지 않은 변경 사항",
     "unsavedDescription": "돌아가면 이 루틴의 변경 사항이 삭제됩니다.",
     "discard": "변경 사항 버리기",
@@ -16169,8 +16190,8 @@
     "timeoutMs": "확인 제한 시간(ms, 비우면 제한 없음)",
     "advancedSettings": "고급 설정",
     "builtinFollowUp": {
-      "name": "후속 관리(기본 제공)",
-      "hint": "세션이 멈추거나, 응답을 기다리거나, 오류가 나거나, 사용량 한도에 도달하거나, 끝나면 깨웁니다. 기본 제공 루틴이라 일시 중지와 재개만 할 수 있습니다."
+      "name": "담당 세션 후속 확인 (기본)",
+      "hint": "담당 세션이 멈추거나 응답을 기다릴 때, 오류·사용량 한도·완료 시 후속 확인합니다."
     },
     "builtinTodoCheck": {
       "name": "매일 할 일 확인(기본 제공)",

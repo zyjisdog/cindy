@@ -7,16 +7,6 @@
 
 export type ReviewSource = 'unstaged' | 'staged' | 'commit' | 'branch' | 'last-turn';
 
-/**
- * 响应的 device-link 上帧预算。量纲对齐 file-browser/device-op 的
- * DEVICE_READ_MAX_JSON_BYTES:relay 单帧 MAX_FRAME_BYTES=2MiB 按 UTF-8 字节判,
- * 用 JSON.stringify 后的字节数覆盖转义膨胀,再给 envelope 留余量。
- *
- * 常量放共享 wire 模块：读侧（markdownReader 丢基线保预览）与发侧（device-op
- * OVERSIZE 判定）用同一份，且不制造 main/git-review 内部的循环导入。
- */
-export const GIT_REVIEW_MAX_JSON_BYTES = 1_800_000;
-
 export type ReviewDisableReason =
   | 'remote-session'
   | 'no-session'
@@ -351,12 +341,22 @@ export type ReviewMarkdownPreviewReason =
   | 'source-missing'
   | 'read-error';
 
+/**
+ * 响应的 device-link 上帧预算。量纲对齐 file-browser/device-op 的
+ * DEVICE_READ_MAX_JSON_BYTES：relay 单帧 MAX_FRAME_BYTES=2MiB 按 UTF-8 字节判，
+ * 用 JSON.stringify 后的字节数覆盖转义膨胀，再给 envelope 留余量。
+ *
+ * 常量放共享 wire 模块：读侧（markdownReader 丢基线保预览）与发侧（device-op
+ * OVERSIZE 判定）用同一份，且不制造 main/git-review 内部的循环导入。
+ */
+export const GIT_REVIEW_MAX_JSON_BYTES = 1_800_000;
+
 export interface ReviewMarkdownPreviewData {
   diffId: string;
   content: string | null;
   /**
    * diff 基线（before）侧的完整 Markdown 内容，供富文本预览做块级改动对齐
-   * （高亮新增/修改块、以删除样式展示旧块）。可选字段，跨设备兼用：
+   * （高亮新增/修改块、以删除样式展示旧块）。可选字段，跨设备兼容：
    * null 或缺省 = 没有基线（新增文件）或基线不可用（过大/读不到），
    * 此时富文本预览按无改动标记渲染。旧被控端不写该字段，新端按 null 处理。
    */
@@ -375,9 +375,9 @@ export interface ReviewMarkdownPreviewRequest {
   /**
    * branch 审查在**生成 diff 那一刻**记下的 merge-base OID（快照）。
    *
-   * 为什么需要：预览的 before 内容如果按“当前 HEAD + 当前 base ref”重新算 merge-base，
+   * 为什么需要：预览的 before 内容如果按「当前 HEAD + 当前 base ref」重新算，
    * 审查期间 agent 又提交了 / 分支被 reset / base ref 更新，都会让 before 侧漂到
-   * 另一个基线上去，而界面里的 diff 仍是旧基线算的 —— 两边对不上。带上快照就固定住了。
+   * 另一个基线上去，而界面里的 diff 仍是旧基线算的 —— 两边对不上。
    * 可选字段：旧端不传 / 传 null → 回退到现场重算（与之前行为一致）。
    */
   branchMergeBaseOid?: string | null;

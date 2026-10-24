@@ -24,24 +24,14 @@ import {
 } from '@/lib/backgroundTaskStop';
 import { listSessionBackgroundTasksFor, sessionBackgroundActivityFor } from '@/lib/makerTransport';
 
+import type { RunningBashTask } from './useBackgroundBashTasks';
 import { useDocumentVisible } from './useWindowVisible';
-
-/**
- * 被控端快照里的后台 Bash 任务。本机那条 hook 已合并成 useBackgroundSessionTasks
- * (同时覆盖 local_bash 与 pi_subagent),但远程挑选用的是**上游口径**:只认非 PI 的
- * local_bash —— PI 任务的控制面在别处,不在这张表里。因此这里自带同形类型,不去引用
- * 本机 hook 的类型(那会带着 kind 字段,含义不同)。
- */
-export interface RemoteRunningBashTask {
-  taskId: string;
-  title?: string;
-}
 
 const POLL_MS = 15_000;
 
 interface RemoteBackgroundState {
   active: boolean;
-  tasks: RemoteRunningBashTask[];
+  tasks: RunningBashTask[];
 }
 
 const EMPTY_STATE: RemoteBackgroundState = { active: false, tasks: [] };
@@ -52,8 +42,8 @@ const EMPTY_STATE: RemoteBackgroundState = { active: false, tasks: [] };
  */
 export function pickRemoteBashTasks(
   tasks: ReadonlyArray<{ taskId: string; taskType?: string; title?: string; provider?: string }>,
-): RemoteRunningBashTask[] {
-  const out = new Map<string, RemoteRunningBashTask>();
+): RunningBashTask[] {
+  const out = new Map<string, RunningBashTask>();
   for (const task of tasks) {
     if (task.taskType !== 'local_bash' || task.provider === 'pi') continue;
     if (out.has(task.taskId)) continue;
@@ -98,7 +88,7 @@ export function useRemoteSessionBackgroundTasks(
     EMPTY_STATE,
   );
   const [stoppingViewKey, setStoppingViewKey] = useState<string | null>(null);
-  // 读取序号:定时器不等上一轮返回,慢的旧读取只能被更新的结果取代,不能反过来覆盖;
+  // 读取序号:同一视图不叠加轮询,切换视图后的旧读取也不能覆盖新结果;
   // 停止成功时把已发出的读取整体作废,避免在途旧快照重新点亮已熄灭的提示。
   const issuedSeqRef = useRef(0);
   const appliedSeqRef = useRef(0);
@@ -110,22 +100,29 @@ export function useRemoteSessionBackgroundTasks(
       return;
     }
     let disposed = false;
+    let inFlight = false;
     const read = () => {
+      if (inFlight) return;
+      inFlight = true;
       const seq = ++issuedSeqRef.current;
       void Promise.all([
         sessionBackgroundActivityFor(sessionId),
         listSessionBackgroundTasksFor(sessionId),
-      ]).then(([activity, list]) => {
-        if (disposed || seq <= appliedSeqRef.current) return;
-        appliedSeqRef.current = seq;
-        const next = {
-          active: activity?.active === true,
-          tasks: pickRemoteBashTasks(Array.isArray(list?.tasks) ? list.tasks : []),
-        };
-        setSnapshot((prev) =>
-          prev.viewKey === viewKey && sameState(prev, next) ? prev : { ...next, viewKey },
-        );
-      });
+      ])
+        .then(([activity, list]) => {
+          if (disposed || seq <= appliedSeqRef.current) return;
+          appliedSeqRef.current = seq;
+          const next = {
+            active: activity?.active === true,
+            tasks: pickRemoteBashTasks(Array.isArray(list?.tasks) ? list.tasks : []),
+          };
+          setSnapshot((prev) =>
+            prev.viewKey === viewKey && sameState(prev, next) ? prev : { ...next, viewKey },
+          );
+        })
+        .finally(() => {
+          inFlight = false;
+        });
     };
     read();
     const timer = setInterval(read, POLL_MS);
