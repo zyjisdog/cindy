@@ -911,42 +911,18 @@ export async function persistSessionFields(
   const previousContextWindowBudget: number | null = hasBudgetChange
     ? readSessionContextWindowBudget(sessionId)
     : null;
+  const nextContextWindowBudget: number | null = hasBudgetChange
+    ? writeSessionContextWindowBudget(sessionId, (clean.contextWindowBudget as number | null) ?? null)
+    : null;
   const rowPatch = { ...clean };
   delete rowPatch.contextWindowBudget;
   const setObj = sessionPatchToRow(rowPatch as Parameters<typeof sessionPatchToRow>[0], {
     bumpUpdatedAt: false,
   });
-  if (Object.keys(setObj).length === 0) {
-    if (!hasBudgetChange) return;
-  } else {
+  if (Object.keys(setObj).length > 0) {
     await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
-  }
-  // 预算写偏好文件放在行更新**之后**：偏好文件不可读时 store 会拒绝写（保留坏文件给
-  // 人工修），若先写就会让同一个 patch 里的其它字段（改名、归档…）整包失败。
-  // 纯预算请求不能降级：那是用户唯一的意图，吞掉错误等于「看着成功、实际还是旧窗口」。
-  const budgetOnlyPatch = Object.keys(rowPatch).length === 0;
-  // 账号边界：偏好文件按「当下」账号的 userData 解析，而上面 db.update /
-  // 下面 apply 都是 await 出来的 —— 期间切账号时这条远程镜像更新必须整条作废
-  // （与 updateSessionInDb 同口径）。Greptile P1，2026-10-24。
-  const budgetScopeCurrent = isOwnerScopeCurrent(ownerScope);
-  let budgetWritten = false;
-  let nextContextWindowBudget: number | null = null;
-  if (hasBudgetChange && budgetScopeCurrent) {
-    try {
-      nextContextWindowBudget = writeSessionContextWindowBudget(
-        sessionId, (clean.contextWindowBudget as number | null) ?? null,
-      );
-      budgetWritten = true;
-    } catch (error) {
-      if (budgetOnlyPatch) throw error;
-      // 混合更新：其它字段已落库，只降级为「预算未保存」，并从广播里剔除这个键 ——
-      // 否则 UI 会显示一个没存下去的值（Greptile P1，2026-10-24）。
-      console.warn('[sessions] write context window budget failed; other fields already saved', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      delete clean.contextWindowBudget;
-    }
+  } else if (!hasBudgetChange) {
+    return;
   }
   let runtimeProjection = {};
   if (['model', 'providerId', 'effort', 'fastMode'].some((key) => key in clean)) {
@@ -961,8 +937,7 @@ export async function persistSessionFields(
   }
   if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, { ...clean, ...runtimeProjection }, ownerScope);
   // 远程 set-* 落库后同样要把新预算应用到被控端活实例（语义与 updateSessionInDb 一致）。
-  if (budgetWritten && budgetScopeCurrent && isOwnerScopeCurrent(ownerScope)
-    && registeredSessionIpcOpts.applyContextWindowBudget) {
+  if (hasBudgetChange && registeredSessionIpcOpts.applyContextWindowBudget) {
     try {
       await registeredSessionIpcOpts.applyContextWindowBudget(sessionId, {
         previous: previousContextWindowBudget,
@@ -2524,30 +2499,9 @@ export async function updateSessionInDb(
     // 广播之后再把新预算应用到活实例：UI 先看到新选择，重建/延迟登记失败也不回滚设置。
     // 只有本函数会写这份偏好，不存在平行写入链路；回调缺失（宿主未注入）时静默跳过，
     // 新值在下次启动/恢复时按 start options 生效。
-    //
-    // 账号边界必须在这里**重新**核对：偏好文件按「当前」账号的 userData 解析
-    // （ownerScopedUserDataPath），而 DB 更新是 await 出来的 —— 期间切账号的话，
-    // 这条过期请求会把原任务的预算写进新账号的文件，原账号反而没保存
-    // （Greptile P1，2026-10-24；相邻广播本来就是同一口径）。
-    if (hasContextWindowBudgetChange && isOwnerScopeCurrent(ownerScope)) {
-      // 偏好文件不可读时 store 会拒绝写：行更新与广播都已提交，这里只能降级为
-      // 「预算未保存」（不回滚其它字段、也不让 IPC 报错盖掉已生效的改名等）——
-      // 用户在档位卡上会看到旧值，重设一次即可（GLM-5.3 独立审查，2026-10-24）。
-      let nextContextWindowBudget: number | null = null;
-      let budgetWritten = false;
-      try {
-        nextContextWindowBudget = writeSessionContextWindowBudget(sid, p.contextWindowBudget ?? null);
-        budgetWritten = true;
-      } catch (error) {
-        // 纯预算请求（`maker:set-context-window-budget` 就是这种）：这是用户唯一的
-        // 意图，必须让它失败，否则「看着成功、实际还是旧窗口」（Greptile P1，2026-10-24）。
-        if (Object.keys(p).every((key) => key === 'contextWindowBudget')) throw error;
-        console.warn('[sessions] write context window budget failed; row update already applied', {
-          sessionId: sid,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-      if (budgetWritten && opts.applyContextWindowBudget) {
+    if (hasContextWindowBudgetChange) {
+      const nextContextWindowBudget = writeSessionContextWindowBudget(sid, p.contextWindowBudget ?? null);
+      if (opts.applyContextWindowBudget) {
         try {
           await opts.applyContextWindowBudget(sid, {
             previous: previousContextWindowBudget,

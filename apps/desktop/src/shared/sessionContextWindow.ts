@@ -92,6 +92,7 @@ export function resolveRouteContextWindowBounds(
   const defaultWindow = contextWindow === null ? anchor : Math.min(contextWindow, anchor);
   return { providerId: sourceProviderId, defaultWindow, maxWindow };
 }
+
 /** Codex and Pi report their effective runtime windows; catalogs cannot replace them. */
 export function resolveSessionContextWindow(
   catalog: Pick<Catalog, 'providers'>,

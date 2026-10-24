@@ -159,9 +159,13 @@ beforeEach(async () => {
   selectQueue.length = 0;
   txCalls.length = 0;
   // 预算文件的 userData 隔离：每个用例一个新的临时目录（electron mock 的 app.getPath 指向它）。
-  // 必须 await：否则用例可能在目录建好之前就写偏好，落到上一个用例的目录里。
-  userDataDirRef.current = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-fork-userdata-'));
-  tempDirs.push(userDataDirRef.current);
+  // 必须 await：写预算是同步读 userData 路径，fire-and-forget 会让用例体内的
+  // userDataDirRef 还是空串，预算落点与读取点不一致（用例随机读不到刚写的值）。
+  {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-fork-userdata-'));
+    userDataDirRef.current = dir;
+    tempDirs.push(dir);
+  }
   txMock.mockClear();
   queryOneMock.mockReset();
   queryOneMock.mockResolvedValue(null);
