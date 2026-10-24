@@ -51,15 +51,15 @@ vi.mock('electron', async () => {
   const [{ tmpdir }, { join }] = await Promise.all([import('node:os'), import('node:path')]);
   return {
   app: {
-    // #4598 让 fork 继承任务预算，预算存储经 appSessionState 读 userData/temp。
-    // userData 必须指向真实临时目录（userDataDirRef，随 tempDirs 清理），
-    // 否则 session-context-budget-store 会写进真实 userData。
-    getPath: (name: string) =>
-      name === 'temp'
-        ? tmpdir()
-        : name === 'userData'
-          ? userDataDirRef.current
-          : join(tmpdir(), 'cindy-fork-test'),
+    // 预算用例经真实的 session-context-budget-store → ownerScopedUserDataPath →
+    // app.getPath('userData')；mock 必须暴露 app，否则报「No "app" export is defined
+    // on the electron mock」。指向 beforeEach 建的临时目录（userDataDirRef），随
+    // tempDirs 生命周期一起清理，绝不碰真实 userData。
+    // `temp` 也要一起隔离：未登录时 ownerScopedUserDataPath 退到 app.getPath('temp')，
+    // 固定路径会让同一进程内的用例共享同一份偏好文件（Greptile P2，2026-10-24）。
+    getPath: (name: string) => (
+      name === 'userData' || name === 'temp' ? userDataDirRef.current : `/tmp/cindy-fork-test/${name}`
+    ),
   },
   ipcMain: {
     handle: (
@@ -159,10 +159,9 @@ beforeEach(async () => {
   selectQueue.length = 0;
   txCalls.length = 0;
   // 预算文件的 userData 隔离：每个用例一个新的临时目录（electron mock 的 app.getPath 指向它）。
-  fs.mkdtemp(path.join(os.tmpdir(), 'cindy-fork-userdata-')).then((dir) => {
-    userDataDirRef.current = dir;
-    tempDirs.push(dir);
-  });
+  // 必须 await：否则用例可能在目录建好之前就写偏好，落到上一个用例的目录里。
+  userDataDirRef.current = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-fork-userdata-'));
+  tempDirs.push(userDataDirRef.current);
   txMock.mockClear();
   queryOneMock.mockReset();
   queryOneMock.mockResolvedValue(null);
