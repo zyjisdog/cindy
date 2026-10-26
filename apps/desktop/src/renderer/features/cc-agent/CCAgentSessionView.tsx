@@ -8,6 +8,7 @@ import { BotFollowUpInvitation } from '@/features/bots/BotFollowUpInvitation';
 import { formatSessionDuration } from '@/lib/sessionDurationFormat';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
+import { canContinueFailedTurn } from '@cindy/maker-shared/synthetic-trigger';
 /**
  * CCAgentSessionView
  * ---------------------------------------------------------------------------
@@ -43,7 +44,7 @@ import {
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { CindyMakeSessionGate } from './CindyMakeSessionGate';
 import { SessionRouteOriginGate } from './SessionRouteOriginGate';
-import { sideChatTaskRoute } from '@/features/right-sidebar/plugins/side-chat/state';
+import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { useTranslation } from 'react-i18next';
 import { buildSessionDeepLink } from '@/lib/deepLink';
@@ -280,6 +281,7 @@ import {
   getSessionRouteOwnerId,
   isOrcaLeadSession,
   isOrcaWorkerSession,
+  orcaWorkerSessionRoute,
   resolveSessionRoute,
 } from '@/lib/orcaSessionIdentity';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
@@ -506,6 +508,8 @@ function parseOrcaWorkersRevealState(state: unknown): OrcaWorkersRevealState | n
 }
 
 interface CCAgentSessionViewProps {
+  /** Topic root and reply divider, inside the existing message scroller. */
+  messageStreamHeader?: ReactNode;
   sessionIdProp?: string;
   /** Host-read metadata for an embedded remote task intentionally absent from task lists. */
   sessionSnapshotProp?: Session | null;
@@ -556,6 +560,8 @@ interface CCAgentSessionViewProps {
   sidebarTargetSessionId?: string;
   /** 禁止该常驻视图在挂载时抢占键盘焦点（例如非 owner 的分屏 pane）。 */
   disableAutofocus?: boolean;
+  /** 打开就是为了输入的紧凑视图（伙伴私聊话题面板）：照常把焦点放进输入框。 */
+  focusComposerOnOpen?: boolean;
   /** 历史回查只读视图：保留消息流与上下文，但不允许发送或修改 Session。 */
   readOnly?: boolean;
   /** Bot 路由提供的其它持久 Bot，交给标准输入框作为结构化委派目标。 */
@@ -822,6 +828,7 @@ export function CCAgentSessionView(props: CCAgentSessionViewProps) {
 }
 
 function CCAgentSessionContent({
+  messageStreamHeader,
   sessionIdProp,
   sessionSnapshotProp,
   routeOwner,
@@ -838,6 +845,7 @@ function CCAgentSessionContent({
   onSessionNavigate,
   sidebarTargetSessionId,
   disableAutofocus = false,
+  focusComposerOnOpen = false,
   readOnly = false,
   botMentions,
   botIdentity,
@@ -1418,9 +1426,15 @@ function CCAgentSessionContent({
   }, [session?.status, sessionId, navigate, ownsWindowRoute]);
   const vendorAuthGate = useVendorAuthGate();
   const { confirmWithCheckbox } = useConfirmDialog();
+  const [workerRouteChecked, setWorkerRouteChecked] = useState<string | null>(null);
 
   useEffect(() => {
     if (!sessionId || !searchJump) return;
+    if (ownsWindowRoute && !session) return;
+    // The route owner hands Worker jumps to the Lead sidebar. Do not consume
+    // the anchor in this temporary view while its workflow read is in flight.
+    if (ownsWindowRoute && !isOrcaMode && !isCompactRail && session
+      && isOrcaWorkerSession(session) && workerRouteChecked !== location.key) return;
     if (searchJump.sessionId !== sessionId) {
       if (!session) return;
       // 仅路由主权实例回收「跳转目标 ≠ 当前会话」的陈旧状态：分屏的嵌入 pane
@@ -1489,12 +1503,15 @@ function CCAgentSessionContent({
     clearSearchJumpState,
     isOrcaLeadSessionView,
     isOrcaMode,
+    isCompactRail,
+    location.key,
     ownsWindowRoute,
     requestFocusMessage,
     searchJump,
     session,
     sessionId,
     t,
+    workerRouteChecked,
   ]);
 
   // 后台任务面板行点击 → 聊天流定位对应任务卡:sessionId 匹配当前会话才消费;
@@ -1540,15 +1557,21 @@ function CCAgentSessionContent({
     void orcaWorkflowsFor(session.id)
       .getByWorkerSession(session.id)
       .then((workflow) => {
-        if (!cancelled && workflow) {
-          navigate(`/cc-agent/${workflow.leadSessionId}?worker=${sessionId}`, { replace: true });
+        if (cancelled) return;
+        if (workflow) {
+          navigate(orcaWorkerSessionRoute(workflow.leadSessionId, sessionId, location.search), {
+            replace: true,
+            state: location.state,
+          });
+        } else {
+          setWorkerRouteChecked(location.key);
         }
       })
-      .catch(() => undefined);
+      .catch(() => { if (!cancelled) setWorkerRouteChecked(location.key); });
     return () => {
       cancelled = true;
     };
-  }, [isOrcaMode, isCompactRail, navigate, ownsWindowRoute, session, sessionId]);
+  }, [isOrcaMode, isCompactRail, location.key, location.search, location.state, navigate, ownsWindowRoute, session, sessionId]);
 
   // F2: controlled folder picker open state
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
@@ -1844,6 +1867,7 @@ function CCAgentSessionContent({
     cancelUsageLimitWait,
     errorIsRecoverable,
     errorRetryText,
+    errorCanContinue,
     disposedErrorPersistId,
     credentialSwitchWait,
     continuationInFlightClientId,
@@ -1902,6 +1926,10 @@ function CCAgentSessionContent({
     updateQueueItemContent,
     chatDisplaySnapshot,
   } = useCCAgentChat(sessionId, handleTitleUpdate, { chatRealtime });
+  useBotIslandVisibleSession(
+    viewVisible && session?.id === sessionId && historyLoaded ? sessionId ?? null : null,
+    ownsWindowRoute && !isCompactRail && !isOrcaMode,
+  );
   const clearQueueComposerEditDraft = useCallback(
     (edit: NonNullable<typeof queueComposerEdit>, files: readonly AttachedFile[]) => {
       const originalIds = new Set(edit.originalAttachmentIds);
@@ -2874,7 +2902,7 @@ function CCAgentSessionContent({
           toast.info(t('chat.sideChat.mainTaskOnly'));
           return;
         }
-        void openSideChatTab(sessionId, { prompt: payload.args, onOpen: (id, deviceId) => navigate(sideChatTaskRoute(id, deviceId)) });
+        void openSideChatTab(sessionId, { prompt: payload.args });
         return;
       }
       if (payload.command === 'cmd') {
@@ -3567,7 +3595,6 @@ function CCAgentSessionContent({
         const accepted = await openSideChatTab(sessionId, {
           prompt: args,
           attachments: files,
-          onOpen: (id, deviceId) => navigate(sideChatTaskRoute(id, deviceId)),
         });
         return { handled: true, accepted, message };
       }
@@ -4635,6 +4662,20 @@ function CCAgentSessionContent({
     continueAfterSilentStop();
   }, [continueAfterSilentStop]);
 
+  const canContinueError = canContinueFailedTurn({
+    error,
+    retryText: errorRetryText,
+    running: isAgentBusy || errorIsRecoverable || !!credentialSwitchWait || syntheticContinuationPending,
+    hostCanContinue: errorCanContinue === true,
+  });
+  const handleContinueAfterError = useCallback(async () => {
+    if (!sessionId || !canContinueError || isHistoryRecoveryPending()) return;
+    invalidateHistoryRecoveryNavigation();
+    await rebuildClaudeSubscriptionSessionBeforeRetry(errorReason);
+    await makerChatStore.sendUiTrigger(sessionId, CONTINUE_AFTER_ERROR_PROMPT);
+  }, [canContinueError, errorReason, invalidateHistoryRecoveryNavigation, isHistoryRecoveryPending,
+    rebuildClaudeSubscriptionSessionBeforeRetry, sessionId]);
+
   // 点击 Cancel 关闭报错 banner 同样是处置(用户选择不管它了)。
   const handleDismissError = useCallback(() => {
     if (sessionId) ackErrorAlertHandled(sessionId);
@@ -5228,6 +5269,7 @@ function CCAgentSessionContent({
     <BotChatQuoteProvider value={botChatQuote}>
     <MessageReadAloudContext.Provider value={messageReadAloud.value}>
     <MessageStream
+      header={messageStreamHeader}
       key={sessionId}
       sessionId={sessionId}
       sessionTitle={session?.title ?? null}
@@ -5250,7 +5292,7 @@ function CCAgentSessionContent({
       activeVoiceCallId={activeVoiceCallId}
       historyVisibleAfter={session?.source === 'side-chat' ? new Date(session.createdAt).getTime() : undefined}
       onAskInSideChat={!readOnly && canNavigateSession && sessionId && session?.source !== 'side-chat' && session?.source !== 'bot'
-        ? (quote) => openSideChatTab(sessionId, { quote, onOpen: (id, deviceId) => navigate(sideChatTaskRoute(id, deviceId)) }) : undefined}
+        ? (quote) => openSideChatTab(sessionId, { quote }) : undefined}
       cindyMakeSessionId={session?.source === 'cindy-make' ? sessionId : undefined}
       cindyMakeCompletionInComposer={session?.source === 'cindy-make' && (remoteMakeCards.supported || (!remoteDeviceId && !readOnly && typeof window.electronAPI.cindyMakeTest === 'function'))}
       historyLoaded={historyLoaded}
@@ -5766,6 +5808,7 @@ function CCAgentSessionContent({
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
                 onRetry={handleRetry}
+                onContinueAfterError={canContinueError ? handleContinueAfterError : undefined}
                 onSilentStopContinue={handleSilentStopContinue}
                 usageLimitWait={usageLimitWait}
                 onCancelUsageLimitWait={cancelUsageLimitWait}
@@ -6034,6 +6077,8 @@ function CCAgentSessionContent({
                     <BotChatQuoteComposerPreview sessionId={sessionId} quote={pendingReplyQuote}
                       getMessage={getQuoteMessage} names={botQuoteNames} />
                   ) : remoteMakeCards.handlesSession ? <SessionResourceCards state={remoteMakeCards} /> : undefined}
+                  // Picking 「回复」 brings the caret here, ready to type the reply.
+                  focusRequest={pendingReplyQuote}
                   onSend={handleSend}
                   onComposerTyping={handleComposerTyping}
                   onBeforeVoiceInputStart={handleBeforeVoiceInputStart}
@@ -6128,8 +6173,8 @@ function CCAgentSessionContent({
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
-                  disableAutofocus={isCompactRail || disableAutofocus}
-                  focusOnStorageKeyChange={ownsRoute}
+                  disableAutofocus={(isCompactRail && !focusComposerOnOpen) || disableAutofocus}
+                  focusOnStorageKeyChange={ownsRoute || focusComposerOnOpen}
                   // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
                   // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话
                   // (worker 自己不能再开协同)。

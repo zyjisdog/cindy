@@ -1,4 +1,5 @@
 import { VideoSitePreview } from './VideoSitePreview';
+import { InlineVideoPlayer } from './InlineVideoPlayer';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
 import { richVisualStyle, splitRichAnswer, richAnswerText, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
 import { RichAnswer } from './RichAnswer';
@@ -15,6 +16,7 @@ import { AgentErrorDetails } from './AgentErrorDetails';
 import { ErrorNotice } from '@/components/ErrorNotice';
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { CompanionMessageActions } from './CompanionMessageActions';
+import { MarkdownCodeCopyButton } from './MarkdownCodeCopyButton';
 import { BotGroupQuote } from './BotGroupQuote';
 import { companionReplyQuoteDisplay, companionReplyQuoteFor } from './companionReplyQuote';
 import type { ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
@@ -3939,6 +3941,7 @@ function MessageBubble({
             renderText={(text, index) => (
               <View key={`text:${index}`} style={styles.sentInlineTextChunk}>
                 <MarkdownBody
+                  codeCopyEnabled={!shareSelectionActive}
                   layout={contentLayout}
                   markdownImageCacheKey={item.message.key}
                   onOpenPayload={actions.onOpenPayload}
@@ -3954,6 +3957,7 @@ function MessageBubble({
           />
         ) : (
           <MarkdownBody
+            codeCopyEnabled={!shareSelectionActive}
             renderRichAnswers={item.message.kind === 'assistant'}
             richStateKey={item.message.source.clientId ?? item.message.key}
             allowIosUITextView={!shouldCollapseLongMessage || actions.companion === true}
@@ -5782,6 +5786,7 @@ function CompanionCardMarkdown({ text, actions, messageKey }: { text: string; ac
 // 不跳转界面;整条复制走操作条按钮。选择按块进行(原生 Text 能力边界,跨段选择做不到)。
 function MarkdownBodyBase({
   allowIosUITextView = true,
+  codeCopyEnabled = true,
   boundTextRuns = false,
   markdownImageCacheKey,
   layout,
@@ -5810,6 +5815,8 @@ function MarkdownBodyBase({
    * 气泡(长代码围栏横向裁切 + 纵向巨高空白)。
    */
   pinContentWidth?: boolean;
+  /** 分享图片选择态关闭块级操作,避免把按钮带进导出内容。 */
+  codeCopyEnabled?: boolean;
   /** 完成态消息为 true:各块 Text 开原生选中(含内嵌图片 View 的块除外,Android 上有风险)。 */
   selectable?: boolean;
   /** 消息流式中:文件 chip 层跳过远端验证。 */
@@ -6061,14 +6068,17 @@ function MarkdownBodyBase({
     if (block.type === 'code') {
       // 围栏代码在气泡内换行,不用横向 ScrollView:后者在展开长用户消息时
       // 会按未折行内容报出超高,气泡巨幅空白并把每行裁在右侧圆角外。
+      const showCodeCopyButton = codeCopyEnabled && block.text.trim().length > 0;
       return (
         <View key={block.key} style={styles.markdownCodeFrame}>
+          {showCodeCopyButton ? <MarkdownCodeCopyButton text={block.text} /> : null}
           <View
             style={[
               styles.markdownCodeContent,
               {
                 paddingHorizontal: layout.codePaddingHorizontal,
-                paddingVertical: layout.codePaddingVertical,
+                paddingBottom: layout.codePaddingVertical,
+                paddingTop: showCodeCopyButton ? 0 : layout.codePaddingVertical,
               },
             ]}
           >
@@ -6207,7 +6217,7 @@ function MarkdownBodyBase({
         {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
       </MarkdownSelectableText>
     );
-  }, [allowIosUITextView, boundTextRuns, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
+  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, styles, t]);
   return (
     <View
       collapsable={false}
@@ -6627,6 +6637,8 @@ export function AttachmentStrip({
   layout,
   onOpen,
   onOpenFile,
+  onImageError,
+  imageReloadKeys,
   onResolveRemoteMedia,
   usePreviewState = useRecyclingState,
 }: {
@@ -6639,6 +6651,10 @@ export function AttachmentStrip({
   onOpen?: (payload: MessagePayload) => void;
   /** Index within this strip's file chips, for callers that resolve files by ID on tap. */
   onOpenFile?: (index: number) => void;
+  /** Index within this strip's images, for owners that refresh short-lived authorization. */
+  onImageError?: (index: number) => void;
+  /** Reset only the failed image when authorization returns the same URL. */
+  imageReloadKeys?: readonly number[];
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
   usePreviewState?: MediaPreviewStateHook;
 }) {
@@ -6659,13 +6675,14 @@ export function AttachmentStrip({
           兜底命中时替换成 file:// 直接渲染(payload 同源替换,点开查看器同图)。 */}
       {imageAttachments.map((item, index) => (
         <MediaPreview
-          key={`${item.kind}:${item.uri ?? item.name}:${index}`}
+          key={`${item.kind}:${item.uri ?? item.name}:${index}:${imageReloadKeys?.[index] ?? 0}`}
           label={item.name}
           layout={layout}
           media={{ kind: 'image', url: item.uri ?? '', previewable: item.previewable }}
           localPreview={clientId ? getImagePreview?.(clientId, index, item.name, undefined, item.sha256, item.uri) : undefined}
           onOpen={onOpen ? () => onOpen(buildAttachmentPayload(applySentAttachmentThumbOverlay(item))) : undefined}
           onResolveRemoteMedia={onResolveRemoteMedia}
+          onImageError={onImageError ? () => onImageError(index) : undefined}
           variant="attachment"
           usePreviewState={usePreviewState}
         />
@@ -6854,6 +6871,7 @@ function MediaPreview({
   label,
   onOpen,
   onResolveRemoteMedia,
+  onImageError,
   variant = 'card',
   presentationOnly = false,
   localPreview,
@@ -6864,6 +6882,7 @@ function MediaPreview({
   label: string;
   onOpen?: () => void;
   onResolveRemoteMedia?: ResolveRemoteMediaFn;
+  onImageError?: () => void;
   variant?: 'card' | 'attachment';
   presentationOnly?: boolean;
   localPreview?: SentMessageImagePreview;
@@ -6931,6 +6950,7 @@ function MediaPreview({
   const handleImageError = useCallback(() => {
     if (media.previewable) {
       setResolveState({ status: 'error' });
+      onImageError?.();
       return;
     }
     if (imageRetryUsedRef.current) {
@@ -6939,7 +6959,7 @@ function MediaPreview({
     }
     imageRetryUsedRef.current = true;
     resolveThumbnail(true);
-  }, [media.previewable, resolveThumbnail]);
+  }, [media.previewable, onImageError, resolveThumbnail]);
 
   // Measure with the same decoder that displays the image: RN getSize cannot
   // decode SVG. Reuse the decoded dimensions without a second image request.
@@ -9946,13 +9966,15 @@ export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
 function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<typeof MarkdownBodyBase>[0] }) {
   const origin = useContext(ChatFilePathContext);
   const resolver = useContext(MarkdownRemoteMediaContext);
+  const visible = useContext(MessageHeavyContentVisibilityContext);
   const [width, setWidth] = useState(0);
   const raw = richMediaSource(node);
   if (!raw || (node.kind !== 'image' && node.kind !== 'video' && node.kind !== 'audio')) return null;
   if (node.kind === 'video' && youtubeVideo(raw)) return <VideoSitePreview src={raw} title={richString(node, 'alt', 'YouTube')} />;
   const direct = /^(?:https?|xdt-audio|xdt-video|cindy-media):\/\//.test(raw);
-  const url = direct ? raw : mobileMarkdownManagedImagePreviewUrl(raw, origin?.workdir, body.markdownImageCacheKey, origin?.remoteHostId, origin?.sessionId);
-  // Outside-workdir files retain the existing explicit-open path; never fetch them automatically.
+  const resolveUrl = node.kind === 'video' ? mobileMarkdownImageUrlForWorkdir : mobileMarkdownManagedImagePreviewUrl;
+  const url = direct ? raw : resolveUrl(raw, origin?.workdir, body.markdownImageCacheKey, origin?.remoteHostId, origin?.sessionId);
+  // Images outside workdir retain explicit-open. Video resolves only on explicit play.
   if (!url) return <MarkdownBodyBase {...body} text={richMarkdown(node) ?? ''} streaming={false} />;
   const label = richString(node, 'alt', node.kind);
   const media: NormalizedToolMedia = { kind: node.kind, url, title: label, previewable: isDirectPreviewableMediaUrl(url) };
@@ -9971,7 +9993,9 @@ function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<type
     imagePreviewHeight: imageHeight,
     mediaPreviewWidth: Math.min(body.layout.mediaPreviewWidth, width) };
   return <View style={{ minWidth: 0 }} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
-    {width > 0 ? <MediaPreview key={previewKey} layout={layout} media={media} label={label} onResolveRemoteMedia={resolver}
+    {width > 0 && node.kind === 'video' ? <InlineVideoPlayer key={previewKey} url={url} label={label}
+      width={width} visible={visible} resolve={resolver} />
+      : width > 0 ? <MediaPreview key={previewKey} layout={layout} media={media} label={label} onResolveRemoteMedia={resolver}
       usePreviewState={useState}
       onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined} /> : null}
   </View>;
