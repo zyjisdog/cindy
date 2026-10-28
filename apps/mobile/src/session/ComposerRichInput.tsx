@@ -29,6 +29,8 @@ import { useComposerWebViewRecovery } from '@/session/useComposerWebViewRecovery
 
 export interface ComposerRichInputHandle {
   expand?(): void;
+  /** WebView read barrier; validates the caller's scope before acknowledging the draft. */
+  flushDocument?(isCurrent?: () => boolean): Promise<ComposerDocument>;
   getSelection(draft: string): ComposerSelection;
   rememberSelection(draft: string, selection: { start: number; end: number }): void;
   applyDocumentAndSetSelectionToEnd(document: ComposerDocument): void;
@@ -36,11 +38,6 @@ export interface ComposerRichInputHandle {
   /** Apply a document and place the caret where possible without opening the keyboard. */
   applyDocumentAndSetSelection(document: ComposerDocument, offset: number): void;
   blur(): void;
-  /**
-   * 把编辑器当前内容(含输入法未提交的组字文本)发布给 native,并等这次发布落地。
-   * 发送前调用:native 草稿平时只收已提交正文,不补这一刀就会发出组字前的旧正文。
-   */
-  flush(): Promise<void>;
   focus(): void;
   insertNode(node: ComposerNode): void;
 }
@@ -64,8 +61,6 @@ export interface ComposerRichInputProps {
   onPasteImages?: (uris: string[]) => void;
   onPasteImagesLoadFailed?: () => void;
   onPasteImagesLoading?: (count: number) => void;
-  /** 输入法组字中的预编辑文本存在性变化(正文不公开,只报有没有)。 */
-  onPreeditChange?(active: boolean): void;
   opticalPadding?: boolean;
   placeholder: string;
   resolveSessionLinkLabel?: (href: string) => Promise<ResolvedSessionLinkSemantic | null>;
@@ -78,9 +73,6 @@ interface PendingImagePaste {
   settledIndexes: Set<number>;
   urisByIndex: Map<number, string>;
 }
-
-/** flush 的回执等待上限:WebView 失联时不让发送无限期挂着。 */
-const COMPOSER_FLUSH_TIMEOUT_MS = 300;
 
 /** Editable WebView wrapper; the native side only accepts the semantic protocol above. */
 const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputProps>(
@@ -100,7 +92,6 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     onPasteImages,
     onPasteImagesLoadFailed,
     onPasteImagesLoading,
-    onPreeditChange,
     opticalPadding = true,
     placeholder,
     resolveSessionLinkLabel,
@@ -121,8 +112,6 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       caret?: { nodeIndex: number; offset: number };
     } | null>(null);
     const pendingFocusRef = useRef(false);
-    /** flush 的等待者:WebView 回报 flushed 后统一放行。 */
-    const flushWaitersRef = useRef<(() => void)[]>([]);
     const pendingNodeInsertionsRef = useRef<ComposerNode[]>([]);
     const pendingImagePastesRef = useRef(new Map<string, PendingImagePaste>());
     const pendingImagePasteOrderRef = useRef<string[]>([]);
@@ -130,6 +119,22 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     /** 尚未交接给附件上传 hook 的 WebView 粘贴缓存文件。 */
     const pendingPastedImageFilesRef = useRef(new Set<string>());
     const disposedRef = useRef(false);
+    const snapshotSequenceRef = useRef(0);
+    const pendingSnapshotRef = useRef<{
+      requestId: number;
+      documentId: number;
+      isCurrent?: () => boolean;
+      resolve(document: ComposerDocument): void;
+      reject(error: Error): void;
+      timer: ReturnType<typeof setTimeout>;
+    } | null>(null);
+    const rejectSnapshot = useCallback(() => {
+      const pending = pendingSnapshotRef.current;
+      if (!pending) return;
+      pendingSnapshotRef.current = null;
+      clearTimeout(pending.timer);
+      pending.reject(new Error('COMPOSER_SNAPSHOT_UNAVAILABLE'));
+    }, []);
     const initialConfigRef = useRef({
       accessibilityLabel,
       document,
@@ -170,6 +175,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       webViewRef.current?.injectJavaScript(`try { ${script} } catch (_) {} true;`);
     }, []);
     const recovery = useComposerWebViewRecovery(inject, () => {
+      rejectSnapshot();
       readyRef.current = false;
       pendingFocusRef.current = false;
       if (pendingDocumentRef.current) pendingDocumentRef.current.focusAfter = false;
@@ -180,8 +186,6 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       pendingPastedImageFilesRef.current.clear();
       if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
       for (let i = 0; i < failedPastes; i += 1) onPasteImagesLoadFailed?.();
-      // 编辑器重建后组字状态不存在了:发送位不能继续按「有组字文本」亮着。
-      onPreeditChange?.(false);
       onBlur?.();
     }, () => readyRef.current);
     const { generation, current: currentGeneration } = recovery;
@@ -191,8 +195,10 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         return;
       }
       inject('window.cindyComposer.focus();');
+      if (Platform.OS === 'android') webViewRef.current?.requestFocus();
     }, [inject]);
     const applyDocument = useCallback((value: ComposerDocument, focusAfter = false, caret?: { nodeIndex: number; offset: number }) => {
+      rejectSnapshot();
       if (value !== webDocumentRef.current.document && selectionRef.current?.atomRange) selectionRef.current = null;
       const documentId = webDocumentRef.current.id + 1;
       webDocumentRef.current = { document: value, draft: composerDocumentProjectedText(value), id: documentId };
@@ -201,7 +207,8 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         return;
       }
       inject(`window.cindyComposer.applyDocument(${JSON.stringify(value)}, ${focusAfter}, ${JSON.stringify(caret) ?? 'null'}, ${documentId});`);
-    }, [inject]);
+      if (focusAfter && Platform.OS === 'android') webViewRef.current?.requestFocus();
+    }, [inject, rejectSnapshot]);
 
     useEffect(() => {
       // A native edit may advance again before React commits its previous
@@ -220,6 +227,16 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     useEffect(() => {
       if (!forwardedRef) return undefined;
       const handle: ComposerRichInputHandle = {
+        flushDocument: (isCurrent) => {
+          if (!readyRef.current || disposedRef.current) return Promise.reject(new Error('COMPOSER_SNAPSHOT_UNAVAILABLE'));
+          rejectSnapshot();
+          return new Promise<ComposerDocument>((resolve, reject) => {
+            const requestId = ++snapshotSequenceRef.current;
+            pendingSnapshotRef.current = { requestId, documentId: webDocumentRef.current.id, isCurrent,
+              resolve, reject, timer: setTimeout(rejectSnapshot, 3000) };
+            inject(`window.cindyComposer.snapshot(${requestId});`);
+          });
+        },
         getSelection: (draft) => {
           const saved = selectionRef.current;
           return saved?.draft === draft
@@ -254,21 +271,6 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
           }
           if (readyRef.current) inject('window.cindyComposer.blur();');
         },
-        // 把当前 DOM(含未提交的组字文本)发布给 native,并等这次发布落地。
-        // WebView 失联时超时放行:发送不能被一个回不来的回执卡死。
-        flush: () => {
-          if (!readyRef.current) return Promise.resolve();
-          return new Promise<void>((resolve) => {
-            const settle = () => {
-              clearTimeout(timer);
-              flushWaitersRef.current = flushWaitersRef.current.filter((waiter) => waiter !== settle);
-              resolve();
-            };
-            const timer = setTimeout(settle, COMPOSER_FLUSH_TIMEOUT_MS);
-            flushWaitersRef.current.push(settle);
-            inject('window.cindyComposer.flush();');
-          });
-        },
         focus: focusEditor,
         insertNode: (node) => {
           if (!readyRef.current) {
@@ -289,7 +291,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         if (typeof forwardedRef === 'function') forwardedRef(null);
         else forwardedRef.current = null;
       };
-    }, [applyDocument, focusEditor, forwardedRef, inject]);
+    }, [applyDocument, focusEditor, forwardedRef, inject, rejectSnapshot]);
 
     const persistPastedImage = useCallback(async (
       message: Extract<ComposerWebMessage, { type: 'paste-image' }>,
@@ -346,6 +348,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       disposedRef.current = false;
       return () => {
         disposedRef.current = true;
+        rejectSnapshot();
         // sessionId 原地换代时 ComposerRichInput 会重挂载。旧实例的异步图片写盘即使
         // 随后落定，也不能再沿旧闭包调用新任务的 onPasteImages / load-failed；先摘掉
         // 批次登记，settlePastedImage 会把迟到结果视为已作废。
@@ -355,7 +358,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         pendingPastedImageFilesRef.current.clear();
         if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
       };
-    }, []);
+    }, [rejectSnapshot]);
 
     const settlePastedImage = useCallback((
       requestId: string,
@@ -416,6 +419,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       if (!message) return;
       if (message.type === 'pong') return recovery.onPong(message.id);
       if (message.type === 'ready') {
+        rejectSnapshot();
         recovery.onReady();
         readyRef.current = true;
         inject(`window.cindyComposer.setConfig(${JSON.stringify(runtimeConfig)});`);
@@ -436,28 +440,29 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         }
         return;
       }
-      if (message.type === 'preedit') {
-        // 组字中的正文不公开,只报存在性:发送位要保持可用,但草稿不动。
-        onPreeditChange?.(message.active);
-        return;
-      }
-      if (message.type === 'flushed') {
-        // 同批的 change 先于 flushed 到达,此时 native 草稿已是编辑器当前内容。
-        const waiters = flushWaitersRef.current;
-        flushWaitersRef.current = [];
-        for (const waiter of waiters) waiter();
-        return;
-      }
-      if (message.type === 'change') {
+      if (message.type === 'change' || message.type === 'snapshot') {
+        const pending = message.type === 'snapshot' ? pendingSnapshotRef.current : null;
+        if (message.type === 'snapshot') {
+          if (!pending || pending.requestId !== message.requestId) return;
+          // Cancellation can restore the caller's draft before its next render.
+          // Reject before touching editor state or invoking the persistence callback.
+          if (pending.isCurrent?.() === false) { rejectSnapshot(); return; }
+          if (message.pendingPaste || message.documentId !== pending.documentId) { rejectSnapshot(); return; }
+        }
         if ((message.documentId ?? 0) !== webDocumentRef.current.id) return;
         const next = parseStoredComposerDocument(message.document);
-        if (!next) return;
+        if (!next) { if (pending) rejectSnapshot(); return; }
         const normalized = normalizeComposerDocument(next);
+        if (pending) {
+          pendingSnapshotRef.current = null;
+          clearTimeout(pending.timer);
+        }
         if (selectionRef.current?.atomRange) selectionRef.current = null;
         webSignatureRef.current = JSON.stringify(normalized);
         webDocumentRef.current = { document: normalized, draft: composerDocumentProjectedText(normalized), id: webDocumentRef.current.id };
         localDocumentsRef.current.add(normalized);
         onChangeDocument(normalized);
+        pending?.resolve(normalized);
         return;
       }
       if (message.type === 'selection') {
@@ -512,7 +517,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
             }
           });
       }
-    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, onPreeditChange, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady]);
+    }, [applyDocument, commitPlainTextPaste, focusEditor, hidden, inject, maxHeight, onBlur, onChangeDocument, onFocus, onHeightChange, onPasteImagesLoading, persistPastedImage, runtimeConfig, settlePastedImage, generation, currentGeneration, recovery.onPong, recovery.onReady, rejectSnapshot]);
 
     const heightStyle = useAnimatedStyle(() => ({ height: animatedHeight?.value ?? height }));
     return (

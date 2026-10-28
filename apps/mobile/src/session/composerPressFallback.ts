@@ -57,6 +57,12 @@ export function useComposerPressFallback(options: ComposerPressFallbackOptions):
 
   useEffect(() => cancel, [cancel]);
 
+  // 按下后控件变为禁用(如断线/忙碌翻转)时,撤销待执行的兑底动作:禁用态下不应再
+  // 打开面板或发送,松手路径的 onPress 本就已被 Pressable 的 disabled 拦住。
+  useEffect(() => {
+    if (!enabled) cancel();
+  }, [cancel, enabled]);
+
   const beginPress = useCallback((x: number, y: number) => {
     firedRef.current = false;
     originRef.current = { x, y };

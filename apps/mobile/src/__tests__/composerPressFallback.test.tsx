@@ -23,14 +23,18 @@ afterEach(() => { act(() => root?.unmount()); root = undefined; vi.useRealTimers
 function renderFallback(options: { enabled?: boolean; onPress?: () => void } = {}) {
   const onPress = options.onPress ?? vi.fn();
   let api: ComposerPressFallback | null = null;
-  function Probe() {
-    api = useComposerPressFallback({ enabled: options.enabled !== false, onPress });
+  function Probe({ enabled }: { enabled: boolean }) {
+    api = useComposerPressFallback({ enabled, onPress });
     return null;
   }
   const container = document.createElement('div');
   root = createRoot(container);
-  act(() => root!.render(createElement(Probe)));
-  return { onPress, api: () => api! };
+  act(() => root!.render(createElement(Probe, { enabled: options.enabled !== false })));
+  return {
+    onPress,
+    api: () => api!,
+    rerender: (enabled: boolean) => act(() => root!.render(createElement(Probe, { enabled }))),
+  };
 }
 
 it('fires the action once when the press is released normally', () => {
@@ -74,6 +78,15 @@ it('never fires when the fallback is disabled', () => {
   expect(onPress).not.toHaveBeenCalled();
 });
 
+it('cancels the pending fallback when the control becomes disabled mid-press', () => {
+  // 按下后 300ms 内按钮因断线/忙碌被禁用:兑底不得再触发(禁用态下不应打开面板或发送)。
+  const { onPress, api, rerender } = renderFallback({ enabled: true });
+  act(() => { api().beginPress(10, 20); });
+  rerender(false);
+  act(() => { vi.advanceTimersByTime(COMPOSER_PRESS_FALLBACK_DELAY_MS * 2); });
+  expect(onPress).not.toHaveBeenCalled();
+});
+
 it('reports that the fallback already ran so the release does not fire twice', () => {
   const { onPress, api } = renderFallback();
   act(() => { api().beginPress(10, 20); });
@@ -84,3 +97,4 @@ it('reports that the fallback already ran so the release does not fire twice', (
   expect(alreadyFired).toBe(true);
   expect(onPress).toHaveBeenCalledTimes(1);
 });
+

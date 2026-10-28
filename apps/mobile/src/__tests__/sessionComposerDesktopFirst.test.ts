@@ -830,21 +830,19 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).not.toMatch(/(?:const|let)\s+durationMs\b/);
   });
 
-  // 组字中的预编辑文本(Android 拼音输入法)必须仍能发出去:WebView 侧的
-  // 'preedit' 存在性信号喂给共享布局保住发送位,发送前 flush 把编辑器当前
-  // DOM 一次性发布成草稿。失效后果:输入法展开时点发送发的是组字前的旧正文,
-  // 或发送位整排消失,用户只能先收键盘才发得出。
-  it('keeps the send path usable while an IME composition is pending', () => {
+  // 漂移撤销的接线契约:RN 0.86.3 的 Pressable 不解构 onResponderMove(落入
+  // restProps,render 时 {...eventHandlers} 在后覆盖),挂它收不到事件、12pt 漂移
+  // 兑底形同虚设(划过发送键 300ms 后误发)。movePress 必须走官方 onPressMove 通道;
+  // onResponderMove 保持原样透传(语音按钮在用)。行为层无法在本仓 node 单测覆盖
+  // (真 react-native 是 Flow 依赖链),以本接线断言锁定通道选择。
+  it('wires the composer press fallback drift guard through Pressable onPressMove', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
-    const task = source.slice(source.indexOf('export default function SessionScreen()'), source.indexOf('function SessionComposerPalette('));
-    const input = source.slice(source.indexOf('function SessionComposerInput('), source.indexOf('function SessionSearchSheet('));
-    // flush 必须在抓草稿之前:抓到的必须是编辑器当前内容,不是组字前的旧正文。
-    expect(task).toContain('await composerInputRef.current?.flush?.();');
-    expect(task).toContain('onPress={handleSendPress}');
-    expect(task.indexOf('await composerInputRef.current?.flush?.();')).toBeLessThan(task.indexOf('await send();'));
-    // 组字存在性信号 → 共享布局的 hasPreedit → 发送位不消失。
-    expect(input).toContain('onPreeditChange={setComposerPreedit}');
-    expect(input).toContain('hasPreedit: composerPreedit,');
+    const button = source.slice(source.indexOf('const RouteActionButton = forwardRef'));
+    const body = button.slice(0, button.indexOf('function ComposerRuntimePill'));
+    expect(body).toContain('onPressMove={interactionDisabled ? undefined : handlePressMove}');
+    expect(body).toContain('pressFallback.movePress(event.nativeEvent.pageX, event.nativeEvent.pageY)');
+    expect(body).toContain('onResponderMove={interactionDisabled ? undefined : onResponderMove}');
+    expect(body).not.toContain('onResponderMove={interactionDisabled ? undefined : handleResponderMove}');
   });
 
   it('lets the whole top edge of the card resize without covering attachments or text', () => {

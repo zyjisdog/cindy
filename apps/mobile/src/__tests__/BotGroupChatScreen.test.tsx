@@ -17,6 +17,10 @@ const h = vi.hoisted(() => ({
   appStateListeners: new Set<(state: string) => void>(),
   closeSettings: null as null | (() => void),
   row: null as any,
+  inputFocus: vi.fn(),
+  inputBlur: vi.fn(),
+  inputFocused: false,
+  keyboardVisible: false,
   inputs: {} as Record<string, any>,
   teammates: { rows: [] as any[], loading: false, failed: false },
   teammateQuery: '',
@@ -32,6 +36,10 @@ const h = vi.hoisted(() => ({
   platform: { OS: 'ios' }, headerBlur: [] as number[], headerFade: [] as (number | undefined)[],
 }));
 
+// Keep the real attachment components; only replace native reader and filesystem surfaces for jsdom.
+vi.mock('react-native-webview', () => ({ WebView: () => null }));
+vi.mock('expo-modules-core', () => ({ requireOptionalNativeModule: () => null }));
+vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: 'file:///test-cache' } }));
 vi.mock('expo-web-browser', () => ({ openBrowserAsync: vi.fn(async () => ({})) }));
 vi.mock('@/components/ChatReplyIcon', () => ({ ChatReplyIcon: () => null }));
 vi.mock('react-native', () => {
@@ -59,7 +67,7 @@ vi.mock('react-native', () => {
     AppState: { get currentState() { return h.appState; }, addEventListener: (_event: string, listener: (state: string) => void) => {
       h.appStateListeners.add(listener); return { remove: () => h.appStateListeners.delete(listener) };
     } },
-    Keyboard: { dismiss: () => {} },
+    Keyboard: { dismiss: () => {}, isVisible: () => h.keyboardVisible },
     Animated: { View: box('div'), Value: class { setValue() {} interpolate() { return this; } }, timing: () => ({ start() {}, stop() {} }),
       loop: () => ({ start() {}, stop() {} }), sequence: () => ({}) },
     Easing: { inOut: () => undefined, ease: undefined, bezier: () => undefined },
@@ -95,6 +103,7 @@ vi.mock('lucide-react-native', () => Object.fromEntries(
 vi.mock('@/theme', async () => ({
   ...await import('@/theme/tokens'), useThemedStyles: (makeStyles: any) => makeStyles({}), useTheme: () => ({ colors: {} }), monoFont: 'mono',
 }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ getPresenceAvailability: () => true }) }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => ({
   user: { id: 'owner' }, accountGeneration: 1, getAccessToken: async () => 'token', apiFetch: async () => ({}),
 }) }));
@@ -151,6 +160,7 @@ vi.mock('@/session/MobileComposerInputRow', () => ({
   // Like the real row: the card shows the tray above the input and the toolbar below it.
   MobileComposerInputRow: (props: any) => {
     h.row = props;
+    if (props.inputRef) props.inputRef.current = { focus: h.inputFocus, blur: h.inputBlur, isFocused: () => h.inputFocused };
     return el('div', { 'data-testid': 'composer-row', 'data-card': props.cardActive ? 'true' : 'false' },
       props.cardActive ? props.accessoryAbove : props.leading,
       el('span', { 'data-testid': 'placeholder' }, props.placeholder),
@@ -290,7 +300,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.uuid = 0; h.inputs = {}; h.teammateQuery = ''; h.teammates = { rows: [], loading: false, failed: false };
   h.appState = 'active'; h.appStateListeners.clear();
-  h.platform.OS = 'ios'; h.focused = true; h.keyboardAvoidingView = null; h.headerBlur = []; h.headerFade = [];
+  h.platform.OS = 'ios'; h.focused = true; h.inputFocused = false; h.keyboardVisible = false; h.keyboardAvoidingView = null; h.headerBlur = []; h.headerFade = [];
   h.chat = { reload: vi.fn(), act: vi.fn(async () => ({ effects: [] })), online: true };
   h.discarded = []; h.deleted = []; h.leaveGuard = []; h.leaveDecision = async () => false;
   h.local = {
@@ -486,6 +496,15 @@ describe('group timeline', () => {
     expect(all('botGroup.message.bot')).toHaveLength(0);
   });
 
+  // #6835: unit screen entry must prioritize the limit over the lane-unavailable fallback.
+  it.each(['REMOTE_DEVICE_LIMIT', 'REMOTE_TOTAL_LIMIT'] as const)('renders lane failure %s on mobile', async runtimeFailureCode => {
+    await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',
+      authorName: 'Bot', noticeCode: 'member-unavailable', runtimeFailureCode })] }));
+    const text = all('botGroup.notice')[0]?.textContent;
+    expect(text).toContain(`groupChat.notice.runtimeFailure.${runtimeFailureCode}(name=Bot)`);
+    expect(text).not.toContain('groupChat.notice.memberUnavailable');
+  });
+
   it.each(BOT_GROUP_RUNTIME_FAILURE_CODES)('renders the runtime reason and recovery advice on mobile: %s', async runtimeFailureCode => {
     await render(group({ messages: [message('failure', 1, { kind: 'notice', authorKind: 'system',
       authorName: 'Bot', noticeCode: 'member-failed', runtimeFailureCode })] }));
@@ -510,7 +529,9 @@ describe('group timeline', () => {
     expect(byId('botGroup.file')?.textContent).toBe('页面想法.md');
     expect(byId('botGroup.olderOnComputer')).not.toBeNull();
     expect(byId('botGroup.organizerTag')?.textContent).toBe('groupChat.organizer');
-    expect(node.textContent).toContain('咪咪groupChat.memberSeparator阿布groupChat.memberSeparator小满');
+    // The header reads the group's size, not every member (the names stay in its accessibility label).
+    expect(node.textContent).toContain('groupChat.memberCount(count=3)');
+    expect(node.textContent).not.toContain('咪咪groupChat.memberSeparator阿布');
   });
 
   it('continues the round and explains files that stay on the computer', async () => {
@@ -677,6 +698,27 @@ describe('group composer', () => {
     }));
     expect(byId('botGroup.cancelReply')).toBeNull();
     expect(h.row.value).toBe('');
+  });
+
+  // Every reply tap must bring the keyboard back. The quote id alone does not change when the same
+  // message is replied to again, and RN's focus() is a no-op on an input that is still focused —
+  // Android keeps focus after Back hides the keyboard. With the keyboard up, the input is not blurred
+  // so an IME composition survives.
+  it.each([
+    { state: 'unfocused', focused: false, keyboard: false, blurs: 0 },
+    { state: 'focused with the keyboard hidden', focused: true, keyboard: false, blurs: 1 },
+    { state: 'focused with the keyboard up', focused: true, keyboard: true, blurs: 0 },
+  ])('re-focuses the input when replying to the same message again ($state)', async ({ focused, keyboard, blurs }) => {
+    const originalId = '22222222-2222-4222-8222-222222222222';
+    await render(group({ serverBacked: true, openPlan: null, messages: [
+      message(originalId, 1, { authorName: '咪咪', authorBotId: 'mimi', content: '请回复这条' }),
+    ] }));
+    await click(`botGroup.reply.${originalId}`);
+    h.inputFocus.mockClear(); h.inputBlur.mockClear();
+    h.inputFocused = focused; h.keyboardVisible = keyboard;
+    await click(`botGroup.reply.${originalId}`);
+    expect(h.inputBlur).toHaveBeenCalledTimes(blurs);
+    expect(h.inputFocus).toHaveBeenCalledTimes(1);
   });
 
   it.each([true, false])('locks an existing draft when dissolved without being archived (direct server %s)', async server => {
