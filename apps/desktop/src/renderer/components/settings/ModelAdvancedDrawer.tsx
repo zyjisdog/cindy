@@ -33,11 +33,11 @@ import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuCheckboxItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu';
 import { MODEL_HARNESS_COLOR } from '@/lib/modelHarnessPresentation';
 import { ModelCompatibilityNotice } from '@/components/new-chat/ModelCompatibilityNotice';
@@ -49,8 +49,9 @@ import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
-import { useModelCatalogImageInput } from '@/hooks/useModelCatalogImageInput';
+import { useModelImageInputOverride } from '@/hooks/useModelImageInputOverride';
 import { useModelCatalogThinking } from '@/hooks/useModelCatalogThinking';
+import { parseContextTokenInput } from '../../../shared/modelContextLimit';
 import { ModelCompactionSettings } from './ModelCompactionSettings';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
@@ -98,12 +99,6 @@ const AGENT_LABEL: Record<AgentKind, string> = {
   codex: 'Codex',
   pi: 'Pi',
 };
-
-// Editing uses whole decimal K, rounded down to avoid suggesting a value above the upstream
-// maximum. Merely opening/blurring the field never writes this display approximation back.
-function editableContextK(tokens: number): string {
-  return String(Math.max(1, Math.floor(tokens / 1000)));
-}
 
 const AGENT_MARK: Record<AgentKind, (size: number) => ReactNode> = {
   'claude-code': (size) => <ClaudeMark size={size} />,
@@ -296,45 +291,9 @@ export function ModelAdvancedDrawer({
     [contextAgent, contextModel, provider.id, row, chatAgents],
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
-  // 图片输入能力的本地声明。与上下文上限同一个目标形状；agent 只用于目录成员校验。
-  // 必须覆盖该行全部引擎的 id：运行期真正消费这个能力的只有 Pi，而桥接投影两端 id 不同
-  // （openai 行：codex 用 gpt-5.6-sol、pi 用 chatgpt/gpt-5.6-sol）—— 只写主展示引擎的 id，
-  // Pi 侧读不到（override 按 providerId:modelId 精确匹配），UI 却会显示「已声明」。
-  const imageInputTarget = useMemo(() => {
-    if (!open || !primaryAgent || !primaryModel) return null;
-    const relatedTargets = (row?.avail ?? [])
-      .filter((agent) => agent !== primaryAgent)
-      .flatMap((agent) => {
-        const model = row?.byAgent[agent];
-        return model ? [{ providerId: provider.id, agent, modelId: model.id }] : [];
-      });
-    return {
-      providerId: provider.id,
-      agent: primaryAgent,
-      modelId: primaryModel.id,
-      ...(relatedTargets.length > 0 ? { relatedTargets } : {}),
-    };
-  }, [open, primaryAgent, primaryModel, provider.id, row]);
-  const imageInput = useModelCatalogImageInput(imageInputTarget);
-  // 思考档位的本地声明。目标形状与图片输入完全一致：必须覆盖该行全部引擎的 id ——
-  // 运行期真正消费 thinking 档位的是 Pi，桥接投影两端 id 不同，只写主展示引擎会让声明
-  // 对运行期无效、UI 却显示「已声明」。
-  const thinkingTarget = useMemo(() => {
-    if (!open || !primaryAgent || !primaryModel) return null;
-    const relatedTargets = (row?.avail ?? [])
-      .filter((agent) => agent !== primaryAgent)
-      .flatMap((agent) => {
-        const model = row?.byAgent[agent];
-        return model ? [{ providerId: provider.id, agent, modelId: model.id }] : [];
-      });
-    return {
-      providerId: provider.id,
-      agent: primaryAgent,
-      modelId: primaryModel.id,
-      ...(relatedTargets.length > 0 ? { relatedTargets } : {}),
-    };
-  }, [open, primaryAgent, primaryModel, provider.id, row]);
-  const thinking = useModelCatalogThinking(thinkingTarget);
+  const imageInputOverride = useModelImageInputOverride(open ? contextTarget : null);
+
+  const thinking = useModelCatalogThinking(open ? contextTarget : null);
   /**
    * 档位组合用固定候选（与目录 Effort 全集同序）而不是自由输入：组合爆炸（2^7）无法
    * 列举，而真实诉求只有「沿用厂商 / 声明常见的几档」两类。勾选语义 = 该模型支持这一档。
@@ -365,30 +324,6 @@ export function ModelAdvancedDrawer({
         reason
           ? t('settings.providers.models.advanced.thinkingOverride.saveFailedWithReason', { reason })
           : t('settings.providers.models.advanced.thinkingOverride.saveFailed'),
-      );
-    }
-  };
-  // 'inherit' = 删除本机 override，回到跟随供应商。失败由 hook 回读真值，这里只负责提示。
-  const setImageInput = async (next: string) => {
-    const value = next === 'inherit' ? null : next === 'true';
-    // 已经是该状态就别再写一次：免掉一次空写入引起的全量目录刷新与广播。但各引擎键分叉时
-    // 必须放行 —— 否则“重选当前项”被 no-op 挡掉，分叉永远修不掉（UI 显示一侧、运行期读另一侧）。
-    const already =
-      value === null ? !imageInput.isCustomized : imageInput.isCustomized && value === imageInput.value;
-    if (already && !imageInput.diverged) {
-      return;
-    }
-    const persisted = await imageInput.setValue(value);
-    if (!persisted) {
-      // main 在这条路径上会给出可执行指引（手改文件里有无法保留的条目时要先修文件）：
-      // 把它带进提示，否则用户反复保存失败却看不到唯一的修复方式。
-      const reason = imageInput.errorReason;
-      toast.error(
-        reason
-          ? t('settings.providers.models.advanced.imageInputOverride.saveFailedWithReason', {
-              message: reason,
-            })
-          : t('settings.providers.models.advanced.imageInputOverride.saveFailed'),
       );
     }
   };
@@ -462,77 +397,55 @@ export function ModelAdvancedDrawer({
 
 
   const [ctxDraft, setCtxDraft] = useState('');
-  // 提交后写入是异步的：hook 先置 loading、等 IPC 回声才落新值。若提交瞬间就丢掉草稿，
-  // 说明行会先退回**旧的** effectiveLimit、回声到了再跳新值 —— 用户实测到的「闪一下旧值」。
-  // 这里把「提交在途」也当成还在编辑：显示值继续取草稿，直到写入收口。
-  const [ctxCommitting, setCtxCommitting] = useState(false);
-  // 提交代次：目标（模型/agent/provider）一变或又一次提交开始，旧提交的 finally 就不许再
-  // 清掉新的 committing 状态 —— 否则 A 写未完成时切到 B 并提交，A 完成会把 B 的「提交在途」
-  // 提前收掉，B 在写入期间重新显示旧的 effectiveLimit（本次修改要消除的闪回原地复活）。
-  const ctxCommitGen = useRef(0);
   const ctxDirtyRef = useRef(false);
-  const defaultWindow = contextAgent === 'codex' && ctx.codexContext
-    ? ctx.codexContext.contextWindow : contextModel?.contextWindow ?? 0;
+  const defaultWindow =
+    contextAgent === 'codex' && ctx.codexContext
+      ? ctx.codexContext.contextWindow
+      : (contextModel?.contextWindow ?? 0);
   // The editor guard is not a native request-capacity limit. Keep small/local
   // model windows selectable and never derive this floor from a saved override.
   // Local runtimes own their loaded window; their catalog maximum cannot set an editor floor.
-  const modelWindows = chatAgents.map((agent) => row?.byAgent[agent]?.contextWindow)
-    .filter((window): window is number => typeof window === 'number' && Number.isFinite(window) && window > 0);
+  const modelWindows = chatAgents
+    .map((agent) => row?.byAgent[agent]?.contextWindow)
+    .filter(
+      (window): window is number =>
+        typeof window === 'number' && Number.isFinite(window) && window > 0,
+    );
   const minimumContextK = isLocalRuntimeBetaProviderId(provider.id)
-    ? 1 : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
-  const routeWindow = supportsMillionContext ? 1_000_000 : primaryModel?.contextWindowMax ?? primaryModel?.contextWindow ?? 0;
-  // 「上游最大上下文」这一行只印上游**确实下发过**的窗口，来源按优先级：
-  //   1) contextWindowMax —— 路由/网关声明的容量；
-  //   2) contextWindowVerified === true 的 contextWindow —— 用户或预设显式配置的窗口；
-  //   3) 都没有 → 未声明。
-  // 第 3 条必须排除「自定义模型缺元数据时的 200K 展示兜底」：那个常量在
-  // user-provider.ts 里明确写着「仅用于展示」、不带 contextWindowVerified —— 把它印成
-  // 上游下发的窗口，会让用户以为容量只有 200K，而运行期窗口取模型级上下文上限
-  // （实测报障：圆环 1.0M、这里 200K）。
-  // 与 routeWindow 的区别：routeWindow 是路由展示用的乐观值（供百万上下文档位等
-  // 比较），declaredWindow 是这一行的**如实声明**口径。
-  const declaredCapacity = primaryModel?.contextWindowMax ?? 0;
-  const declaredWindow =
-    declaredCapacity > 0
-      ? declaredCapacity
-      : primaryModel?.contextWindowVerified === true
-        ? (primaryModel.contextWindow ?? 0)
-        : 0;
+    ? 1
+    : Math.max(1, Math.floor(Math.min(100_000, ...modelWindows) / 1000));
+  // A working default (including a heuristic fallback) is not a declared capacity.
+  // Codex's native maximum may already contain the user's override, so it
+  // cannot establish the provider's declared capacity.
+  const routeWindow = supportsMillionContext ? 1_000_000
+    : (contextModel ?? primaryModel)?.contextWindowMax
+      ?? (primaryModel?.contextWindowVerified === true ? primaryModel.contextWindow : 0);
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
     ctxDirtyRef.current = false;
-    ctxCommitGen.current += 1;
-    setCtxCommitting(false);
     setCtxDraft('');
     setPriceDialogOpen(false);
   }, [open, primaryAgent, primaryModel?.id, provider.id]);
   useEffect(() => {
     if (ctx.loading || ctxDirtyRef.current) return;
-    setCtxDraft(effectiveLimit === null ? '' : editableContextK(effectiveLimit));
+    setCtxDraft(effectiveLimit === null ? '' : String(effectiveLimit));
   }, [ctx.loading, effectiveLimit, open]);
-  const parsedK = Number(ctxDraft.trim());
-  const parsedTokens = parsedK * 1000;
+  const parsedTokens = parseContextTokenInput(ctxDraft);
   const ctxInvalid =
-    ctxDirtyRef.current && ctxDraft.trim() !== '' &&
-    (!Number.isSafeInteger(parsedK) || parsedK < minimumContextK || parsedTokens > maximumContext);
+    ctxDirtyRef.current &&
+    ctxDraft.trim() !== '' &&
+    (parsedTokens === null ||
+      parsedTokens < minimumContextK * 1000 ||
+      parsedTokens > maximumContext);
   const commitCtxDraft = useCallback(() => {
     if (!ctxDirtyRef.current || ctxInvalid || ctx.loading || localConfigurationBlocked) return;
     ctxDirtyRef.current = false;
-    // 提交在途期间锁住 displayedLimit：hook 的 promise 在它把新值（或失败回滚后的值）
-    // 写进 state 之后才 resolve，不锁会闪回一帧旧值。仅当没有更新的提交/重置发生时
-    // 才清状态（ctxCommitGen 递增即代表有更新的那次）。
-    const generation = (ctxCommitGen.current += 1);
-    setCtxCommitting(true);
-    void Promise.resolve(ctx.setLimit(ctxDraft.trim() === '' ? null : parsedTokens)).finally(() => {
-      if (ctxCommitGen.current === generation) setCtxCommitting(false);
-    });
+    void ctx.setLimit(ctxDraft.trim() === '' ? null : parsedTokens);
   }, [ctx, ctxDraft, ctxInvalid, parsedTokens, localConfigurationBlocked]);
   const resetCtx = useCallback(() => {
     if (localConfigurationBlocked) return;
     ctxDirtyRef.current = false;
-    ctxCommitGen.current += 1;
-    setCtxCommitting(false);
-    setCtxDraft(defaultWindow > 0 ? editableContextK(defaultWindow) : '');
+    setCtxDraft(defaultWindow > 0 ? String(defaultWindow) : '');
     void ctx.reset();
   }, [ctx, defaultWindow, localConfigurationBlocked]);
 
@@ -545,11 +458,9 @@ export function ModelAdvancedDrawer({
   }
 
   const capabilityModel = primaryModel.mode === 'video_generation' ? videoModel ?? primaryModel : imageModel ?? videoModel ?? primaryModel;
-  // 本行的能力事实必须属于**被编辑的那个模型**：图片输入控件把声明写到该行选中模型的
-  // override，图标/文案却显示图片/视频生成模型（上游 capabilityModel）会变成「编辑 A 却
-  // 显示 B」。生成模型的能力展示由上游新增的图片/视频能力行与 modalities 行承担。
-  const vision =
-    primaryModel.supportsImageInput !== undefined
+  const vision = imageModel?.modalities
+    ? imageModel.modalities.input.includes('image') ? 'vision' : 'no-vision'
+    : primaryModel.supportsImageInput !== undefined
       ? primaryModel.supportsImageInput
         ? 'vision'
         : 'no-vision'
@@ -596,22 +507,12 @@ export function ModelAdvancedDrawer({
   const protocols = modelProtocolComparison(provider, row.byAgent);
   const protocolLabel = (api: PiModelApi | null) =>
     api ? MODEL_PROTOCOL_LABEL[api] ?? null : t('settings.providers.models.advanced.undeclared');
-  const displayedLimit = ctxDirtyRef.current || ctxCommitting
+  const displayedLimit = ctxDirtyRef.current
     ? ctxDraft.trim() === ''
       ? defaultWindow
       : parsedTokens
     : effectiveLimit;
-  // 只有「上游声明的容量」比它小时才该告警；未声明容量时拿工作默认值当窗口会误报
-  // （自定义连接上 200K 只是兜底，不是任何人的声明）。来源与上方「上游最大上下文」同一套：
-  // contextWindowMax → 已验证的 contextWindow → 未声明，否则「已验证窗口但无 max」的模型
-  // 把限制填到窗口以上也不会告警。
-  const editCapacity = contextModel?.contextWindowMax ?? 0;
-  const editRouteWindow =
-    editCapacity > 0
-      ? editCapacity
-      : contextModel?.contextWindowVerified === true
-        ? (contextModel.contextWindow ?? 0)
-        : 0;
+  const editRouteWindow = routeWindow;
   const overRouteWindow =
     editRouteWindow > 0 &&
     displayedLimit !== null &&
@@ -949,7 +850,7 @@ export function ModelAdvancedDrawer({
                                   disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                   onClick={() => {
                                     ctxDirtyRef.current = false;
-                                    setCtxDraft(editableContextK(preset.tokens));
+                                    setCtxDraft(String(preset.tokens));
                                     void ctx.setLimit(preset.tokens);
                                   }}
                                 >{preset.label}</Button>
@@ -979,14 +880,15 @@ export function ModelAdvancedDrawer({
                                   }
                                 }}
                                 aria-invalid={ctxInvalid || undefined}
-                                inputMode="numeric"
+                                inputMode="text"
+                                maxLength={32}
                                 disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                                 aria-label={t(
                                   'settings.providers.models.advanced.contextLimitAria',
                                 )}
-                                className="w-20 bg-transparent text-center text-13 tabular-nums text-[var(--text-primary)] outline-none"
+                                className="w-28 bg-transparent text-center text-13 tabular-nums text-[var(--text-primary)] outline-none"
                               />
-                              <span className="text-11 text-[var(--text-tertiary)]">K</span>
+                              <span className="text-11 text-[var(--text-tertiary)]">tokens</span>
                             </span>
                             <span className="min-w-0 flex-1 text-11 tabular-nums text-[var(--text-tertiary)]">
                               {t('settings.providers.models.advanced.contextLimitRoute', {
@@ -1011,7 +913,7 @@ export function ModelAdvancedDrawer({
                             <p role="status" className="mt-1.5 text-12 text-[var(--warning-fg)]">
                               {t(
                                 `settings.providers.models.advanced.${ctxInvalid ? 'contextInvalid' : ctx.error ? 'contextWriteFailed' : 'contextMixed'}`,
-                                { min: minimumContextK },
+                                { min: formatExactTokens(minimumContextK * 1000, locale), max: formatExactTokens(maximumContext, locale) },
                               )}
                             </p>
                           )}
@@ -1025,9 +927,7 @@ export function ModelAdvancedDrawer({
                       )}
                       {ctx.compaction && (
                         <ModelCompactionSettings policy={ctx.compaction}
-                          // 不用 ctx.loading 禁用：Radix 在 disabled 时会吞掉方向键，
-                          // 键盘用户就只能一下一格地等写入完成。写入在 main 侧已串行。
-                          disabled={paymentRequired || localConfigurationBlocked}
+                          disabled={paymentRequired || ctx.loading || localConfigurationBlocked}
                           onChange={ctx.setCompaction} />
                       )}
                     </Section>
@@ -1035,18 +935,18 @@ export function ModelAdvancedDrawer({
 
                   <Section title={t('settings.providers.models.advanced.spec')}>
                     <Row label={t('settings.providers.models.advanced.contextWindow')}>
-                      {declaredWindow > 0 ? (
+                      {routeWindow > 0 ? (
                         <>
-                          {formatExactTokens(declaredWindow, locale)}
+                          {formatExactTokens(routeWindow, locale)}
                           <span className="ml-1 text-11 text-[var(--text-tertiary)]">
                             {t('settings.providers.models.advanced.tokensApprox', {
-                              approx: approxTokens(declaredWindow),
+                              approx: approxTokens(routeWindow),
                             })}
                           </span>
                         </>
                       ) : (
                         <span className="text-[var(--text-tertiary)]">
-                          {t('settings.providers.models.advanced.undeclared')}
+                          {t('settings.providers.models.advanced.catalogMissing')}
                         </span>
                       )}
                     </Row>
@@ -1113,70 +1013,44 @@ export function ModelAdvancedDrawer({
                       </>
                     )}
                     <Row label={t('settings.providers.models.advanced.imageInput')}>
-                      {/*
-                        三态声明：目录未声明图片能力时，Pi 会在客户端就拒收图片（请求根本不出网），
-                        用户此前没有任何可点的入口去声明它 —— 报错文案让人去开的开关并不存在。
-                        这里把状态与声明合成一个控件：图标+文案保留「目录怎么说」的事实，
-                        下拉写本机目录 override（不改连接配置，preset 连接因此仍跟随官方目录）。
-                      */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <button
-                            type="button"
-                            // 只在真写入期间禁用。刷新期间(hook 收到 PROVIDER_CHANGED 会重读)
-                            // 值原样保留，禁用它只会造成一次多余的明暗跳变；透明度也不动 ——
-                            // 与同抽屉协议控件一致(disabled 但不改 opacity)。
-                            // xd 的能力由服务端目录决定、组织托管供应商的能力由管理员下发：两者
-                            // 本机都不可覆盖，控件保留但禁用（与同抽屉其他不可改项一致）；
-                            // Main IPC 侧另有 INVALID_PARAMS / PERMISSION_DENIED 拒写兜底。
-                            disabled={
-                              imageInput.saving ||
-                              provider.id === 'xd' ||
-                              isOrganizationManagedProvider(provider)
-                            }
-                            aria-label={t('settings.providers.models.advanced.imageInputOverride.label')}
-                            title={
-                              primaryModel.modalities || primaryModel.supportsImageInput !== undefined
-                                ? t('settings.providers.models.advanced.catalogCapabilities')
-                                : t(`settings.providers.models.advanced.visionSource.${vision}`)
-                            }
-                            className="inline-flex items-center gap-1 rounded-full px-2 py-1 hover:bg-[var(--surface-hover)]"
-                          >
-                            <CapabilityValue
-                              state={
-                                vision === 'vision' ? true : vision === 'no-vision' ? false : undefined
-                              }
-                              label={t(`settings.providers.models.advanced.vision.${vision}`)}
-                            />
-                            <span className="text-11 text-[var(--text-tertiary)]">
-                              {imageInput.isCustomized
-                                ? imageInput.value === true
-                                  ? t('settings.providers.models.advanced.imageInputOverride.declaredTrue')
-                                  : t('settings.providers.models.advanced.imageInputOverride.declaredFalse')
-                                : t('settings.providers.models.advanced.imageInputOverride.inherit')}
-                            </span>
-                            <ChevronDown size={12} className="inline" aria-hidden />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent className="z-[10003]" align="end">
-                          <DropdownMenuRadioGroup
-                            value={
-                              imageInput.isCustomized ? String(imageInput.value) : 'inherit'
-                            }
-                            onValueChange={(next) => void setImageInput(next)}
-                          >
-                            <DropdownMenuRadioItem value="inherit">
-                              {t('settings.providers.models.advanced.imageInputOverride.inherit')}
-                            </DropdownMenuRadioItem>
-                            <DropdownMenuRadioItem value="true">
-                              {t('settings.providers.models.advanced.imageInputOverride.declaredTrue')}
-                            </DropdownMenuRadioItem>
-                            <DropdownMenuRadioItem value="false">
-                              {t('settings.providers.models.advanced.imageInputOverride.declaredFalse')}
-                            </DropdownMenuRadioItem>
-                          </DropdownMenuRadioGroup>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      {conversational && !isOrganizationManagedProvider(provider) ? (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <button type="button" disabled={imageInputOverride.loading || localConfigurationBlocked}
+                              aria-label={t('settings.providers.models.advanced.imageInput')}
+                              className="inline-flex min-h-8 items-center gap-1.5 rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50">
+                              {imageInputOverride.mixed
+                                ? t('settings.providers.models.advanced.imageInputMixed')
+                                : imageInputOverride.value === null
+                                  ? <><span>{t('settings.providers.models.advanced.imageCapability.default')}</span><span aria-hidden>·</span><span>{t(`settings.providers.models.advanced.vision.${vision}`)}</span></>
+                                  : t(`settings.providers.models.advanced.${imageInputOverride.value ? 'supported' : 'unsupported'}`)}
+                              <ChevronDown size={12} aria-hidden />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent className="z-[10003]" align="end">
+                            <DropdownMenuRadioGroup
+                              value={imageInputOverride.mixed ? '' : imageInputOverride.value === null ? 'default' : String(imageInputOverride.value)}
+                              onValueChange={(value) => void imageInputOverride.setValue(value === 'default' ? null : value === 'true')}>
+                              <DropdownMenuRadioItem value="default">{t('settings.providers.models.advanced.imageCapability.default')}</DropdownMenuRadioItem>
+                              <DropdownMenuRadioItem value="true">{t('settings.providers.models.advanced.supported')}</DropdownMenuRadioItem>
+                              <DropdownMenuRadioItem value="false">{t('settings.providers.models.advanced.unsupported')}</DropdownMenuRadioItem>
+                            </DropdownMenuRadioGroup>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      ) : <span
+                        title={
+                          capabilityModel.modalities || capabilityModel.supportsImageInput !== undefined
+                            ? t('settings.providers.models.advanced.catalogCapabilities')
+                            : t(`settings.providers.models.advanced.visionSource.${vision}`)
+                        }
+                      >
+                        <CapabilityValue
+                          state={
+                            vision === 'vision' ? true : vision === 'no-vision' ? false : undefined
+                          }
+                          label={t(`settings.providers.models.advanced.vision.${vision}`)}
+                        />
+                      </span>}
                     </Row>
                     <Row label={t('settings.providers.models.advanced.thinking')}>
                       {/*
@@ -1258,6 +1132,12 @@ export function ModelAdvancedDrawer({
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </Row>
+
+                    {imageInputOverride.error && (
+                      <p role="alert" className="text-12 leading-5 text-[var(--error-fg)]">
+                        {t('settings.providers.custom.toast.saveFailed')}
+                      </p>
+                    )}
                     {capabilityModel.modalities &&
                       (['input', 'output'] as const).map((direction) => (
                         <Row

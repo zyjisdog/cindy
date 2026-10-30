@@ -15,18 +15,12 @@
  * active-catalog 合并,是路由/能力派生的输入,MCP create_worker / scheduler 等
  * 无窗口路径也要一致生效,真源必须 main 可靠可读。
  *
- * 写入面:只开「模型级图片输入能力」(setModelCatalogImageInput)与
- * 「模型级思考档位」(setModelCatalogThinking)两组字段——「未声明」与「声明错误」
- * 都是真实状态,用户必须能自己显式声明(见 model-metadata-precedence.md 的字段
- * 继承与用户显式覆盖)。仍然**不开通用 patch 写入口**:那会让任意目录字段可从
- * renderer 改写,超出当前需求;价格、defaultEnabled、routing 依旧不在此列。用户仍
- * 可直接手改文件;坏 JSON/超限文件原样保留,修正后下一次同步自动恢复。
+ * 设置页只写明确选择的能力字段；其它覆盖与隔离中的条目原样保留。
  */
-
-import fs from 'node:fs';
 
 import { desktopMakerLogger } from './logger-adapter.js';
 import { createOverrideSettingsFile } from './override-settings-file.js';
+import fs from 'node:fs';
 import {
   EMPTY_MODEL_CATALOG_OVERRIDES,
   MAX_OVERRIDE_ENTRIES_PER_SECTION,
@@ -34,22 +28,15 @@ import {
   type ModelCatalogOverrideEntry,
   type ModelCatalogOverrides,
 } from './model-plane/localCatalogOverrides.js';
-import { ownerScopedUserDataPath } from '../appSessionState.js';
 import type { AgentKind, Effort } from '@cindy/model-providers';
 import type { ModelCatalogThinkingView } from '../../shared/modelCatalogThinking.js';
+import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import type { ModelPriceOverrideTarget } from '../../shared/modelPriceOverride.js';
 
 const log = desktopMakerLogger.child('model-catalog-overrides');
 
 /** main 同步读取的硬上限；目录 override 正常只有数 KB。 */
 export const MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES = 1_048_576;
-
-/**
- * 写入会丢掉手改条目时抛出（写在锁内、不落盘）。用独立类型而不是普通 Error，
- * 让 IPC 层能把它映射成可执行的 PRECONDITION_FAILED（带指引），而不是笼统的 INTERNAL。
- */
-export class ModelCatalogOverrideLossError extends Error {
-  override readonly name = 'ModelCatalogOverrideLossError';
-}
 
 function normalize(raw: unknown): ModelCatalogOverrides {
   const { overrides, invalid } = sanitizeModelCatalogOverrides(raw);
@@ -62,37 +49,45 @@ function normalize(raw: unknown): ModelCatalogOverrides {
   return overrides;
 }
 
-const store = createOverrideSettingsFile<ModelCatalogOverrides>({
-  filePath: overrideFilePath,
-  defaults: EMPTY_MODEL_CATALOG_OVERRIDES,
-  normalize,
-  log,
-  label: 'model-catalog-overrides',
-  maxBytes: MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES,
-  preserveUnreadableFile: true,
-  // patch 只替换被写入键的快照，其余原样落盘：不加这条时 writePatch 会用 sanitize 后的
-  // 整段 patches 覆盖原文件，手改引入的未知字段/超限条目会被静默删除。
-  mergeOverrides: ({ patch, overrides }) => {
-    const next: Record<string, unknown> = { ...overrides };
-    for (const key of Object.keys(patch)) {
-      const value = patch[key as keyof ModelCatalogOverrides];
-      if (key === 'patches' && isPlainObject(value) && Object.keys(value).length === 0) {
-        delete next.patches;
-      } else {
-        next[key] = value;
+export class ModelCatalogOverrideLossError extends Error {
+  override readonly name = 'ModelCatalogOverrideLossError';
+}
+function createStore(filePath: () => string, scopeKey?: () => string) {
+  return createOverrideSettingsFile<ModelCatalogOverrides>({
+    filePath,
+    scopeKey,
+    defaults: EMPTY_MODEL_CATALOG_OVERRIDES,
+    normalize,
+    log,
+    label: 'model-catalog-overrides',
+    maxBytes: MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES,
+    preserveUnreadableFile: true,
+    mergeOverrides: ({ next, overrides }) => {
+      if (overrides.version !== undefined && overrides.version !== 1) {
+        throw new Error('Unsupported model catalog override version');
       }
-    }
-    // 空段不落盘（与 reset 语义一致：没有条目时不留 `{}` 噪音）。
-    for (const section of ['patches', 'additions'] as const) {
-      if (isPlainObject(next[section]) && Object.keys(next[section]).length === 0) {
-        delete next[section];
+      const previous = sanitizeModelCatalogOverrides(overrides).overrides.patches;
+      const raw = overrides.patches;
+      if (raw !== undefined && (!raw || typeof raw !== 'object' || Array.isArray(raw))) {
+        throw new Error('Invalid model catalog patches');
       }
-    }
-    // 除 version 外什么都不剩 → 整文件收回「无覆盖」。
-    if (Object.keys(next).every((key) => key === 'version')) return {};
-    return next;
-  },
-});
+      // A malformed sibling must remain available for repair, not disappear on save.
+      const quarantined = Object.fromEntries(
+        Object.entries(raw ?? {}).filter(([key]) => !Object.hasOwn(previous, key)),
+      );
+      for (const key of Object.keys(next.patches)) {
+        if (Object.hasOwn(quarantined, key))
+          throw new Error('Model override needs repair before editing');
+      }
+      return { ...overrides, version: 1, patches: { ...quarantined, ...next.patches } };
+    },
+  });
+}
+
+const store = createStore(
+  () => ownerScopedUserDataPath('model-catalog-overrides.json'),
+  () => String(getActiveAppSession().generation),
+);
 
 /** 当前 override 快照(注入 active-catalog 合并;mtime 守卫让手改文件下次读取生效)。 */
 export function readModelCatalogOverrides(): ModelCatalogOverrides {
@@ -100,7 +95,87 @@ export function readModelCatalogOverrides(): ModelCatalogOverrides {
   return store.read();
 }
 
-/** 模型级图片输入能力的 override 目标。agent 只影响读取时的有效值(base + perAgent 合并)。 */
+const keyOf = (target: ModelPriceOverrideTarget) =>
+  `${encodeURIComponent(target.providerId)}:${target.modelId}`;
+
+export function readModelImageInputOverride(target: ModelPriceOverrideTarget): boolean | null {
+  const patch = readModelCatalogOverrides().patches[keyOf(target)];
+  if (patch?.agents && !patch.agents.includes(target.agent)) return null;
+  return (
+    patch?.perAgent?.[target.agent]?.supportsImageInput ?? patch?.base?.supportsImageInput ?? null
+  );
+}
+
+/** Persist all row aliases together; refresh failure restores only this edit. */
+export async function writeModelImageInputOverride(
+  targets: readonly ModelPriceOverrideTarget[],
+  value: boolean | null,
+  refresh: () => Promise<void>,
+): Promise<void> {
+  const file = ownerScopedUserDataPath('model-catalog-overrides.json');
+  const generation = getActiveAppSession().generation;
+  const keys = new Set(targets.map(keyOf));
+  let previous: ModelCatalogOverrides['patches'] = {};
+  let written: ModelCatalogOverrides['patches'] = {};
+  await store.updateAtomic((current) => {
+    previous = current.value.patches;
+    const patches = structuredClone(previous);
+    for (const target of targets) {
+      const key = keyOf(target);
+      const entry = (patches[key] ??= {});
+      if (entry.agents && !entry.agents.includes(target.agent)) {
+        // Do not broaden other hand-authored fields to a new harness.
+        throw new Error('Model override excludes this engine');
+      }
+      if (value === null) {
+        if (entry.base) {
+          delete entry.base.supportsImageInput;
+          if (!Object.keys(entry.base).length) delete entry.base;
+        }
+        const fields = entry.perAgent?.[target.agent];
+        if (fields) {
+          delete fields.supportsImageInput;
+          if (!Object.keys(fields).length) delete entry.perAgent![target.agent];
+        }
+        if (entry.perAgent && !Object.keys(entry.perAgent).length) delete entry.perAgent;
+        if (!entry.base && !entry.perAgent && !entry.agents) delete patches[key];
+      } else {
+        entry.perAgent ??= {};
+        entry.perAgent[target.agent] = {
+          ...entry.perAgent[target.agent],
+          supportsImageInput: value,
+        };
+      }
+    }
+    const checked = sanitizeModelCatalogOverrides({ ...current.value, patches });
+    if (checked.invalid.length) throw new Error('Invalid model image input override');
+    written = patches;
+    return { patches };
+  });
+  try {
+    await refresh();
+  } catch (error) {
+    // Roll back in the original account even if the active owner changed while refreshing.
+    await createStore(() => file).updateAtomic((current) => {
+      const patches = { ...current.value.patches };
+      for (const key of keys) {
+        if (JSON.stringify(patches[key]) !== JSON.stringify(written[key])) continue;
+        if (previous[key]) patches[key] = previous[key];
+        else delete patches[key];
+      }
+      return { patches };
+    });
+    if (getActiveAppSession().generation === generation) {
+      try {
+        await refresh();
+      } catch {
+        log.warn('model image input rollback refresh failed');
+      }
+    }
+    throw error;
+  }
+}
+
 export interface ModelCatalogImageInputTarget {
   providerId: string;
   modelId: string;
@@ -127,6 +202,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** patch 条目的键格式，与 sanitize/合并侧保持一致。 */
+
 function patchKey(providerId: string, modelId: string): string {
   return `${encodeURIComponent(providerId)}:${modelId}`;
 }
@@ -188,6 +264,7 @@ function widenAgentsForDeclaredTargets(
 }
 
 /** 从条目里拿指定 agent 的有效图片能力声明（perAgent 覆盖 base，与合并侧一致）。 */
+
 function effectiveImageInput(
   entry: ModelCatalogOverrideEntry | undefined,
   agent: AgentKind | undefined,
@@ -208,6 +285,7 @@ function effectiveImageInput(
  * perAgent 里残留的 supportsImageInput 会遮蔽 base（导致 UI 显示与运行期不一致），连同
  * 本次写入一起清掉；条目里其它字段与其它条目原样保留。
  */
+
 export async function setModelCatalogImageInput(
   target: ModelCatalogImageInputTarget | readonly ModelCatalogImageInputTarget[],
   value: boolean | null,
@@ -274,6 +352,7 @@ function assertPatchCountWithinLimit(patches: Record<string, ModelCatalogOverrid
  * 「显式声明了一个刚好等于目录的值」—— 只报 value 会让「恢复跟随供应商」无从表达。
  * 给了 agent 就按合并语义算有效值(base + perAgent[agent])，否则只看 base。
  */
+
 export function readModelCatalogImageInput(target: ModelCatalogImageInputTarget): {
   value: boolean | null;
   isCustomized: boolean;
@@ -286,6 +365,7 @@ export function readModelCatalogImageInput(target: ModelCatalogImageInputTarget)
 
 
 /** 从条目里拿指定 agent 的有效思考档位声明（perAgent 覆盖 base，与合并侧一致）。 */
+
 function effectiveThinking(
   entry: ModelCatalogOverrideEntry | undefined,
   agent: AgentKind | undefined,

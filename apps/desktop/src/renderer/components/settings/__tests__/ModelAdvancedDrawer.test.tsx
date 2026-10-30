@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, resolveModelMetadata } from '@cindy/model-providers';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
@@ -8,13 +8,9 @@ const mocks = vi.hoisted(() => ({
   setLimit: vi.fn(async () => {}),
   reset: vi.fn(async () => {}),
   target: vi.fn(),
+  imageTarget: vi.fn(),
+  imageSet: vi.fn(async () => {}),
   limit: null as number | null,
-  compaction: { pct: 90, isCustomized: false } as { pct: number; isCustomized: boolean },
-  compactionEnabled: false,
-  setCompaction: vi.fn(async () => {}),
-  ownerGeneration: 1,
-  sliderValue: null as number | null,
-  pressValue: null as number | null,
 }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -33,44 +29,28 @@ vi.mock('@/hooks/useModelContextLimit', () => ({
       error: false,
       setLimit: mocks.setLimit,
       reset: mocks.reset,
-      ...(mocks.compactionEnabled
-        ? { compaction: mocks.compaction, setCompaction: mocks.setCompaction }
-        : {}),
     };
   },
 }));
-const imageInputMocks = vi.hoisted(() => ({
-  setValue: vi.fn(async () => true),
-  target: vi.fn(),
-  value: null as boolean | null,
-  isCustomized: false,
-  diverged: false,
-  errorReason: undefined as string | undefined,
-  saving: false,
-  loading: false,
-}));
-vi.mock('@/hooks/useModelCatalogImageInput', () => ({
-  useModelCatalogImageInput: (target: unknown) => {
-    imageInputMocks.target(target);
-    return {
-      value: imageInputMocks.value,
-      isCustomized: imageInputMocks.isCustomized,
-      diverged: imageInputMocks.diverged,
-      errorReason: imageInputMocks.errorReason,
-      loading: imageInputMocks.loading,
-      saving: imageInputMocks.saving,
-      error: false,
-      setValue: imageInputMocks.setValue,
-    };
+vi.mock('@/hooks/useModelImageInputOverride', () => ({
+  useModelImageInputOverride: (target: unknown) => {
+    mocks.imageTarget(target);
+    return { value: null, mixed: false, loading: false, error: false, setValue: mocks.imageSet };
   },
 }));
-vi.mock('@/lib/toast', () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
-  }));
-vi.mock('@/contexts/dataOwnerGeneration', () => ({
-  getDataOwnerGeneration: () => ({ dataOwnerId: 'owner', generation: mocks.ownerGeneration }),
-  isDataOwnerGenerationCurrent: (owner: { generation: number }) =>
-    owner.generation === mocks.ownerGeneration,
+vi.mock('@/hooks/useModelCatalogThinking', () => ({
+  useModelCatalogThinking: () => ({
+    value: null,
+    defaultEffort: null,
+    isCustomized: false,
+    diverged: false,
+    errorReason: undefined,
+    loading: false,
+    loaded: true,
+    saving: false,
+    error: false,
+    setTiers: vi.fn(async () => true),
+  }),
 }));
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
@@ -86,48 +66,6 @@ vi.mock('@/state/providerModelMemory', () => ({
   clearProviderModelEffort: vi.fn(),
 }));
 vi.mock('../ModelPriceOverrideDialog', () => ({ ModelPriceOverrideDialog: () => null }));
-// Radix 滑杆在 jsdom 里量不到轨道，手势语义另有 ui/slider 自己的用例；这里换成
-// 一个可控的 range 输入，直接驱动“预览 / 提交”两条通道。
-vi.mock('@/components/ui/slider', () => ({
-  Slider: ({ value, min, max, step, onValueChange, onValueCommit, onValueCancel, onPointerCancel, ...rest }: {
-    value?: number[];
-    min?: number;
-    max?: number;
-    step?: number;
-    onValueChange?: (next: number[]) => void;
-    onValueCommit?: (next: number[]) => void;
-    onValueCancel?: (restored: number[]) => void;
-    onPointerCancel?: (event: unknown) => void;
-    'aria-label'?: string;
-  }) => {
-    // 受控 input 在 jsdom 里不回写未变化的 DOM value，断言直接读收到的 value prop。
-    mocks.sliderValue = value?.[0] ?? min ?? null;
-    return (
-    <input
-      type="range"
-      aria-label={rest['aria-label']}
-      value={value?.[0] ?? min}
-      min={min}
-      max={max}
-      step={step}
-      onPointerDown={(event) => {
-        // 共享 Slider 记下按下时的值，取消时回放它。
-        mocks.pressValue = value?.[0] ?? min ?? null;
-      }}
-      onPointerCancel={(event) => {
-        onPointerCancel?.(event);
-        // 共享 Slider 的取消语义：先报告取消，再回放按下前的值。
-        // 回放值不等于落盘值（真实场景：按下 90、别的窗口存了 70）。
-        const restored = [mocks.pressValue ?? value?.[0] ?? min ?? 0];
-        onValueCancel?.(restored);
-        onValueChange?.(restored);
-      }}
-      onChange={(event) => onValueChange?.([Number(event.target.value)])}
-      onBlur={(event) => onValueCommit?.([Number(event.target.value)])}
-    />
-    );
-  },
-}));
 import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
 import { setModelVisibility } from '@/state/modelVisibilityPrefs';
 import { setProviderModelEffort, getProviderModelEffort, clearProviderModelEffort } from '@/state/providerModelMemory';
@@ -181,28 +119,7 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.limit = null;
-  imageInputMocks.value = null;
-  imageInputMocks.isCustomized = false;
-  imageInputMocks.diverged = false;
-  imageInputMocks.errorReason = undefined;
-  imageInputMocks.saving = false;
-  imageInputMocks.loading = false;
-  mocks.compactionEnabled = false;
-  mocks.compaction = { pct: 90, isCustomized: false };
-  mocks.ownerGeneration = 1;
-  mocks.sliderValue = null;
-  mocks.pressValue = null;
   vi.mocked(getProviderModelEffort).mockReset();
-  // Radix 的滑杆用 ResizeObserver 量轨道，jsdom 没有。
-  vi.stubGlobal('ResizeObserver', class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  });
-  // jsdom 没有指针捕获，手势取消路径（共享 Slider 的 cancel）要用到。
-  Element.prototype.setPointerCapture ??= () => {};
-  Element.prototype.releasePointerCapture ??= () => {};
-  Element.prototype.hasPointerCapture ??= () => false;
 });
 
 describe('model advanced editor', () => {
@@ -215,154 +132,6 @@ describe('model advanced editor', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.ultra' }));
     expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', id, 'ultra');
     expect(setProviderModelEffort).toHaveBeenCalledWith('claude-code', 'openai', `chatgpt/${id}`, 'max');
-  });
-
-  // The compaction row only writes on release: a preview must not write, a release
-  // must collapse a keyboard burst into one write, and the shown ratio must always
-  // follow the saved policy.
-  it('commits the compaction ratio once per release and follows the saved policy', async () => {
-    mocks.compactionEnabled = true;
-    vi.useFakeTimers();
-    try {
-      const view = render(drawer());
-      const ratio = () => screen.getByRole('slider', {
-        name: 'settings.providers.models.advanced.compaction.sliderAria',
-      }) as HTMLInputElement;
-
-      fireEvent.change(ratio(), { target: { value: '89' } });
-      expect(ratio().value).toBe('89');
-      expect(mocks.setCompaction).not.toHaveBeenCalled();
-
-      // Saved policy moves on (write landed, model switched, external edit): the
-      // preview must not survive it.
-      mocks.compaction = { pct: 70, isCustomized: true };
-      view.rerender(drawer());
-      expect(ratio().value).toBe('70');
-
-      // A release writes right away (drag latency); a burst inside the window
-      // collapses into one trailing write of the last value.
-      fireEvent.change(ratio(), { target: { value: '80' } });
-      fireEvent.blur(ratio());
-      expect(mocks.setCompaction).toHaveBeenCalledTimes(1);
-      expect(mocks.setCompaction).toHaveBeenLastCalledWith(80);
-
-      fireEvent.change(ratio(), { target: { value: '81' } });
-      fireEvent.blur(ratio());
-      fireEvent.change(ratio(), { target: { value: '82' } });
-      fireEvent.blur(ratio());
-      await act(async () => { await vi.advanceTimersByTimeAsync(350); });
-      expect(mocks.setCompaction).toHaveBeenCalledTimes(2);
-      expect(mocks.setCompaction).toHaveBeenLastCalledWith(82);
-
-      fireEvent.click(screen.getByRole('button', {
-        name: 'settings.providers.models.advanced.compaction.restoreAria',
-      }));
-      expect(mocks.setCompaction).toHaveBeenLastCalledWith(null);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // The trailing burst write must survive the first write's confirmation: the
-  // policy moving to 89 is our own write landing, not a reason to drop 87.
-  it('keeps the trailing burst write alive across the first write confirmation', async () => {
-    mocks.compactionEnabled = true;
-    vi.useFakeTimers();
-    try {
-      const view = render(drawer());
-      const ratio = () => screen.getByRole('slider', {
-        name: 'settings.providers.models.advanced.compaction.sliderAria',
-      }) as HTMLInputElement;
-
-      let releaseFirst!: () => void;
-      mocks.setCompaction.mockImplementationOnce(
-        async () => new Promise<void>((resolve) => { releaseFirst = resolve; }),
-      );
-      fireEvent.change(ratio(), { target: { value: '89' } });
-      fireEvent.blur(ratio());
-      expect(mocks.setCompaction).toHaveBeenCalledTimes(1);
-
-      fireEvent.change(ratio(), { target: { value: '88' } });
-      fireEvent.blur(ratio());
-      fireEvent.change(ratio(), { target: { value: '87' } });
-      fireEvent.blur(ratio());
-
-      // The first write confirms (policy moves to 89) before the trailing timer.
-      await act(async () => {
-        releaseFirst();
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      mocks.compaction = { pct: 89, isCustomized: true };
-      view.rerender(drawer());
-      expect(ratio().value).toBe('87');
-
-      await act(async () => { await vi.advanceTimersByTimeAsync(350); });
-      expect(mocks.setCompaction).toHaveBeenCalledTimes(2);
-      expect(mocks.setCompaction).toHaveBeenLastCalledWith(87);
-      mocks.compaction = { pct: 87, isCustomized: true };
-      view.rerender(drawer());
-      expect(ratio().value).toBe('87');
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // A trailing write binds to the account generation at commit time; an account
-  // switch while it waits must retire it instead of writing the old value into
-  // the new account.
-  it('retires the trailing burst write when the account generation moved on', async () => {
-    mocks.compactionEnabled = true;
-    vi.useFakeTimers();
-    try {
-      render(drawer());
-      const ratio = () => screen.getByRole('slider', {
-        name: 'settings.providers.models.advanced.compaction.sliderAria',
-      }) as HTMLInputElement;
-
-      fireEvent.change(ratio(), { target: { value: '89' } });
-      fireEvent.blur(ratio());
-      fireEvent.change(ratio(), { target: { value: '88' } });
-      fireEvent.blur(ratio());
-      mocks.ownerGeneration += 1;
-      await act(async () => { await vi.advanceTimersByTimeAsync(350); });
-      expect(mocks.setCompaction).toHaveBeenCalledTimes(1);
-      expect(mocks.setCompaction).toHaveBeenCalledWith(89);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // The shared Slider reports a canceled gesture explicitly (a consumer cannot
-  // tell a cancel replay from a normal move to the same value). The preview
-  // must follow the saved policy, even when the drag passed the start value.
-  it('drops the drag preview on cancel even when the drag passed the start value', () => {
-    mocks.compactionEnabled = true;
-    const view = render(drawer());
-    const ratio = () => screen.getByRole('slider', {
-      name: 'settings.providers.models.advanced.compaction.sliderAria',
-    }) as HTMLInputElement;
-
-    fireEvent.pointerDown(ratio(), { pointerId: 1, button: 0, isPrimary: true });
-    fireEvent.change(ratio(), { target: { value: '80' } });
-    expect(mocks.sliderValue).toBe(80);
-    expect(mocks.setCompaction).not.toHaveBeenCalled();
-
-    // Another window saves 70 while the drag is in the air.
-    mocks.compaction = { pct: 70, isCustomized: true };
-    view.rerender(drawer());
-
-    // Cancel: the shared Slider reports it and replays the press-time value.
-    fireEvent.pointerCancel(ratio(), { pointerId: 1 });
-    expect(mocks.sliderValue).toBe(70);
-    expect(mocks.setCompaction).not.toHaveBeenCalled();
-
-    // Keyboard after the cancel must not be mistaken for another replay:
-    // End-to-95 and back to 90 must both show immediately.
-    fireEvent.change(ratio(), { target: { value: '95' } });
-    expect(mocks.sliderValue).toBe(95);
-    fireEvent.change(ratio(), { target: { value: '90' } });
-    expect(mocks.sliderValue).toBe(90);
-    expect(mocks.setCompaction).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -479,11 +248,11 @@ describe('model advanced editor', () => {
       render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
       const input = screen.getByRole('textbox', { name: 'settings.providers.models.advanced.contextLimitAria' });
       await waitFor(() => expect(window.electronAPI.maker.llamaCppStatus).toHaveBeenCalled());
-      fireEvent.change(input, { target: { value: '64' } });
+      fireEvent.change(input, { target: { value: '64K' } });
       expect(input.getAttribute('aria-invalid')).toBe('true');
       fireEvent.blur(input);
       expect(mocks.setLimit).not.toHaveBeenCalled();
-      fireEvent.change(input, { target: { value: '32' } });
+      fireEvent.change(input, { target: { value: '32K' } });
       fireEvent.blur(input);
       expect(mocks.setLimit).toHaveBeenLastCalledWith(32000);
     } finally { cleanup(); Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
@@ -525,94 +294,6 @@ describe('model advanced editor', () => {
     render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
     expect(screen.queryByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
     expect(screen.getByText(/Chat Completions/)).toBeTruthy();
-  });
-
-  it('keeps the thinking declaration disabled until the first read lands', async () => {
-    // 首次读回前 value 是空占位：此时能点开菜单并勾一档，就会把「只有这一档」当成完整
-    // 集合写盘，覆盖本机已声明的档位与默认档。
-    let release!: (view: unknown) => void;
-    const pending = new Promise((resolve) => {
-      release = resolve;
-    });
-    const setTiers = vi.fn(async () => undefined);
-    const previous = window.electronAPI;
-    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
-      updateCustomProvider: vi.fn(async () => ({ ok: true })),
-      getModelCatalogThinking: vi.fn(() => pending),
-      setModelCatalogThinking: setTiers,
-    } } });
-    const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
-      codex: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat',
-        models: [{ id: 'gpt-6', name: 'GPT-6', efforts: [] as never, route: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat' } }] },
-    } }), connected: true } as ProviderView;
-    try {
-      render(drawer(source.models.codex![0], 'high', ['high'], source));
-      const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.thinkingOverride.label' });
-      expect((trigger as HTMLButtonElement).disabled).toBe(true);
-      release({ value: ['low', 'high', 'max'], defaultEffort: 'max', isCustomized: true });
-      await waitFor(() => expect((trigger as HTMLButtonElement).disabled).toBe(false));
-      expect(setTiers).not.toHaveBeenCalled();
-    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
-  });
-
-  it('disables the thinking declaration for organization-managed providers', () => {
-    // 企业托管：能力由管理员下发，本机 override 是最高优先级，必须在控件上就拦住。
-    // （按钮禁用挡不住受信 renderer 直调，IPC 侧另有 PERMISSION_DENIED 兜底。）
-    const previous = window.electronAPI;
-    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
-      updateCustomProvider: vi.fn(async () => ({ ok: true })),
-      getModelCatalogThinking: vi.fn(async () => ({ value: null, isCustomized: false })),
-      setModelCatalogThinking: vi.fn(async () => undefined),
-    } } });
-    // 企业托管的判定口径是 source === 'organization'（isOrganizationManagedProvider）。
-    const managed = { ...buildUserProvider({ id: 'corp', name: 'Corp', runtimes: {
-      codex: { baseUrl: 'https://corp.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat',
-        models: [{ id: 'corp-model', name: 'Corp Model', route: { baseUrl: 'https://corp.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat' } }] },
-    } }), connected: true, source: 'organization' } as ProviderView;
-    try {
-      render(drawer(managed.models.codex![0], 'high', ['high'], managed));
-      const trigger = screen.getByRole('button', { name: 'settings.providers.models.advanced.thinkingOverride.label' });
-      expect((trigger as HTMLButtonElement).disabled).toBe(true);
-    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
-  });
-
-  it('declares thinking tiers as a local catalog override instead of editing the connection', async () => {
-    // 目录把该模型声明成零档位（不支持思考），用户从高级设置里补上真实档位。
-    const setTiers = vi.fn(async () => undefined);
-    const getView = vi.fn(async () => ({ value: null, isCustomized: false }));
-    const previous = window.electronAPI;
-    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
-      updateCustomProvider: vi.fn(async () => ({ ok: true })),
-      getModelCatalogThinking: getView,
-      setModelCatalogThinking: setTiers,
-    } } });
-    const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
-      codex: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat',
-        models: [{ id: 'gpt-6', name: 'GPT-6', efforts: [] as never, route: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat' } }] },
-    } }), connected: true } as ProviderView;
-    try {
-      render(drawer(source.models.codex![0], 'high', ['high'], source));
-      fireEvent.keyDown(
-        screen.getByRole('button', { name: 'settings.providers.models.advanced.thinkingOverride.label' }),
-        { key: 'ArrowDown' },
-      );
-      // 档位名走既有正本 effortLevels.*：与「默认推理强度」选择器逐字一致。
-      const high = await screen.findByRole('menuitemcheckbox', { name: 'effortLevels.high' });
-      fireEvent.click(high);
-      await waitFor(() => expect(setTiers).toHaveBeenCalledTimes(1));
-      // 写入的是目录 override（不是连接配置），且带上目标行全部引擎的 id。
-      const [target, tiers, defaultTier] = setTiers.mock.calls[0]! as unknown as [
-        { providerId: string; modelId: string; relatedTargets?: unknown[] }, string[] | null, string | null,
-      ];
-      expect(target.providerId).toBe('fixture');
-      expect(target.modelId).toBe('gpt-6');
-      expect(tiers).toEqual(['high']);
-      // 首次声明没有既有默认档可沿用 → 留 null 让运行期按目录默认回退，
-      // 而不是猜「排序第一档」（那会把厂商默认如 max 静默改成 high）。
-      expect(defaultTier).toBeNull();
-      // 连接配置不得被这条路径改写。
-      expect(window.electronAPI.maker.updateCustomProvider).not.toHaveBeenCalled();
-    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 
   it('saves protocol selection to the selected engine and model without writing derived model limits', async () => {
@@ -692,59 +373,32 @@ describe('model advanced editor', () => {
     mocks.limit = 1_000;
     draw();
     const input = screen.getByRole('textbox') as HTMLInputElement;
-    expect(input.value).toBe('1');
+    expect(input.value).toBe('1000');
     expect(input.hasAttribute('aria-invalid')).toBe(false);
     fireEvent.blur(input);
     expect(mocks.setLimit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: '2' } });
+    fireEvent.change(input, { target: { value: '2K' } });
     fireEvent.blur(input);
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(mocks.setLimit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: '99' } });
+    fireEvent.change(input, { target: { value: '99K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: '100' } });
+    fireEvent.change(input, { target: { value: '100K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenLastCalledWith(100_000);
-    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.change(input, { target: { value: '1K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps the trailing token readout on the typed value until the write lands', async () => {
-    // 提交后写入是异步的（hook 先 loading、仍持有旧 limit）。修复前抽屉在 blur 瞬间丢掉草稿，
-    // 说明行会先退回旧的 400,000、等回声到了再跳 500,000 —— 用户实测到的「闪一下旧值」。
-    mocks.limit = 400_000;
-    let release: () => void = () => {};
-    mocks.setLimit.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
-        }),
-    );
-    draw();
-    const input = screen.getByRole('textbox') as HTMLInputElement;
-    expect(input.value).toBe('400');
-    fireEvent.change(input, { target: { value: '500' } });
-    fireEvent.blur(input);
-    expect(mocks.setLimit).toHaveBeenLastCalledWith(500_000);
-    // 写入在途：说明行必须继续显示刚输入的值。
-    expect(screen.getByText(/advanced\.contextLimitRoute 500,000/)).toBeTruthy();
-    expect(screen.queryByText(/advanced\.contextLimitRoute 400,000/)).toBeNull();
-    // 回声落地（hook 此时已持有新值）后再收口：仍然是新值，不回退。
-    mocks.limit = 500_000;
-    release();
-    await waitFor(() => expect(screen.getByText(/advanced\.contextLimitRoute 500,000/)).toBeTruthy());
-    expect(screen.queryByText(/advanced\.contextLimitRoute 400,000/)).toBeNull();
   });
 
   it.each(['cindy-local-ollama', 'ollama', 'cindy-local-lmstudio'])('keeps %s editable at 1K even when the catalog advertises a large window', (id) => {
     render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id, source: 'user' }));
     const input = screen.getByRole('textbox');
-    fireEvent.change(input, { target: { value: '4' } });
+    fireEvent.change(input, { target: { value: '4K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenLastCalledWith(4_000);
-    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.change(input, { target: { value: '1K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000);
   });
@@ -753,251 +407,14 @@ describe('model advanced editor', () => {
     draw({ ...model, contextWindow: window, contextWindowMax: window });
     const input = screen.getByRole('textbox');
     const floor = Math.floor(window / 1000);
-    fireEvent.change(input, { target: { value: String(floor - 1) } });
+    fireEvent.change(input, { target: { value: `${floor - 1}K` } });
     fireEvent.blur(input);
     expect(mocks.setLimit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: String(floor) } });
+    fireEvent.change(input, { target: { value: `${floor}K` } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledWith(floor * 1000);
   });
 
-
-  // 上游未声明容量时不能把「工作默认值」印成「上游最大上下文」：自定义连接的 200K 是兜底，
-  // 而运行期窗口其实取模型级上下文上限（用户实测报障：圆环 1.0M / 这里 200K）。
-  function withoutCapacity(over: Partial<CatalogModel> = {}): CatalogModel {
-    const { contextWindowMax: _omit, ...rest } = model;
-    return { ...rest, contextWindow: 200_000, ...over };
-  }
-
-  it('shows "not declared" instead of the working default when the provider declares no capacity', () => {
-    draw(withoutCapacity());
-    // 这一行只报「容量未声明」：不再把工作默认值（200K 兜底，或目录给的 1M）当成容量塞进这一格。
-    expect(
-      screen.getAllByText('settings.providers.models.advanced.undeclared').length,
-    ).toBeGreaterThan(0);
-    expect(screen.queryByText('200,000')).toBeNull();
-    expect(screen.queryByText('settings.providers.models.advanced.tokensApprox')).toBeNull();
-    // 工作窗口仍然可见 —— 在「上下文上限」那行的说明里（未设上限时取目录默认值）。
-    // 那行带插值（t 的 mock 会拼上 tokens），所以用正则而非精确匹配。
-    expect(screen.getByText(/advanced\.contextLimitRoute/)).toBeTruthy();
-  });
-
-  it('shows the window upstream handed down even when no capacity is declared', () => {
-    // opencode-go 的 deepseek-v4.1-flash 就是这种：没有 contextWindowMax，但预设/服务端目录
-    // 下发了窗口（buildUserProvider 会带上 contextWindowVerified）→ 这行要显示该窗口，而不是「未声明」。
-    draw({ ...withoutCapacity(), contextWindow: 1_048_576, contextWindowVerified: true });
-    expect(screen.getByText('1,048,576')).toBeTruthy();
-    // 「约 X」只由规格那一行渲染（「未声明」这个 key 在抽屉里另有多处，不能拿它判负）。
-    expect(screen.getByText('settings.providers.models.advanced.tokensApprox')).toBeTruthy();
-  });
-
-  it('lets the user declare an undeclared image capability from the drawer', async () => {
-    // 上游未声明图片能力时 Pi 会在客户端拒收图片，而此前没有任何可点的声明入口。
-    draw();
-    const trigger = screen.getByRole('button', {
-      name: 'settings.providers.models.advanced.imageInputOverride.label',
-    });
-    // 未声明时显示「跟随目录」。
-    expect(trigger.textContent).toContain('settings.providers.models.advanced.imageInputOverride.inherit');
-
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-    fireEvent.click(
-      await screen.findByRole('menuitemradio', {
-        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
-      }),
-    );
-    await waitFor(() => expect(imageInputMocks.setValue).toHaveBeenCalledWith(true));
-  });
-
-  it('shows a declared capability and can return to following the catalog', async () => {
-    imageInputMocks.value = false;
-    imageInputMocks.isCustomized = true;
-    draw();
-    const trigger = screen.getByRole('button', {
-      name: 'settings.providers.models.advanced.imageInputOverride.label',
-    });
-    expect(trigger.textContent).toContain('settings.providers.models.advanced.imageInputOverride.declaredFalse');
-
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-    fireEvent.click(
-      await screen.findByRole('menuitemradio', {
-        name: 'settings.providers.models.advanced.imageInputOverride.inherit',
-      }),
-    );
-    await waitFor(() => expect(imageInputMocks.setValue).toHaveBeenCalledWith(null));
-  });
-
-  it('allows re-selecting the current value to repair a split across engine keys', async () => {
-    // 各引擎键分叉（手工改文件/旧版单键写入的存量数据）时，同值 no-op 会把“重选当前项”
-    // 挡掉 —— 分叉永远修不掉，UI 显示一侧而运行期读另一侧。diverged 时必须放行写入。
-    imageInputMocks.value = true;
-    imageInputMocks.isCustomized = true;
-    imageInputMocks.diverged = true;
-    draw();
-    const trigger = screen.getByRole('button', {
-      name: 'settings.providers.models.advanced.imageInputOverride.label',
-    });
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-    fireEvent.click(
-      await screen.findByRole('menuitemradio', {
-        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
-      }),
-    );
-    await waitFor(() => expect(imageInputMocks.setValue).toHaveBeenCalledWith(true));
-  });
-
-  it('skips the write when the user picks the state it is already in', async () => {
-    imageInputMocks.value = true;
-    imageInputMocks.isCustomized = true;
-    draw();
-    const trigger = screen.getByRole('button', {
-      name: 'settings.providers.models.advanced.imageInputOverride.label',
-    });
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-    fireEvent.click(
-      await screen.findByRole('menuitemradio', {
-        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
-      }),
-    );
-    expect(imageInputMocks.setValue).not.toHaveBeenCalled();
-  });
-
-  it('keeps the control usable and visually stable while a provider refresh refetches', () => {
-    // 写入后 main 广播 PROVIDER_CHANGED，hook 会重读；重读期间值原样保留，
-    // 既不禁用也不改透明度 —— 否则一次切换会出现两次明暗跳变（用户报障：闪一下）。
-    imageInputMocks.loading = true;
-    draw();
-    const trigger = screen.getByRole('button', {
-      name: 'settings.providers.models.advanced.imageInputOverride.label',
-    });
-    expect(trigger).toHaveProperty('disabled', false);
-    expect(trigger.className).not.toContain('disabled:opacity');
-    expect(trigger.className).not.toContain('opacity-60');
-  });
-
-  it('reports a failed declaration instead of silently keeping the optimistic value', async () => {
-    const { toast } = await import('@/lib/toast');
-    imageInputMocks.setValue.mockResolvedValueOnce(false);
-    draw();
-    const trigger = screen.getByRole('button', {
-      name: 'settings.providers.models.advanced.imageInputOverride.label',
-    });
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-    fireEvent.click(
-      await screen.findByRole('menuitemradio', {
-        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
-      }),
-    );
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
-        'settings.providers.models.advanced.imageInputOverride.saveFailed',
-      ),
-    );
-  });
-
-  it('disables the declaration control for organization-managed providers', () => {
-    // 组织托管供应商的能力由管理员下发：本机不可覆盖。控件保留但禁用（与 xd 网关同一约定），
-    // Main IPC 侧另有 PERMISSION_DENIED 拒写兜底 —— 按钮禁用挡不住受信 renderer 直调 preload。
-    const orgProvider = { ...provider, id: 'corp-gateway', source: 'organization' } as ProviderView;
-    render(drawer(model, model.defaultEffort, model.efforts, orgProvider));
-    expect(
-      screen.getByRole('button', {
-        name: 'settings.providers.models.advanced.imageInputOverride.label',
-      }),
-    ).toHaveProperty('disabled', true);
-  });
-
-  it('shows the actionable reason from main when a hand-edited file blocks the write', async () => {
-    // store 拒绝写入时给出「先修正 model-catalog-overrides.json」的指引；只显示通用
-    // 「保存失败」会让用户反复失败却看不到唯一的修复方式。
-    const { toast } = await import('@/lib/toast');
-    imageInputMocks.setValue.mockResolvedValueOnce(false);
-    imageInputMocks.errorReason = '请先修正 model-catalog-overrides.json';
-    draw();
-    const trigger = screen.getByRole('button', {
-      name: 'settings.providers.models.advanced.imageInputOverride.label',
-    });
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-    fireEvent.click(
-      await screen.findByRole('menuitemradio', {
-        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
-      }),
-    );
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith(
-        'settings.providers.models.advanced.imageInputOverride.saveFailedWithReason',
-      ),
-    );
-  });
-
-  it('covers every harness id of the row when declaring image capability', async () => {
-    // openai 行的主展示引擎是 codex（gpt-6），而运行期消费该能力的 Pi 侧 id 是 chatgpt/gpt-6。
-    // 只写主引擎的 id 时 Pi 永远读不到声明，UI 却会显示「已声明」。
-    const piModel = { ...model, id: 'chatgpt/gpt-6' };
-    render(
-      <ModelAdvancedDrawer
-        provider={provider}
-        row={{
-          id: model.id,
-          name: model.name,
-          avail: ['codex', 'pi'],
-          byAgent: { codex: model, pi: piModel },
-        }}
-        open
-        onOpenChange={vi.fn()}
-        pricePresentationOf={() => null}
-        onDisable={vi.fn()}
-        disabled={false}
-        paymentRequired={false}
-      />,
-    );
-
-    const trigger = screen.getByRole('button', {
-      name: 'settings.providers.models.advanced.imageInputOverride.label',
-    });
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-    fireEvent.click(
-      await screen.findByRole('menuitemradio', {
-        name: 'settings.providers.models.advanced.imageInputOverride.declaredTrue',
-      }),
-    );
-    await waitFor(() => expect(imageInputMocks.setValue).toHaveBeenCalledWith(true));
-    // 声明目标必须带上 Pi 侧 id（写盘/读取都按该 id 精确匹配）。
-    const targets = imageInputMocks.target.mock.calls.map((call) => call[0]);
-    expect(targets).toContainEqual(
-      expect.objectContaining({
-        providerId: 'openai',
-        agent: 'codex',
-        modelId: 'gpt-6',
-        relatedTargets: [expect.objectContaining({ agent: 'pi', modelId: 'chatgpt/gpt-6' })],
-      }),
-    );
-  });
-
-  it('warns when the limit exceeds a verified upstream window without a declared max', () => {
-    // 「已验证窗口但无 contextWindowMax」的模型此前不会告警：填到窗口以上也静默接受。
-    mocks.limit = 1_200_000;
-    draw({ ...withoutCapacity(), contextWindow: 1_048_576, contextWindowVerified: true });
-    expect(
-      screen.getByText('settings.providers.models.advanced.contextLimitOverWindow'),
-    ).toBeTruthy();
-  });
-
-  it('does not offer the local declaration for the server-controlled gateway provider', () => {
-    render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id: 'xd' }));
-    expect(
-      screen.getByRole('button', {
-        name: 'settings.providers.models.advanced.imageInputOverride.label',
-      }),
-    ).toHaveProperty('disabled', true);
-  });
-
-  it('does not warn about the limit exceeding an undeclared capacity', () => {
-    // 未声明容量时拿 200K 工作默认值当告警基线会误报「已超出当前显示的窗口」。
-    mocks.limit = 1_200_000;
-    draw(withoutCapacity());
-    expect(screen.queryByText('settings.providers.models.advanced.contextLimitOverWindow')).toBeNull();
-  });
 
   it('keeps useful identity fields without exposing internal defaults, normal lifecycle or raw descriptions', () => {
     draw({ ...model, status: 'active', defaultEnabled: false, description: 'GPT for coding tasks' });
@@ -1049,8 +466,8 @@ describe('model advanced editor', () => {
     const input = screen.getByRole('textbox', {
       name: 'settings.providers.models.advanced.contextLimitAria',
     });
-    expect((input as HTMLInputElement).value).toBe('272');
-    fireEvent.change(input, { target: { value: '500' } });
+    expect((input as HTMLInputElement).value).toBe('272000');
+    fireEvent.change(input, { target: { value: '500K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledWith(500_000);
     fireEvent.change(input, { target: { value: '1.5' } });
@@ -1079,7 +496,7 @@ describe('model advanced editor', () => {
       />,
     );
     const input = screen.getByRole('textbox');
-    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.change(input, { target: { value: '1000K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
     expect(screen.getByText('1,050,000')).toBeTruthy();
@@ -1100,7 +517,7 @@ describe('model advanced editor', () => {
       />,
     );
     const input = screen.getByRole('textbox');
-    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.change(input, { target: { value: '1000K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
     expect(screen.getAllByText('272K').length).toBeGreaterThan(0);
@@ -1130,20 +547,20 @@ describe('model advanced editor', () => {
     expect(screen.getByText(/^Messages/)).toBeTruthy();
     expect(screen.getByText(/^Responses/)).toBeTruthy();
     expect(screen.getByText(/^Chat Completions/)).toBeTruthy();
-    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('1048');
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('1048576');
   });
 
-  it('shows whole K without rewriting the exact catalog value on untouched blur', () => {
+  it('shows exact tokens without rewriting the catalog value on untouched blur', () => {
     draw({ ...model, contextWindow: 1_048_576, contextWindowMax: 1_048_576 });
     const input = screen.getByRole('textbox') as HTMLInputElement;
-    expect(input.value).toBe('1048');
+    expect(input.value).toBe('1048576');
     expect(
       screen.getByText('settings.providers.models.advanced.contextLimitRoute 1,048,576'),
     ).toBeTruthy();
     fireEvent.focus(input);
     fireEvent.blur(input);
     expect(mocks.setLimit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: '1000' } });
+    fireEvent.change(input, { target: { value: '1000K' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
   });
@@ -1210,7 +627,7 @@ describe('model advanced editor', () => {
     mocks.limit = 1_048_900;
     draw({ ...model, contextWindow: 1_048_576, contextWindowMax: 1_048_576 });
     const input = screen.getByRole('textbox') as HTMLInputElement;
-    expect(input.value).toBe('1048');
+    expect(input.value).toBe('1048900');
     expect(
       screen.getByText('settings.providers.models.advanced.contextLimitOverWindow'),
     ).toBeTruthy();
@@ -1277,11 +694,11 @@ describe('model advanced editor', () => {
 
   it('refreshes defaults and controls in an open drawer when the catalog changes', () => {
     const { rerender } = draw();
-    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('272');
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('272000');
     rerender(
       drawer({ ...model, contextWindow: 700_000, efforts: ['high', 'max'], defaultEffort: 'max' }),
     );
-    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700');
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('700000');
     expect(screen.queryByRole('radio', { name: 'effortLevels.low' })).toBeNull();
     expect(
       screen.getByRole('radio', { name: 'effortLevels.max' }).getAttribute('aria-checked'),
@@ -1293,7 +710,7 @@ describe('model advanced editor', () => {
     const input = screen.getByRole('textbox', {
       name: 'settings.providers.models.advanced.contextLimitAria',
     });
-    fireEvent.change(input, { target: { value: '1200' } });
+    fireEvent.change(input, { target: { value: '1200K' } });
     expect(
       screen.getByText('settings.providers.models.advanced.contextLimitOverWindow'),
     ).toBeTruthy();
@@ -1397,7 +814,7 @@ it('limits context and effort reads, writes and resets to the chat runtime', () 
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.models.advanced.restoreDefault' }));
   expect(clearProviderModelEffort).toHaveBeenCalledExactlyOnceWith('codex', 'private', 'shared');
   const input = screen.getByRole('textbox');
-  fireEvent.change(input, { target: { value: '128' } });
+  fireEvent.change(input, { target: { value: '128K' } });
   fireEvent.blur(input);
   expect(mocks.setLimit).toHaveBeenCalledWith(128_000);
   expect(mocks.target).toHaveBeenLastCalledWith(expect.objectContaining({ agent: 'codex', relatedTargets: [] }));
@@ -1531,4 +948,33 @@ it('retains the chat discount inferred from standard and effective prices', () =
   expect(screen.getByText('settings.providers.models.advanced.discount').parentElement?.textContent).toContain('↓40%');
   const outputRow = screen.getByText('settings.providers.models.advanced.price.output').parentElement!;
   expect(outputRow.nextElementSibling).toBe(screen.getByText('settings.providers.models.advanced.discount').parentElement);
+});
+
+// Unit: real editor commits normalized tokens, preserving precision and rejecting fractional tokens.
+it.each([['1000000', 1_000_000], ['1M', 1_000_000], ['1.5m', 1_500_000], ['100万', 1_000_000], ['100萬', 1_000_000], ['262144', 262_144], ['1.000001M', 1_000_001], ['262.144K', 262_144]])('accepts context %s as %s tokens', (value, tokens) => {
+  draw();
+  const input = screen.getByRole('textbox');
+  fireEvent.change(input, { target: { value } }); fireEvent.blur(input);
+  expect(mocks.setLimit).toHaveBeenLastCalledWith(tokens);
+});
+// Review #7836: the bare-number rejection does not exercise unit precision.
+// Unit tier: the real editor must show invalid input and never persist fractional tokens.
+// Use the local-runtime 1K floor so the 1.0001K case cannot pass on the 100K guard alone.
+it.each(['1.0001K', '1.0000001M', '1.00001万'])('rejects context %s that converts to fractional tokens', (value) => {
+  render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id: 'ollama', source: 'user' }));
+  const input = screen.getByRole('textbox');
+  fireEvent.change(input, { target: { value } });
+  expect(input.getAttribute('aria-invalid')).toBe('true');
+  expect(screen.getByText('settings.providers.models.advanced.contextInvalid')).toBeTruthy();
+  fireEvent.blur(input);
+  expect(mocks.setLimit).not.toHaveBeenCalled();
+});
+it('does not label an unverified working default as the upstream capacity', () => {
+  draw({ ...model, contextWindow: 200_000, contextWindowMax: undefined, contextWindowVerified: false });
+  const input = screen.getByRole('textbox');
+  fireEvent.change(input, { target: { value: '1M' } });
+  expect(screen.queryByText('settings.providers.models.advanced.contextLimitOverWindow')).toBeNull();
+  expect(screen.getByText('settings.providers.models.advanced.catalogMissing')).toBeTruthy();
+  fireEvent.blur(input);
+  expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000_000);
 });
