@@ -24,6 +24,8 @@ vi.mock('../logger-adapter.js', () => ({
 }));
 vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (name: string) => path.join(tmpDir, owner.current, name),
+  // 上游 store 用 generation 作缓存作用域；本用例只关心文件内容语义。
+  getActiveAppSession: () => ({ generation: 0 }),
 }));
 
 const {
