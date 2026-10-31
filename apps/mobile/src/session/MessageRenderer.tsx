@@ -1,3 +1,5 @@
+import { segmentTeammateWork, summarizeTeammateWork, teammateWorkSummaryText } from '@cindy/maker-shared/work-activity-projection';
+import { TeammateProcess, TeammateWorkSegment, useTeammateElapsedTitle } from './TeammateProcess';
 import { VideoSitePreview } from './VideoSitePreview';
 import { InlineVideoPlayer } from './InlineVideoPlayer';
 import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
@@ -32,6 +34,7 @@ import { companionPluginWorkEntries, type PluginInvocation } from './pluginInvoc
 import { useAuth } from '@/auth/AuthContext';
 import { downloadRemoteMediaShareTemp } from './remoteMediaDiskCacheExpo';
 import { usePluginResultCard } from './usePluginResultCard';
+import { MessageListRevealContext } from './messageListReveal';
 import { extractPayloadToolResultMedia, managedToolMediaKind } from '@cindy/maker-shared/payload-summary';
 import { AuthorizationMessageCard } from './AuthorizationMessageCard';
 import { collectBotMessageTimeGroups, formatBotMessageGroupTime, type BotTimelineMessage } from '@cindy/maker-shared/botTimeline';
@@ -129,6 +132,8 @@ import {
   usesSystemActionMenu,
 } from '@/platform/chrome';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
+import { MessageUsageCost } from '@/session/MessageUsageCost';
+import { splitUsageCost } from '@cindy/maker-shared/usage-cost-details';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
 import { isShareableMessage } from '@/session/shareSelectionStore';
 import {
@@ -566,11 +571,13 @@ interface CompanionQuoteActions extends CompanionQuoteOptions {
 interface MessageActions {
   onRetryImageDelivery?: (imageId: string) => Promise<void>;
   companion?: boolean;
+  intermediateProcess?: boolean;
   companionQuoteActions?: CompanionQuoteActions;
   companionThreads?: CompanionThreads;
   onCompanionReadThrough?: (at: number) => void;
   onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
+  companionAttentionLabel?: string;
   /** Teammate portrait beside its replies (Desktop withAssistantAvatar). */
   companionAvatar?: ReactNode;
   /** First visible message of each five-minute teammate time group → its timestamp. */
@@ -649,6 +656,7 @@ export function MessageRenderer({
   companionThreads,
   conversationHeader,
   companionWorkingLabel,
+  companionAttentionLabel,
   onOpenCompanionSettings,
   companionAvatar,
   companionPluginInvocations,
@@ -717,6 +725,7 @@ export function MessageRenderer({
   conversationHeader?: ReactNode;
   onOpenCompanionSettings?: (page: 'memory' | 'capabilities') => void;
   companionWorkingLabel?: string | null;
+  companionAttentionLabel?: string;
   companionAvatar?: ReactNode;
   companionPluginInvocations?: ReadonlyMap<string, PluginInvocation[]>;
   /** Offscreen preload and disappearing native screens must not replace the user's bookmark. */
@@ -1724,7 +1733,8 @@ export function MessageRenderer({
     companionQuoteActions,
     companionThreads,
     companionWorkingLabel,
-  onOpenCompanionSettings,
+    companionAttentionLabel,
+    onOpenCompanionSettings,
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
@@ -1769,7 +1779,8 @@ export function MessageRenderer({
     companionQuoteActions,
     companionThreads,
     companionWorkingLabel,
-  onOpenCompanionSettings,
+    companionAttentionLabel,
+    onOpenCompanionSettings,
     companionAvatar,
     companionTimeGroups,
     companionPluginWork,
@@ -1830,6 +1841,19 @@ export function MessageRenderer({
   shareSelectionActiveRef.current = shareSelectionActive;
   const topOverlayHeightRef = useRef(topOverlayHeight);
   topOverlayHeightRef.current = topOverlayHeight;
+  const bottomOverlayHeightRef = useRef(bottomOverlayHeight);
+  bottomOverlayHeightRef.current = bottomOverlayHeight;
+  const revealWindowRect = useCallback(async (rect: { top: number; bottom: number }) => {
+    const list = listRef.current;
+    const frame = list ? await measureInWindow(list.getNativeScrollRef()) : null;
+    if (!frame || !listRef.current) return;
+    const top = frame.y + (topOverlayHeightRef.current ?? 0) + spacing.sm;
+    const bottom = frame.y + frame.height - (bottomOverlayHeightRef.current ?? 0) - spacing.sm;
+    const delta = rect.bottom > bottom ? Math.min(rect.bottom - bottom, rect.top - top) : rect.top < top ? rect.top - top : 0;
+    if (Math.abs(delta) < 1) return;
+    scrollToOffsetProgrammatically(Math.max(0, scrollMetricsRef.current.offsetY + delta), true);
+  }, [scrollToOffsetProgrammatically]);
+  const revealContextValue = useCallback((rect: { top: number; bottom: number }) => { void revealWindowRect(rect); }, [revealWindowRect]);
   const [stickyShareClientId, setStickyShareClientId] = useState<string | null>(null);
   const stickyCheckSeqRef = useRef(0);
   const stickyCheckLastRunAtRef = useRef(0);
@@ -2747,6 +2771,7 @@ export function MessageRenderer({
     <RichContentContext.Provider value={richContent}>
     <MessageListVisibilityContext.Provider value={messageListVisibility}>
     <MarkdownRemoteMediaContext.Provider value={onResolveRemoteMedia}>
+    <MessageListRevealContext.Provider value={revealContextValue}>
     <View
       style={styles.messageFrame}
       onTouchStart={handleHistoryTouchStart}
@@ -2879,6 +2904,7 @@ export function MessageRenderer({
         />
       )}
     </View>
+    </MessageListRevealContext.Provider>
     </MarkdownRemoteMediaContext.Provider>
     </MessageListVisibilityContext.Provider>
     </RichContentContext.Provider>
@@ -2975,7 +3001,7 @@ const RenderItemView = memo(function RenderItemView({
       node = <AgentTaskCard item={item} screenWidth={actions.screenWidth} />;
       break;
     case 'work_group':
-      node = <WorkGroupCard item={item} actions={actions} />;
+      node = item.teammateJournal ? <TeammateProcessCard item={item} actions={actions} /> : <WorkGroupCard item={item} actions={actions} />;
       break;
     case 'subagent_group':
       node = <SubagentCard item={item} actions={actions} />;
@@ -3479,8 +3505,11 @@ function MessageBubble({
   const canSelectVisibleText = canUseCompletedActions && copyText.trim().length > 0;
   const relativeTime = showCompletedActionBar ? formatMessageRelativeTime(item.message.createdAt) : '';
   const absoluteTime = formatMessageAbsoluteTime(item.message.createdAt);
+  const moneySplit = item.message.turnMoney ? splitUsageCost(item.message.turnMoney,
+    (item.message.source.agentMeta?.turnUsageDetails as { additionalCosts?: unknown } | undefined)?.additionalCosts) : null;
   const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
-    ? formatMessageTurnCost(item.message.turnMoney)
+    ? moneySplit ? [moneySplit.conversation.amount > 1e-9 ? formatMessageTurnCost(moneySplit.conversation) : '',
+        ...moneySplit.additional.map(formatMessageTurnCost)].filter(Boolean).join(' + ') : ''
     : '';
   // 金额缺席时退回显示本轮 token(桌面算不出模型报价的轮次):这一格不留空。
   const turnTokens = !turnCost && showCompletedActionBar && item.message.kind === 'assistant'
@@ -3589,10 +3618,10 @@ function MessageBubble({
     hasTurnCost: !!turnCost || !!turnTokens,
     isStreaming: isStreamingAssistant,
   }), [canCopy, canFork, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
-  const threadEligible = actions.companion && actions.companionThreads && clientId && !isStreamingAssistant
+  const threadEligible = !actions.intermediateProcess && actions.companion && actions.companionThreads && clientId && !isStreamingAssistant
     && !!companionReplyQuoteFor(item.message);
-  const hasActions = actionBar.items.length > 0 || canShare || !!threadEligible;
-  const reserveActionSlot = !shareSelectionActive
+  const hasActions = !actions.intermediateProcess && (actionBar.items.length > 0 || canShare || !!threadEligible);
+  const reserveActionSlot = !actions.intermediateProcess && !shareSelectionActive
     && !actions.companion
     && isStreamingAssistant
     && !item.message.systemCardType
@@ -3710,16 +3739,12 @@ function MessageBubble({
     </Text>
   ) : null;
   const costText = turnCost ? (
-    <Text
+    <MessageUsageCost key="cost" label={turnCost} style={styles.messageActionMeta}
       accessibilityLabel={item.message.turnMoney?.kind === 'value-estimate'
         ? t('message.renderer.turnCostEstimate', { cost: turnCost })
         : t('message.renderer.turnCost', { cost: turnCost })}
-      key="cost"
-      style={styles.messageActionMeta}
-      testID="message.turnCostText"
-    >
-      {turnCost}
-    </Text>
+      deviceId={actions.remoteDeviceId} sessionId={item.message.source.sessionId}
+      clientId={item.message.source.clientId} />
   ) : turnTokens ? (
     <Text
       accessibilityLabel={t('message.renderer.turnTokens', { tokens: turnTokens })}
@@ -3763,6 +3788,7 @@ function MessageBubble({
         presentation.density === 'rich' && styles.bubbleRich,
         isUser ? styles.userBubble : styles.agentBubble,
         actions.companion && !isUser && !item.message.systemCardType && styles.companionAnswer,
+        actions.intermediateProcess && { paddingVertical: 0 },
         hookSource && styles.hookSourceBubble,
         isUser && !item.message.systemCardType && userBubbleColors
           && isOwnUserBubble(item.message, { accountId: viewer?.id, remoteDeviceId: actions.remoteDeviceId })
@@ -4752,6 +4778,69 @@ function AgentTaskCard({
       )}
     </FoldablePanel>
   );
+}
+
+/** Teammate-specific presentation; ordinary task folds keep their existing contract. */
+function TeammateProcessCard({ item, actions }: { item: MobileWorkGroupItem; actions: MessageActions }) {
+  const title = useTeammateElapsedTitle(item.isStreaming === true, item.startedAtMs, item.durationMs);
+  return <TeammateProcess id={item.key} running={item.isStreaming} title={item.isStreaming && actions.companionAttentionLabel || title}>
+    <TeammateProcessContents item={item} actions={actions} />
+  </TeammateProcess>;
+}
+
+function TeammateProcessContents({ item, actions }: { item: MobileWorkGroupItem; actions: MessageActions }) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  const flattened = useMemo(() => {
+    const leaves: MobileWorkGroupItem['children'] = [];
+    const loaders: NonNullable<MobileWorkGroupItem['deferred']>[] = [];
+    const walk = (group: MobileWorkGroupItem) => {
+      if (group.deferred) loaders.push(group.deferred);
+      group.children.forEach(child => child.type === 'work_group' ? walk(child) : leaves.push(child));
+    };
+    walk(item);
+    return { leaves, loaders };
+  }, [item]);
+  const loadersRef = useRef(flattened.loaders);
+  loadersRef.current = flattened.loaders;
+  const loaderKey = flattened.loaders.map(loader => `${loader.owner}:${loader.key}`).join('|');
+  useLayoutEffect(() => {
+    const loaders = loadersRef.current;
+    const releases = loaders.map(loader => {
+      if (loader.setVisible) return loader.setVisible(true, false);
+      if (!loader.expanded) loader.toggle();
+      return undefined;
+    });
+    return () => releases.forEach(release => release?.());
+  }, [loaderKey]);
+  const childActions = useMemo(() => ({ ...actions, companionAvatar: undefined, intermediateProcess: true }), [actions]);
+  const segments = useMemo(() => segmentTeammateWork(flattened.leaves, child => child.type === 'thinking' || child.type === 'tool_group'), [flattened.leaves]);
+  return <>
+    {segments.map((segment, index) => segment.kind === 'content'
+      ? <RenderItemView key={segment.key} item={segment.item} actions={childActions} />
+      : <TeammateProcessActivities key={segment.key} id={`${item.key}:${segment.key}`} items={segment.items} actions={childActions}
+          streaming={item.isStreaming === true && index === segments.length - 1} last={index === segments.length - 1} />)}
+    {flattened.loaders.some(loader => loader.loading) && <ActivityIndicator color={colors.textSecondary} />}
+    {flattened.loaders.filter(loader => loader.failed).map(loader => <Pressable key={loader.key} accessibilityRole="button"
+      onPress={loader.retry} style={{ minHeight: 44, justifyContent: 'center' }}><Text style={{ color: colors.textSecondary }}>{t('message.renderer.retryPreview')}</Text></Pressable>)}
+    {item.isStreaming && segments.at(-1)?.kind === 'content' && <TeammateWorkSegment id={`${item.key}:pending`} title={t('chat.teammateProcess.thinking')} running hasTools={false} failed={false} />}
+  </>;
+}
+function TeammateProcessActivities({ id, items, actions, streaming, last }: {
+  id: string; items: MobileWorkGroupItem['children']; actions: MessageActions; streaming: boolean; last: boolean;
+}) {
+  const { t } = useTranslation();
+  const projection = useMemo(() => projectMobileWorkActivities(items, streaming, true), [items, streaming]);
+  const summary = useMemo(() => summarizeTeammateWork(projection.activities), [projection]);
+  const title = teammateWorkSummaryText({ ...summary, thinking: summary.thinking || items.some(child => child.type === 'thinking') }, streaming, t);
+  const layout = useMemo(() => buildMessageContentLayout({ screenWidth: actions.screenWidth }), [actions.screenWidth]);
+  return <TeammateWorkSegment id={id} title={title} running={streaming && (summary.running || !summary.toolCount)} last={last}
+    hasTools={summary.toolCount > 0} failed={summary.failedCount > 0}>
+    {items.map(child => child.type === 'tool_group' ? <View key={child.key}>
+      {(projection.toolActivitiesByChildKey.get(child.key) ?? []).map(activity => <WorkToolActivityRow key={activity.key}
+        activity={activity} actions={actions} contentLayout={layout} />)}
+    </View> : null)}
+  </TeammateWorkSegment>;
 }
 
 function WorkGroupCard({
@@ -6633,8 +6722,8 @@ export function AttachmentStrip({
  * ToolMediaBlock — tool 产出媒体的独立视觉消息(对齐桌面 'tool_media' RenderItem):
  * agent 出的图 / 视频(lizi_art、飞书拉图等)跳出 tool_group 折叠卡,紧跟其后作为
  * 独立块渲染,用户不展开工具行也能一眼看到。图片走 attachment 变体(原始宽高比
- * contain 进 max 框,xdt-image:// 经取件队列懒取缩略图);video/audio 保持占位
- * 卡片、点开查看器播放。媒体按 url 去重(与 shared 发射判定同一口径)。
+ * contain 进 max 框,xdt-image:// 经取件队列懒取缩略图);视频共用正文的原生预览，
+ * 音频保留卡片。媒体按 url 去重(与 shared 发射判定同一口径)。
  */
 function ToolMediaBlock({
   item,
@@ -6776,7 +6865,7 @@ function PendingAttachmentImage({ layout, uri, sourceUri = uri, onError, onSize,
  * 图片:可直接预览的(http/data:)直接渲染缩略图;桌面端媒体(xdt-image://)mount 时
  * 经取件队列懒取件后渲染缩略图(取件中为同尺寸静默占位帧,失败回落占位卡片文案但
  * 保持同尺寸帧避免列表 reflow)。点击一律走 onOpen 打开 payload 查看器看原图。
- * video/audio 与非桌面端不可预览图片保持占位卡片现状。
+ * 视频与正文组件共用原生首帧预览；audio 与不可预览图片保留占位卡片。
  *
  * variant(对齐桌面版 ChatImageView 的两档):
  *   - 'card'      :工具产出媒体,固定小帧 cover 裁切;
@@ -6807,6 +6896,7 @@ function MediaPreview({
   usePreviewState?: MediaPreviewStateHook;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const visible = useContext(MessageHeavyContentVisibilityContext);
   const preview = summarizeMessagePayloadPreview(buildMediaPayload(media, label));
   const durableUri = media.kind === 'image' && variant === 'attachment'
     ? getSentAttachmentThumbUri(localPreview?.sourceRef ?? media.url)
@@ -6889,6 +6979,11 @@ function MediaPreview({
     attachmentIntrinsicSizeCache.set(media.url, { width, height });
     setIntrinsicSize({ width, height });
   }, [media.url, setIntrinsicSize]);
+
+  if (media.kind === 'video' && !presentationOnly) {
+    return <InlineVideoPlayer key={media.url} url={media.url} label={label}
+      width={layout.markdownTableAvailableWidth} visible={visible} resolve={onResolveRemoteMedia} onOpen={onOpen} />;
+  }
 
   if (localUri) {
     return (
@@ -9864,13 +9959,16 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
 export function MarkdownBody(props: Parameters<typeof MarkdownBodyBase>[0]) {
   const instanceKey = useId();
   const origin = useContext(ChatFilePathContext);
-  const renderMedia = (node: RichNode) => <RichAnswerMedia node={node} body={props} />;
+  const heavyContentVisible = useContext(MessageHeavyContentVisibilityContext);
+  const withVisibility = (content: ReactNode, visible: boolean) =>
+    <MessageHeavyContentVisibilityContext.Provider value={heavyContentVisible && visible}>{content}</MessageHeavyContentVisibilityContext.Provider>;
+  const renderMedia = (node: RichNode, visible: boolean) => withVisibility(<RichAnswerMedia node={node} body={props} />, visible);
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(props.text) : [], [props.text, props.renderRichAnswers]);
   if (!parts.some(part => part.kind === 'rich')) return <MarkdownBodyBase {...props} />;
   return <View style={{ gap: spacing.lg }}>{parts.map(part => part.kind === 'rich'
     ? <RichAnswer renderMedia={renderMedia} key={part.key} source={part.source} complete={part.complete || !props.streaming}
         stateKey={`${origin?.deviceId ?? ''}:${origin?.sessionId ?? ''}:${props.richStateKey ?? props.markdownImageCacheKey ?? instanceKey}:${part.key}`}
-        renderMarkdown={(text, id) => <MarkdownBodyBase {...props} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />} />
+        renderMarkdown={(text, id, visible) => withVisibility(<MarkdownBodyBase {...props} text={text} markdownImageCacheKey={`${props.markdownImageCacheKey}:${part.key}:${id}`} />, visible)} />
     : <MarkdownBodyBase {...props} key={part.key} text={part.source} streaming={!part.complete && props.streaming} />)}</View>;
 }
 
@@ -9886,7 +9984,7 @@ function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<type
   const direct = /^(?:https?|xdt-audio|xdt-video|cindy-media):\/\//.test(raw);
   const resolveUrl = node.kind === 'video' ? mobileMarkdownImageUrlForWorkdir : mobileMarkdownManagedImagePreviewUrl;
   const url = direct ? raw : resolveUrl(raw, origin?.workdir, body.markdownImageCacheKey, origin?.remoteHostId, origin?.sessionId);
-  // Images outside workdir retain explicit-open. Video resolves only on explicit play.
+  // Images outside workdir retain explicit-open. Managed videos prepare a paused preview.
   if (!url) return <MarkdownBodyBase {...body} text={richMarkdown(node) ?? ''} streaming={false} />;
   const label = richString(node, 'alt', node.kind);
   const media: NormalizedToolMedia = { kind: node.kind, url, title: label, previewable: isDirectPreviewableMediaUrl(url) };
@@ -9906,7 +10004,8 @@ function RichAnswerMedia({ node, body }: { node: RichNode; body: Parameters<type
     mediaPreviewWidth: Math.min(body.layout.mediaPreviewWidth, width) };
   return <View style={{ minWidth: 0 }} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
     {width > 0 && node.kind === 'video' ? <InlineVideoPlayer key={previewKey} url={url} label={label}
-      width={width} visible={visible} resolve={resolver} />
+      width={width} visible={visible} resolve={resolver}
+      onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined} />
       : width > 0 ? <MediaPreview key={previewKey} layout={layout} media={media} label={label} onResolveRemoteMedia={resolver}
       usePreviewState={useState}
       onOpen={body.onOpenPayload ? () => body.onOpenPayload!(buildMediaPayload(media, label)) : undefined} /> : null}

@@ -40,7 +40,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     oneLiner: 'Grok 有浏览器跳转和设备短码两种登录方式；agent 可发授权页与短码并查询完成状态。',
     detail: [
       '浏览器跳转登录在「设置 → 模型供应商」的 Grok 连接中可用；仅伙伴对话可调用 cindy 网关的 connect_account({kind:"host", id:"grok"}) 弹出连接卡，普通任务请使用设置页或下述设备码登录。',
-      '设备码登录适合远程协助：agent 通过 cindy_helper 的 auth 类 start_grok_device_login 取得 xAI 授权页和短码，发给用户；用户在授权页输入短码并确认，Cindy 在本机自动轮询并保存凭证。',
+      '设备码登录适合远程协助：agent 通过 cindy_helper 的 ask_owner（kind="connect"，service="grok"）取得 xAI 授权页和短码，发给用户；用户在授权页输入短码并确认，Cindy 在本机自动轮询并保存凭证。',
       'agent 可用 get_grok_login_status 查询连接状态，用户要求停止时可用 cancel_grok_device_login。长期 access token 和 refresh token 不会出现在工具返回值或聊天里；不要要求用户粘贴长期凭证。',
     ].join(' '),
   },
@@ -55,6 +55,18 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       `【查源码排障】帮助文档(get_capabilities scope=help)没写到、或要确认 ${BRAND_NAME} 某个入口或行为的实际实现时, 可以只读查看 GitHub 上与用户版本对应的源码: 每个发布版本都有 tag(如 v0.1.118-beta; 当前版本号用 check_app_update 的 currentVersion 取), 用 gh 或网页按 tag 读取, 不要拿最新 main 对照旧版本。回答时说明结论来自源码; 服务端行为不在仓库里, 查不到就直说。`,
       `【版本号不要猜】本条不含版本号。所有版本都显示在侧栏左下角账号卡片上; CN 版的"设置 → 关于"也有, 国际版该页不展示(只有更新开关与 agent 二进制版本), 别把用户支使过去空找。agent 自己要版本号就调 check_app_update 读 currentVersion。用 submit_github_issue 提反馈时客户端版本 / OS / 界面语言由系统自动附加, 不用 agent 填。`,
       `【模型怎么来】登录官方 ${BRAND_NAME} 服务按量透明扣费、授权已付费的 Claude Code / Codex Coding Plan 继续用(不重复付费)、接自己的 API key, 或跑本地模型。价格见对应区域官网。`,
+    ].join(' '),
+  },
+  {
+    key: 'computer-use',
+    title: 'Computer Use(操作本机桌面:窗口、点击、输入、截图)',
+    oneLiner:
+      '桌面操作只走 cindy_computer;工具列表里没有它就是 Computer Use 没开,引导用户到「设置 → 内置工具」开启并授权,不用 shell 模拟键鼠。',
+    detail: [
+      `【怎么判断没开】cindy_computer 这个 MCP 只在 Computer Use 开启时注册;当前工具列表里找不到 mcp__cindy_computer__* 时,说明用户没开,不是 ${BRAND_NAME} 没有这个能力。不要改用 osascript 按键、cliclick、CGEvent 脚本或 cua-driver CLI 代替,这些会被拒绝。`,
+      '【怎么引导】告诉用户这一步需要操作桌面,请在「设置 → 内置工具 → Computer Use」打开开关;macOS 还会要求授予「辅助功能」和「屏幕录制」权限,设置页里有逐步引导。给用户这条链接可直接跳到那一页:cindy://settings/builtin-tools(桌面端点击即打开;手机或 IM 里收到时回到电脑上点)。开关和权限都要用户本人操作,agent 不能代为开启。',
+      '【开启之后】Codex 任务的工具桥会自动刷新;Claude Code 任务的 MCP 列表在任务启动时固定,开启后让用户再发一条消息或新建任务,然后用 cindy_computer 的 list_tools 确认它已出现,再继续。',
+      '【能做什么】list_windows / get_window_state 读窗口与无障碍树和截图,click / set_value / type_text / press_key / hotkey / scroll 操作目标窗口。Electron 与网页里的文本用 set_value;iOS 模拟器窗口不接受合成输入,用 xcrun simctl 或 AXe;有人正在用电脑时前台输入会被拒(USER_INPUT_ACTIVE),锁屏类快捷键被拒(HOTKEY_BLOCKED)。',
     ].join(' '),
   },
   {
@@ -114,11 +126,11 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
     title: 'Session Handoff(把消息派给已有任务)',
     oneLiner: 'skill 可读当前 sessionId,并把消息 handoff 到一个既有 session,适合把同一业务对象的二次处理路由回原上下文。',
     detail: [
-      `【是什么】get_current_session_id(cindy_helper 自省类)+ send_to_worker(cindy_orca team 工具)/ send_to_session(cindy_helper handoff 类, 走 call_tool)配合使用。前者返回当前 ${BRAND_NAME} session 的 business id / agent_kind / working_dir, 后两者把一条控制层消息投递到指定 session;目标不在内存时会自动 resume, 投递成功即返回。`,
+      `【是什么】get_current_session_id(cindy_helper 自省类)+ send_to_worker(cindy_orca team 工具)/ send_to_session(cindy_helper handoff 类, 走 call_tool)配合使用。前者返回当前 ${BRAND_NAME} session 的 business id / agent_kind / project_path / working_dir, 后两者把一条控制层消息投递到指定 session;目标不在内存时会自动 resume, 投递成功即返回。`,
       '【典型场景】自动化 skill 首次处理某个外部业务对象(issue / jira / pr / 任意自定义 key)时, 先调 get_current_session_id 拿 session_id 并把它和外部 key 做持久化绑定;后续二次处理同一对象时, 调 send_to_worker(team 内 worker)或 send_to_session(任意已知 session)把增量信息 handoff 回那个 session, 保留原始上下文、决策链和历史工具调用。',
       '【skill 端伪代码】first_seen -> sid = get_current_session_id(); store(key, sid.session_id); later -> sid = load(key); if sid then send_to_worker / send_to_session({ target_session_id: sid, message: "...增量..." }) else fallback normal flow。',
       '【跨电脑】target_session_id 传 deviceId::sessionId(list_sessions 用 device 参数查到的 id)可发给另一台电脑上的既有任务,对方电脑需在线并开启远程控制;不能在另一台电脑新建任务。',
-      '【硬规则】send_to_session 要发给已有任务时 target_session_id 必传;不知道 id 先用 history 类目的 list_sessions 查。完全省略该参数不会报错,而是 create:静默新建一个专属任务、把消息当首条输入并立刻跑一轮,返回 wake_kind=created 和 note。只有明确要为业务对象新建专属任务时才省略;拿到 created 不等于已投给既有任务。',
+      '【硬规则】send_to_session 发给已有任务时 target_session_id 必传；不知道 id 先用 history/list_sessions 查。新建任务省略 project_path 继承来源归属，传已有项目路径切换项目，传 null 创建不绑项目的任务；可用 title 指定标题。get_current_session_id 可查询归属，control/list_projects 可选择其他项目。working_dir 只决定执行位置，不登记项目；新增或恢复项目单独用 create_project。无法确定来源归属时返回 INVALID_ARGS；成功创建返回 wake_kind=created 和 note，不等于投给既有任务。',
       '【失败码】NOT_FOUND / DELETED 通常表示绑定失效,skill 应清掉绑定并回退; ARCHIVED 表示 session 已归档，在已有恢复授权时可先用 control/unarchive_sessions 恢复，再发送新消息，不能自行推翻用户归档意图; 传了 id 但目标不存在只会返 NOT_FOUND,绝不自动新建。jump 撞上目标正在跑 turn 时不再返 BUSY,而是入队并成功返回 wake_kind=queued(可用 update/cancel_session_queued_message 管理);BUSY 仅是 create 模式的罕见兜底。',
       '【边界】它不是普通聊天入口,而是 session 间 handoff 的控制层能力;不会自动关闭当前 dispatcher session,也不会替 skill 管理绑定键的存储语义。',
     ].join(' '),

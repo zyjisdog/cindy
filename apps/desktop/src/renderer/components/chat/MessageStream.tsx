@@ -1,12 +1,13 @@
+import { TeammateProcessStatus } from '@/features/bots/TeammateProcessStatus';
 import { scrollRangeIntoView } from '@/lib/scrollRangeIntoView';
 import { historyAfter } from './historyAfter';
 import { readMailCard } from '@cindy/maker-shared/ghost-card-form';
 import { animateFocusScroll } from './animateFocusScroll';
-import { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
+import { botProcessItems } from '@/features/bots/botConversationPresentation';
 import { isVisibleVoiceCallMessage } from '@/features/bots/voice/voiceCallPresentation';
 import { MessageViewport, type MessageViewportApi } from './MessageViewport';
 import { PAGE_TEXT_NAVIGATION_EVENT } from '@/lib/pageTextAccess';
-export { simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
+export { botProcessItems, simplifyBotRenderItems } from '@/features/bots/botConversationPresentation';
 import { placeBotTaskCardsAfterIntroduction } from '@cindy/maker-shared/botCollaboration';
 import { describeToolUse, sourcePathCandidatesFromDescriptor } from '@cindy/maker-shared/tool-use-descriptor';
 /**
@@ -73,6 +74,7 @@ import {
 export { groupWorkRuns } from './messageWorkGroups';
 export type { RenderItem, WorkChildItem } from './messageWorkGroups';
 import { useTranslation } from 'react-i18next';
+import { richAnswerMediaSources } from '@cindy/maker-shared/rich-answer';
 import {
   findMessageTodoInsertions,
   getLatestMessageTodoState,
@@ -482,6 +484,8 @@ interface MessageStreamProps {
   botUnreadBoundaryAt?: number | null;
   onBotReadThrough?: (at: number) => void;
   messages: ChatMessage[];
+  /** Persisted row already owned by the live error banner; keep its recovery state there. */
+  activeErrorClientId?: string | null;
   /** The ongoing call appears only in its transcript popover, including history replays. */
   activeVoiceCallId?: string | null;
   /** This task's preparation card is shown in the composer, including after history reload. */
@@ -1616,10 +1620,10 @@ export function buildRenderItems(
     return allMessages.slice(start, end);
   };
 
-  // Agent 最终正文中的 Markdown 图片是首选排版；tool_result 媒体仍保留为
+  // Agent 最终正文中的 Markdown 图片和组件媒体是首选排版；tool_result 媒体仍保留为
   // 确定性兜底。只有同一真实 user turn 内确实嵌入了同一 URL，才压掉兜底卡。
-  const inlineImageUrlsByTurnStart = new Map<number, ReadonlySet<string>>();
-  const recordTurnInlineImages = (lo: number, hi: number): void => {
+  const inlineMediaUrlsByTurnStart = new Map<number, ReadonlySet<string>>();
+  const recordTurnInlineMedia = (lo: number, hi: number): void => {
     if (hi <= lo) return;
     const urls = new Set<string>();
     for (const message of messages.slice(lo, hi)) {
@@ -1632,18 +1636,19 @@ export function buildRenderItems(
           )
         : extractRenderedMarkdownImageTargets(message.content);
       for (const url of imageTargets) urls.add(url);
+      for (const url of richAnswerMediaSources(message.content)) urls.add(url);
     }
-    inlineImageUrlsByTurnStart.set(lo, urls);
+    inlineMediaUrlsByTurnStart.set(lo, urls);
   };
   let inlineTurnStart = 0;
   for (let index = 0; index <= messages.length; index += 1) {
     const message = messages[index];
     const isBoundary = message ? isRenderTurnBoundary(message) : false;
     if (isBoundary && index > inlineTurnStart) {
-      recordTurnInlineImages(inlineTurnStart, index);
+      recordTurnInlineMedia(inlineTurnStart, index);
       inlineTurnStart = index;
     }
-    if (index === messages.length) recordTurnInlineImages(inlineTurnStart, index);
+    if (index === messages.length) recordTurnInlineMedia(inlineTurnStart, index);
   }
 
   // ── Pass 0: build toolUseId → tool_result.content lookup ──
@@ -1922,7 +1927,7 @@ export function buildRenderItems(
       for (const message of originalTurnSlice(lo, hi)) {
         if (message.role !== 'tool_result' || !isSubagentInternalMessage(message)) continue;
         for (const item of extractToolResultMedia(message.content)) {
-          if (item.kind === 'image' && inlineImageUrlsByTurnStart.get(lo)?.has(item.url)) {
+          if (inlineMediaUrlsByTurnStart.get(lo)?.has(item.url)) {
             continue;
           }
           if (seenMediaUrls.has(item.url)) continue;
@@ -2208,9 +2213,9 @@ export function buildRenderItems(
       // 提交消息被 rewind/异 ghost 伪锚)回退今日行为——本调用位置渲染。
       const collectResultMedia = (result: string): void => {
         let media = extractToolResultMedia(result);
-        const inlineImageUrls = inlineImageUrlsByTurnStart.get(turnStartIdx);
-        if (inlineImageUrls?.size) {
-          media = media.filter((item) => item.kind !== 'image' || !inlineImageUrls.has(item.url));
+        const inlineMediaUrls = inlineMediaUrlsByTurnStart.get(turnStartIdx);
+        if (inlineMediaUrls?.size) {
+          media = media.filter((item) => !inlineMediaUrls.has(item.url));
         }
         if (media.length === 0) return;
         if (isGhostCallToolName(toolName)) {
@@ -2959,6 +2964,7 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
     }
     return {
       kind: 'rendered',
+      prose: child.type === 'message' && child.message.role === 'assistant' && !child.message.systemCardType,
       key: child.key,
       renderNode: () => renderWorkGroupChild(child, context),
     };
@@ -2976,6 +2982,8 @@ export const WorkGroupRenderItemView = memo(function WorkGroupRenderItemView({
       compact={compact}
       deferred={item.deferred}
       fitHeader={Boolean(replyColumnSpacer)}
+      journal={item.teammateJournal}
+      journalTitle={item.isStreaming ? elapsed => <TeammateProcessStatus sessionId={context.sessionId}>{elapsed}</TeammateProcessStatus> : undefined}
     />
   );
   return (
@@ -3011,6 +3019,7 @@ export function MessageStream({
   botUnreadBoundaryAt = null,
   onBotReadThrough,
   messages,
+  activeErrorClientId = null,
   activeVoiceCallId = null,
   cindyMakeSessionId,
   cindyMakeCompletionInComposer,
@@ -3196,6 +3205,13 @@ export function MessageStream({
     return resolveRestoredRenderWindow(restoreSnapshotRef.current).forwardItems;
   });
   const [highlightMessageClientId, setHighlightMessageClientId] = useState<string | null>(null);
+  // A navigation highlight is a temporary locator. Keep its expiry independent
+  // of streaming/layout updates so new content cannot leave it stuck on screen.
+  useEffect(() => {
+    if (!highlightMessageClientId) return;
+    const timer = window.setTimeout(() => setHighlightMessageClientId(null), 1200);
+    return () => window.clearTimeout(timer);
+  }, [highlightMessageClientId, focusMessageRequestId]);
   const lastAppliedFocusRef = useRef<string | null>(null);
   const lastMissingFocusRef = useRef<{
     clientId: string;
@@ -3392,7 +3408,7 @@ export function MessageStream({
       forkOrigin,
     );
     return simplifiedBotConversation
-      ? simplifyBotRenderItems(grouped, isSessionStreaming, visibleGeneratedFileKeys)
+      ? botProcessItems(grouped, isSessionStreaming)
       : grouped;
   }, [
     ungroupedRenderItems,
@@ -3954,6 +3970,7 @@ export function MessageStream({
       ? `${focusMessageRequestId ?? 0}:${focusMessageClientId}`
       : null;
     if (!focusMessageClientId || !focusRequestKey) {
+      setHighlightMessageClientId(null);
       lastAppliedFocusRef.current = null;
       lastMissingFocusRef.current = null;
       cancelFocusJump({ refreshAnchor: true });
@@ -3965,6 +3982,7 @@ export function MessageStream({
       cancelFocusJump({ refreshAnchor: true });
     }
     if (lastAppliedFocusRef.current === focusRequestKey) return;
+    setHighlightMessageClientId(null);
     const lastItemKey = allRenderItems.at(-1)?.key ?? null;
     const missingFocus = lastMissingFocusRef.current;
     if (
@@ -4033,8 +4051,8 @@ export function MessageStream({
       settleFocusJump,
       2500,
     );
-    // 高亮等落定后再点亮(落定回调里做),点亮后不再自动淡出——停在搜索命中处,直到
-    // 下次跳转覆盖或切会话。scrollend 未触发(距离为 0 / 环境不支持)时 ~600ms 兜底。
+    // 高亮等落定后再点亮；点亮后由独立的到期 effect 清除并淡出。
+    // scrollend 未触发(距离为 0 / 环境不支持)时 ~600ms 兜底。
     focusHighlightTimerRef.current = window.setTimeout(() => {
       setHighlightMessageClientId(focusMessageClientId);
       focusHighlightTimerRef.current = null;
@@ -6740,6 +6758,7 @@ export function MessageStream({
                           continuationInFlightProjectionCapability
                         }
                         isLastMessage={msg.clientId === lastMessageClientId}
+                        isActiveError={msg.role === 'error' && msg.clientId === activeErrorClientId}
                         localFileRefs={localFileRefs}
                         assistantAvatar={assistantAvatar}
                         simplifiedBotConversation={simplifiedBotConversation}
@@ -6770,7 +6789,7 @@ export function MessageStream({
                           key={item.key}
                           data-render-item-key={item.key}
                           data-message-client-id={msg.clientId}
-                          className={cn('scroll-mt-20 transition-colors', highlightClass)}
+                          className={cn('scroll-mt-20 rounded-xl transition-[background-color,box-shadow]', highlightClass)}
                         >
                           {startsUnread ? (
                             <div
@@ -6813,7 +6832,7 @@ export function MessageStream({
                         data-message-client-id={msg.clientId}
                         {...shareAttributes}
                         className={cn(
-                          'scroll-mt-20 transition-colors',
+                          'scroll-mt-20 rounded-xl transition-[background-color,box-shadow]',
                           shareable && 'relative',
                           highlightClass,
                         )}
@@ -6933,6 +6952,7 @@ const MessageItem = memo(function MessageItem({
   isContinuationTurnOwner,
   continuationInFlightProjectionCapability,
   isLastMessage,
+  isActiveError,
   localFileRefs,
   assistantAvatar,
   simplifiedBotConversation,
@@ -6985,6 +7005,7 @@ const MessageItem = memo(function MessageItem({
    *  error-tail-banner: a trailing un-dismissed error row is rendered by the
    *  actionable banner above the composer instead of an inline card. */
   isLastMessage?: boolean;
+  isActiveError?: boolean;
   localFileRefs: readonly KnownLocalFileRef[];
   /** Bot 对话:assistant 气泡左侧的伙伴头像。普通任务不传。 */
   assistantAvatar?: ReactNode;
@@ -7070,6 +7091,7 @@ const MessageItem = memo(function MessageItem({
         return sessionId ? (
           <McpAppCard sessionId={sessionId} clientId={message.clientId}
             title={String(message.systemCardData?.title ?? '')}
+            plugin={message.systemCardData?.plugin}
             fallbackText={String(message.systemCardData?.fallbackText ?? '')} />
         ) : null;
       }
@@ -7173,10 +7195,10 @@ const MessageItem = memo(function MessageItem({
       // error-tail-banner:普通失败行是尾部消息且未被忽略时,由输入框上方的可操作
       // 红条(重试/关闭)独家承载,流内不重复渲染,避免双红条;被忽略或后续有新
       // 消息后回落为流内静态历史卡。
-      if (isLastMessage && !message.errorDismissed) return null;
-      // 历史里的 turn 失败记录(role='error' 持久化行)——静态时间线卡,
-      // live 报错仍走输入框上方的 ErrorBanner,两者不会同时出现
-      // (error 行落库时不广播,只在历史加载路径进入消息流)。
+      if (isActiveError || (isLastMessage && !message.errorDismissed)) return null;
+      // A live error may be followed by hidden or system rows when history is
+      // reloaded. Its exact persisted identity still belongs to the live banner;
+      // unrelated failures remain available as compact history cards.
       return (
         <ErrorMessageCard
           message={message.content}

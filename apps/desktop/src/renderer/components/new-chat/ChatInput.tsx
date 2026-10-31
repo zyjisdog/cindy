@@ -23,6 +23,7 @@ import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
 import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-mode';
 import { isAnnotationBurnInError } from '@/lib/annotationBurnIn';
 import { AttachmentRejectionStrip, ThumbnailStrip } from './ComposerAttachments';
+import { ComposerCard, COMPOSER_CONTENT_CLASS } from './ComposerCard';
 import { ComposerFolderTransfers, useComposerFolderTransfers } from './ComposerFolderTransfers';
 import type { PendingFolder } from '@/hooks/useAttachments';
 import { FullAccessConfirmContent } from './FullAccessConfirmContent';
@@ -380,6 +381,7 @@ import {
 } from '@/state/agentDeviceModelMemory';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { controlledTaskAgentLocationReadable } from '@/lib/controlledTaskAgentLocation';
+import { modelCatalogKey } from '../../../shared/controlledModelCatalog';
 import {
   setSessionFavoriteAnchor as setSessionFavoriteAnchorMemory,
   useSessionFavoriteAnchor,
@@ -407,6 +409,7 @@ import {
   shouldBlockLegacyRemotePiModelWindowSwitch,
 } from '../../../shared/modelSwitchAssessment';
 import { useVoiceInput } from '@/voice-input/useVoiceInput';
+import { getTextPreviewSearchHost } from '@/components/find-in-page/findInPageOwnership';
 import { useVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import type { VoiceInputState } from '@cindy/voice-input-core';
@@ -593,6 +596,7 @@ interface ChatInputProps {
    * 被控电脑的草稿)只在那台支持远程 Agent 时传;SSH 任务不传。
    */
   remoteAgentDevices?: readonly { deviceId: string; name: string }[];
+  catalogHostDeviceId?: string;
   /**
    * device-link「纯显示镜像」记忆 override:非空时优先于本机全局模型预设注入 ModelSelector,
    * 用于远程草稿 / 远程会话——非选中行读被控端镜像、改动经隧道写穿被控端,绝不碰控制端本地记忆
@@ -1263,6 +1267,7 @@ export function ChatInput({
   agentDeviceId: _agentDeviceId,
   agentDeviceName = null,
   remoteAgentDevices,
+  catalogHostDeviceId,
   modelMemoryOverride,
   initialModel,
   initialEffort,
@@ -1365,7 +1370,7 @@ export function ChatInput({
     !remoteHostId &&
     !sharedGuest &&
     remoteAgentDevices !== undefined &&
-    (!sessionId ||
+    (!sessionId || !!catalogHostDeviceId ||
       controlledTaskAgentLocationReadable({
         agentDeviceId: _agentDeviceId,
         pendingAgentDeviceId: makerChatStore.getAgentSwitchIntent(sessionId)?.agentDeviceId,
@@ -1393,7 +1398,7 @@ export function ChatInput({
     [sessionId, messages],
   );
   /** 模型目录所在的电脑:Agent 在另一台电脑运行时是那台;否则远程任务在被控电脑,本机任务在本机。 */
-  const catalogDeviceId = effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined;
+  const catalogDeviceId = modelCatalogKey(effectiveAgentDeviceId ?? deviceLinkDeviceId ?? undefined, catalogHostDeviceId);
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
@@ -2253,6 +2258,7 @@ export function ChatInput({
       remoteAgentDevices.length > 0
         ? {
             devices: remoteAgentDevices,
+            catalogHostDeviceId,
             selectedDeviceId: agentDeviceId,
             ...(deviceLinkDeviceId ? { homeDeviceId: deviceLinkDeviceId } : {}),
             ...(taskComputerModelMemory ? { localModelMemory: taskComputerModelMemory } : {}),
@@ -2266,6 +2272,7 @@ export function ChatInput({
       taskComputerModelMemory,
       remoteHostId,
       remoteAgentDevices,
+      catalogHostDeviceId,
       agentDeviceId,
     ],
   );
@@ -3574,12 +3581,14 @@ export function ChatInput({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const currentState = voiceInputStateRef.current;
-      // 权限菜单 / 确认框是当前顶层交互面，应先消费 Esc；它们的 capture handler
+      // 文档预览 / 权限菜单 / 确认框是当前顶层交互面，应先消费 Esc；它们的 capture handler
       // 注册在 document 或组件层，晚于本 window capture handler 执行。
       if (
         event.key === 'Escape' &&
-        event.target instanceof Element &&
-        event.target.closest('[role="alertdialog"], [data-morph-side]')
+        (getTextPreviewSearchHost() || (
+          event.target instanceof Element &&
+          event.target.closest('[role="alertdialog"], [data-morph-side]')
+        ))
       ) {
         return;
       }
@@ -7760,6 +7769,7 @@ export function ChatInput({
     }
     return {
       devices: remoteAgentDevices,
+      catalogHostDeviceId,
       selectedDeviceId: effectiveAgentDeviceId,
       // 被控电脑上的任务:没在浏览其他电脑时列被控电脑自己的目录与它的镜像记忆。
       ...(deviceLinkDeviceId ? { homeDeviceId: deviceLinkDeviceId } : {}),
@@ -7793,6 +7803,7 @@ export function ChatInput({
     sessionOrcaRole,
     sessionOrcaRemoteWorker,
     remoteAgentDevices,
+    catalogHostDeviceId,
     effectiveAgentDeviceId,
     intentAgentDeviceId,
     confirmAgentRelocation,
@@ -9331,22 +9342,10 @@ export function ChatInput({
           as the outside-click boundary for collapsing the expanded queue tail
           (see paletteAnchorRef) — palette clicks are "inside". */}
       <div ref={paletteAnchorRef} className="relative w-full">
-        <div
+        <ComposerCard
           ref={mergedCardRef}
-          className={cn(
-            'flex w-full flex-col gap-0',
-            showFusedWrapper && [
-              'overflow-hidden border transition-colors',
-              // 输入框卡片圆角与对话页统一为 12px(用户定稿 2026-07-22);create-agent
-              // 不再用 Figma 的 6px,避免新建/对话两个框圆角不一致。
-              'rounded-[12px]',
-              'bg-[var(--chat-input-bg)]',
-              'border-[var(--chat-input-border)]',
-              isCreateAgentVariant
-                ? 'focus-within:border-[var(--chat-input-border-focus)]' // 聚焦描边走 30% 弱化 token;focus-ring 专供键盘 focus-visible(PR#174 review 拆分)
-                : 'focus-within:border-[var(--chat-input-border-focus)]',
-            ],
-          )}
+          framed={showFusedWrapper}
+          className={cn('flex w-full flex-col gap-0', showFusedWrapper && 'overflow-hidden')}
         >
           {queuePanelState && (
             <PendingQueuePanel
@@ -9374,26 +9373,13 @@ export function ChatInput({
             </div>
           )}
           {/* biome-ignore lint/a11y/noStaticElementInteractions: this area handles drag/drop; keyboard attachment flow uses the picker controls. */}
-          <div
+          <ComposerCard
+            framed={!showFusedWrapper}
             className={cn(
-              'relative flex max-h-[300px] w-full flex-col justify-between px-[11px] pt-[11px] pb-[6px]',
+              COMPOSER_CONTENT_CLASS,
+              'max-h-[300px]',
               // 新建对话框内容列变宽后适当加高编辑区,让整框比例更舒展(用户改稿 2026-07-22)。
-              isCreateAgentVariant ? 'min-h-[140px]' : 'min-h-[86px]',
-              // Standalone mode: own border + bg + focus-within. Fused mode:
-              // outer wrapper handles all of that, we render flat.
-              showFusedWrapper
-                ? null
-                : [
-                    'border transition-colors',
-                    // 输入框卡片圆角与对话页统一为 12px(用户定稿 2026-07-22);create-agent
-                    // 不再用 Figma 的 6px,避免新建/对话两个框圆角不一致。
-                    'rounded-[12px]',
-                    'bg-[var(--chat-input-bg)]',
-                    'border-[var(--chat-input-border)]',
-                    isCreateAgentVariant
-                      ? 'focus-within:border-[var(--chat-input-border-focus)]' // 聚焦描边走 30% 弱化 token;focus-ring 专供键盘 focus-visible(PR#174 review 拆分)
-                      : 'focus-within:border-[var(--chat-input-border-focus)]',
-                  ],
+              isCreateAgentVariant && 'min-h-[140px]',
             )}
             data-split-group-composer-drop-target
             onPointerDown={handleComposerLongPressPointerDown}
@@ -10270,8 +10256,8 @@ export function ChatInput({
                 </div>
               </div>
             </div>
-          </div>
-        </div>
+          </ComposerCard>
+        </ComposerCard>
 
         {/* Palette host — tracks mouseover to prevent blur-close races.
            Palettes use `absolute bottom-full` referencing the palette anchor
