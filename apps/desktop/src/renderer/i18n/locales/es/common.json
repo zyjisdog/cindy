@@ -1332,7 +1332,8 @@
     "REMOTE_AGENT_SHARE_REMOVED": "Modelo no cambiado: este recurso compartido ya no está disponible (el propietario lo eliminó o usted se fue). Elige otro modelo.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modelo no cambiado: el proveedor compartido no está disponible temporalmente (la computadora del propietario está desconectada o el uso compartido está desactivado por ahora). Vuelve a intentarlo más tarde o elige otro modelo.",
     "SSH_HOST_KEY_MISMATCH": "Clave de host SSH cambiada",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy no puede leer el archivo adjunto fuente; el mensaje no fue enviado. Guarde una copia en Descargas u otra carpeta accesible, elimine el archivo adjunto original y agregue la copia usando el botón de archivo adjunto antes de enviarla nuevamente."
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy no puede leer el archivo adjunto fuente; el mensaje no fue enviado. Guarde una copia en Descargas u otra carpeta accesible, elimine el archivo adjunto original y agregue la copia usando el botón de archivo adjunto antes de enviarla nuevamente.",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "No se pudo aplicar el cambio de capacidad de entrada de imagen. El cambio se revirtió o se reintentará más tarde; vuelve a intentarlo y, si sigue fallando, reabre la tarea."
   },
   "providerError": {
     "AUTH_INVALID": "La autenticación falló para esta interfaz. Verifique la dirección, la clave y el método de autenticación.",
@@ -4003,7 +4004,10 @@
             "title": "Compactación automática",
             "hint": "Contexto compacto en el porcentaje de uso seleccionado. Los valores más bajos se compactan antes; Los límites del motor aún se aplican.",
             "default": "{{pct}}% (predeterminado)",
-            "timing": "Se aplica a todos los motores disponibles para este modelo y se genera en ejecuciones posteriores, sin interrumpir una respuesta."
+            "timing": "Se aplica a todos los motores disponibles para este modelo y se genera en ejecuciones posteriores, sin interrumpir una respuesta.",
+            "defaultBadge": "Predeterminado",
+            "restoreAria": "Restaurar el valor predeterminado de la relación de compactación automática",
+            "sliderAria": "Ajustar el umbral de compactación automática"
           },
           "contextLimitRoute": "Tokens {{tokens}} actuales",
           "contextLimitOverWindow": "Por encima de la ventana declarada por el proveedor; las solicitudes pueden fallar.",
@@ -4060,7 +4064,28 @@
           },
           "codexContextUnknown": "Configuración CLI no disponible",
           "codexContextValues": "Total {{total}} · {{usable}} utilizable · Tokens {{compact}} autocompactos",
-          "contextLimitGptHint": "GPT tiene como valor predeterminado como máximo 272K; puedes configurarlo en 1M aquí. Codex aplica la ventana y el umbral de compactación automática juntos, conservando un 5 % de espacio libre. La capacidad real depende del servicio del modelo."
+          "contextLimitGptHint": "GPT tiene como valor predeterminado como máximo 272K; puedes configurarlo en 1M aquí. Codex aplica la ventana y el umbral de compactación automática juntos, conservando un 5 % de espacio libre. La capacidad real depende del servicio del modelo.",
+          "imageInputOverride": {
+            "label": "Declaración de capacidad de entrada de imagen",
+            "inherit": "Seguir al proveedor",
+            "declaredTrue": "Admite entrada de imagen",
+            "declaredFalse": "Sin entrada de imagen",
+            "saveFailed": "Error al guardar la capacidad de entrada de imagen",
+            "saveFailedWithReason": "Error al guardar la capacidad de entrada de imagen: {{message}}"
+          },
+          "thinking": "Pensamiento",
+          "thinkingCapability": {
+            "on": "Admite pensamiento",
+            "off": "No admite pensamiento"
+          },
+          "thinkingOverride": {
+            "label": "Declarar niveles de pensamiento",
+            "inherit": "Seguir al proveedor",
+            "declared": "Declarado",
+            "sourceHint": "El catálogo no declara niveles de pensamiento; decláralos aquí si el modelo realmente razona",
+            "saveFailed": "Error al guardar la declaración de pensamiento",
+            "saveFailedWithReason": "Error al guardar la declaración de pensamiento: {{reason}}"
+          }
         },
         "kindFilter": {
           "all": "Todo",
@@ -9986,7 +10011,48 @@
       "terminated": "Se detuvo el proceso {{name}}",
       "terminateFailed": "No se pudo detener este proceso; es posible que ya haya terminado. La lista se actualizará con el próximo muestreo.",
       "sessionDetail": "Tarea: {{title}}",
-      "processCount_many": "Árbol de procesos: {{count}} procesos"
+      "processCount_many": "Árbol de procesos: {{count}} procesos",
+      "tabs": {
+        "hostDaemons": "Elementos en segundo plano",
+        "label": "Vista de recursos",
+        "processes": "Procesos"
+      }
+    },
+    "hostDaemons": {
+      "actionFailed": "Error en la operación; inténtalo de nuevo",
+      "delete": "Eliminar",
+      "deleteBody": "Elimina definitivamente esta tarea programada de este equipo; ya no se iniciará automáticamente. Los registros de tareas en Cindy no se ven afectados.",
+      "deleteTitle": "¿Eliminar «{{name}}»?",
+      "deleted": "Se eliminó {{name}}",
+      "empty": "Aún no hay elementos en segundo plano creados por tareas",
+      "loadFailed": "No se pudieron leer los elementos en segundo plano",
+      "owner": "Creado por: {{title}}",
+      "ownerUnknown": "Desconocido",
+      "refresh": "Actualizar",
+      "refreshFailed": "Error al actualizar; la lista puede estar desactualizada",
+      "run": "Iniciar",
+      "scanning": "Escaneando elementos en segundo plano…",
+      "started": "Se inició {{name}}",
+      "state": {
+        "disabled": "Desactivado",
+        "ready": "En espera",
+        "running": "En ejecución",
+        "unknown": "Desconocido"
+      },
+      "stop": "Detener",
+      "stopBody": "Solo finaliza esta ejecución; la tarea volverá a iniciarse según su programación.",
+      "stopTitle": "¿Detener «{{name}}»?",
+      "stopped": "Se detuvo {{name}}",
+      "trigger": {
+        "logon": "Al iniciar sesión",
+        "other": "Otro desencadenador",
+        "schedule": "Según programación",
+        "startup": "Al arrancar el equipo"
+      },
+      "unsupported": "Los elementos en segundo plano solo están disponibles en Windows",
+      "unrelated_one": "{{count}} elemento en segundo plano no relacionado está oculto",
+      "unrelated_many": "{{count}} elementos en segundo plano no relacionados están ocultos",
+      "unrelated_other": "{{count}} elementos en segundo plano no relacionados están ocultos"
     }
   },
   "update": {

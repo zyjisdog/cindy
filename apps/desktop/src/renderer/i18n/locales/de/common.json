@@ -1314,7 +1314,8 @@
     "REMOTE_AGENT_SHARE_REMOVED": "Modell nicht geändert: Diese Freigabe ist nicht mehr verfügbar (der Eigentümer hat sie entfernt oder du hast sie verlassen). Wähle ein anderes Modell.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modell nicht geändert: Der geteilte Anbieter ist vorübergehend nicht verfügbar (der Computer des Eigentümers ist offline oder die Freigabe ist derzeit deaktiviert). Versuch es später erneut oder wähle ein anderes Modell.",
     "SSH_HOST_KEY_MISMATCH": "SSH-Hostschlüssel geändert",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy kann den ursprünglichen Anhang nicht lesen; die Nachricht wurde nicht gesendet. Speichere eine Kopie im Ordner Downloads oder einem anderen zugänglichen Ordner, entferne den ursprünglichen Anhang und füge die Kopie über die Anhang-Schaltfläche hinzu, bevor du erneut sendest."
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy kann den ursprünglichen Anhang nicht lesen; die Nachricht wurde nicht gesendet. Speichere eine Kopie im Ordner Downloads oder einem anderen zugänglichen Ordner, entferne den ursprünglichen Anhang und füge die Kopie über die Anhang-Schaltfläche hinzu, bevor du erneut sendest.",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "Die Änderung der Bildeingabefähigkeit konnte nicht angewendet werden. Sie wurde zurückgenommen oder wird später erneut versucht; bitte erneut versuchen und bei anhaltenden Fehlern die Aufgabe neu öffnen."
   },
   "providerError": {
     "AUTH_INVALID": "Authentifizierung für diese Schnittstelle fehlgeschlagen. Prüfe Adresse, Schlüssel und Authentifizierungsmethode.",
@@ -3952,7 +3953,10 @@
             "title": "Automatische Komprimierung",
             "hint": "Kontext beim gewählten Auslastungsprozentsatz komprimieren. Niedrigere Werte führen zu früherer Komprimierung; die Engine-Limits gelten weiterhin.",
             "default": "{{pct}} % (Standard)",
-            "timing": "Gilt für alle verfügbaren Engines für dieses Modell und diese Quelle bei nachfolgenden Durchläufen, ohne eine Antwort zu unterbrechen."
+            "timing": "Gilt für alle verfügbaren Engines für dieses Modell und diese Quelle bei nachfolgenden Durchläufen, ohne eine Antwort zu unterbrechen.",
+            "defaultBadge": "Standard",
+            "restoreAria": "Standardwert für das automatische Komprimierungsverhältnis wiederherstellen",
+            "sliderAria": "Schwellenwert für automatische Komprimierung anpassen"
           },
           "contextLimitRoute": "Aktuell {{tokens}} Tokens",
           "contextLimitOverWindow": "Über dem vom Anbieter angegebenen Kontextfenster; Anfragen können fehlschlagen.",
@@ -4009,7 +4013,28 @@
           },
           "codexContextUnknown": "CLI-Konfiguration nicht verfügbar",
           "codexContextValues": "Gesamt {{total}} · Nutzbar {{usable}} · Automatische Komprimierung {{compact}} Tokens",
-          "contextLimitGptHint": "GPT verwendet standardmäßig höchstens 272K; hier kannst du 1M einstellen. Codex wendet das Kontextfenster und den Schwellenwert für die automatische Komprimierung gemeinsam an und hält dabei 5 % Reserve frei. Die tatsächliche Kapazität hängt vom Modelldienst ab."
+          "contextLimitGptHint": "GPT verwendet standardmäßig höchstens 272K; hier kannst du 1M einstellen. Codex wendet das Kontextfenster und den Schwellenwert für die automatische Komprimierung gemeinsam an und hält dabei 5 % Reserve frei. Die tatsächliche Kapazität hängt vom Modelldienst ab.",
+          "imageInputOverride": {
+            "label": "Angegebene Bildeingabefähigkeit",
+            "inherit": "Anbieter folgen",
+            "declaredTrue": "Unterstützt Bildeingabe",
+            "declaredFalse": "Keine Bildeingabe",
+            "saveFailed": "Fehler beim Speichern der Bildeingabefähigkeit",
+            "saveFailedWithReason": "Fehler beim Speichern der Bildeingabefähigkeit: {{message}}"
+          },
+          "thinking": "Thinking",
+          "thinkingCapability": {
+            "on": "Unterstützt Thinking",
+            "off": "Kein Thinking"
+          },
+          "thinkingOverride": {
+            "label": "Thinking-Stufen angeben",
+            "inherit": "Anbieter folgen",
+            "declared": "Angegeben",
+            "sourceHint": "Der Katalog gibt keine Thinking-Stufen an; gib sie hier an, wenn das Modell tatsächlich denkt",
+            "saveFailed": "Fehler beim Speichern der Thinking-Angabe",
+            "saveFailedWithReason": "Fehler beim Speichern der Thinking-Angabe: {{reason}}"
+          }
         },
         "kindFilter": {
           "all": "Alle",
@@ -9908,7 +9933,47 @@
       "terminateConfirmDescription": "Dadurch wird der Agent-Prozess zwangsweise beendet. Alle Aufgaben, die diesen Prozess verwenden, werden unterbrochen. Sende eine weitere Nachricht in einer betroffenen Aufgabe, um wieder einen Agent zu starten.",
       "terminated": "Prozess {{name}} gestoppt",
       "terminateFailed": "Dieser Prozess konnte nicht gestoppt werden – möglicherweise wurde er bereits beendet. Die Liste wird bei der nächsten Erfassung aktualisiert.",
-      "sessionDetail": "Aufgabe: {{title}}"
+      "sessionDetail": "Aufgabe: {{title}}",
+      "tabs": {
+        "hostDaemons": "Hintergrundelemente",
+        "label": "Ressourcenansicht",
+        "processes": "Prozesse"
+      }
+    },
+    "hostDaemons": {
+      "actionFailed": "Aktion fehlgeschlagen. Bitte erneut versuchen",
+      "delete": "Löschen",
+      "deleteBody": "Entfernt diese geplante Aufgabe endgültig von diesem Computer; sie startet nicht mehr automatisch. Aufgabenaufzeichnungen in Cindy sind nicht betroffen.",
+      "deleteTitle": "„{{name}}“ löschen?",
+      "deleted": "{{name}} gelöscht",
+      "empty": "Noch keine von Aufgaben erstellten Hintergrundelemente",
+      "loadFailed": "Hintergrundelemente konnten nicht gelesen werden",
+      "owner": "Erstellt von: {{title}}",
+      "ownerUnknown": "Unbekannt",
+      "refresh": "Aktualisieren",
+      "refreshFailed": "Aktualisierung fehlgeschlagen; die Liste ist möglicherweise veraltet",
+      "run": "Starten",
+      "scanning": "Hintergrundelemente werden gescannt…",
+      "started": "{{name}} gestartet",
+      "state": {
+        "disabled": "Deaktiviert",
+        "ready": "Bereit",
+        "running": "Läuft",
+        "unknown": "Unbekannt"
+      },
+      "stop": "Beenden",
+      "stopBody": "Beendet nur diesen Lauf; die Aufgabe startet gemäß Zeitplan erneut.",
+      "stopTitle": "„{{name}}“ beenden?",
+      "stopped": "{{name}} beendet",
+      "trigger": {
+        "logon": "Bei der Anmeldung",
+        "other": "Anderer Auslöser",
+        "schedule": "Nach Zeitplan",
+        "startup": "Beim Systemstart"
+      },
+      "unsupported": "Hintergrundelemente sind nur unter Windows verfügbar",
+      "unrelated_one": "{{count}} unbezogenes Hintergrundelement ist ausgeblendet",
+      "unrelated_other": "{{count}} unbezogene Hintergrundelemente sind ausgeblendet"
     }
   },
   "update": {

@@ -1332,7 +1332,8 @@
     "REMOTE_AGENT_SHARE_REMOVED": "Modelo não alterado: este compartilhamento não está mais disponível (o proprietário o removeu ou você saiu). Escolha outro modelo.",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "Modelo não alterado: o provedor compartilhado está temporariamente indisponível (o computador do proprietário está offline ou o compartilhamento está desativado no momento). Tente novamente mais tarde ou escolha outro modelo.",
     "SSH_HOST_KEY_MISMATCH": "Chave do host SSH alterada",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "O Cindy não consegue ler o anexo original; a mensagem não foi enviada. Salve uma cópia em Downloads ou em outra pasta acessível, remova o anexo original e adicione a cópia usando o botão de anexos antes de enviar novamente."
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "O Cindy não consegue ler o anexo original; a mensagem não foi enviada. Salve uma cópia em Downloads ou em outra pasta acessível, remova o anexo original e adicione a cópia usando o botão de anexos antes de enviar novamente.",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "Não foi possível aplicar a alteração da capacidade de entrada de imagem. A alteração foi revertida ou será tentada novamente mais tarde; tente de novo e, se continuar falhando, reabra a tarefa."
   },
   "providerError": {
     "AUTH_INVALID": "A autenticação falhou nesta interface. Verifique o endereço, a chave e o método de autenticação.",
@@ -4003,7 +4004,10 @@
             "title": "Compactação automática",
             "hint": "Compacta o contexto no percentual de uso selecionado. Valores menores compactam mais cedo; os limites do mecanismo continuam valendo.",
             "default": "{{pct}}% (Padrão)",
-            "timing": "Aplica-se a todos os mecanismos disponíveis para este modelo e fonte nas próximas execuções, sem interromper uma resposta."
+            "timing": "Aplica-se a todos os mecanismos disponíveis para este modelo e fonte nas próximas execuções, sem interromper uma resposta.",
+            "defaultBadge": "Padrão",
+            "restoreAria": "Restaurar o padrão da proporção de compactação automática",
+            "sliderAria": "Ajustar o limiar de compactação automática"
           },
           "contextLimitRoute": "Atual: {{tokens}} tokens",
           "contextLimitOverWindow": "Acima da janela declarada pelo provedor; as requisições podem falhar.",
@@ -4060,7 +4064,28 @@
           },
           "codexContextUnknown": "Configuração da CLI indisponível",
           "codexContextValues": "Total {{total}} · Utilizável {{usable}} · Compactação automática {{compact}} tokens",
-          "contextLimitGptHint": "O GPT usa no máximo 272K por padrão; você pode definir 1M aqui. O Codex aplica a janela e o limite de compactação automática juntos, mantendo uma margem de 5%. A capacidade real depende do serviço do modelo."
+          "contextLimitGptHint": "O GPT usa no máximo 272K por padrão; você pode definir 1M aqui. O Codex aplica a janela e o limite de compactação automática juntos, mantendo uma margem de 5%. A capacidade real depende do serviço do modelo.",
+          "imageInputOverride": {
+            "label": "Declaração da capacidade de entrada de imagem",
+            "inherit": "Seguir o provedor",
+            "declaredTrue": "Suporta entrada de imagem",
+            "declaredFalse": "Sem entrada de imagem",
+            "saveFailed": "Falha ao salvar a capacidade de entrada de imagem",
+            "saveFailedWithReason": "Falha ao salvar a capacidade de entrada de imagem: {{message}}"
+          },
+          "thinking": "Pensamento",
+          "thinkingCapability": {
+            "on": "Suporta pensamento",
+            "off": "Não suporta pensamento"
+          },
+          "thinkingOverride": {
+            "label": "Declarar níveis de pensamento",
+            "inherit": "Seguir o provedor",
+            "declared": "Declarado",
+            "sourceHint": "O catálogo não declara níveis de pensamento; declare-os aqui se o modelo realmente raciocina",
+            "saveFailed": "Falha ao salvar a declaração de pensamento",
+            "saveFailedWithReason": "Falha ao salvar a declaração de pensamento: {{reason}}"
+          }
         },
         "kindFilter": {
           "all": "Todas",
@@ -9986,7 +10011,48 @@
       "terminated": "Processo {{name}} interrompido",
       "terminateFailed": "Não foi possível interromper este processo — ele pode já ter sido encerrado. A lista será atualizada na próxima amostragem.",
       "sessionDetail": "Tarefa: {{title}}",
-      "processCount_many": "Árvore de processos: {{count}} processos"
+      "processCount_many": "Árvore de processos: {{count}} processos",
+      "tabs": {
+        "hostDaemons": "Itens em segundo plano",
+        "label": "Visualização de recursos",
+        "processes": "Processos"
+      }
+    },
+    "hostDaemons": {
+      "actionFailed": "A ação falhou; tente de novo",
+      "delete": "Excluir",
+      "deleteBody": "Remove definitivamente esta tarefa agendada deste computador; ela não será mais iniciada automaticamente. Os registros de tarefas no Cindy não são afetados.",
+      "deleteTitle": "Excluir “{{name}}”?",
+      "deleted": "{{name}} excluído",
+      "empty": "Ainda não há itens em segundo plano criados por tarefas",
+      "loadFailed": "Não foi possível ler os itens em segundo plano",
+      "owner": "Criado por: {{title}}",
+      "ownerUnknown": "Desconhecido",
+      "refresh": "Atualizar",
+      "refreshFailed": "Falha ao atualizar; a lista pode estar desatualizada",
+      "run": "Iniciar",
+      "scanning": "Examinando itens em segundo plano…",
+      "started": "{{name}} iniciado",
+      "state": {
+        "disabled": "Desativado",
+        "ready": "Em espera",
+        "running": "Em execução",
+        "unknown": "Desconhecido"
+      },
+      "stop": "Parar",
+      "stopBody": "Encerra apenas esta execução; a tarefa voltará a iniciar conforme o agendamento.",
+      "stopTitle": "Parar “{{name}}”?",
+      "stopped": "{{name}} parado",
+      "trigger": {
+        "logon": "Ao fazer login",
+        "other": "Outro gatilho",
+        "schedule": "Conforme agendamento",
+        "startup": "Ao ligar"
+      },
+      "unsupported": "Os itens em segundo plano só estão disponíveis no Windows",
+      "unrelated_one": "{{count}} item em segundo plano não relacionado está oculto",
+      "unrelated_other": "{{count}} itens em segundo plano não relacionados estão ocultos",
+      "unrelated_many": "{{count}} itens em segundo plano não relacionados estão ocultos"
     }
   },
   "update": {

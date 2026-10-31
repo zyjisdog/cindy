@@ -1301,7 +1301,8 @@
     "REMOTE_AGENT_SHARE_REMOVED": "模型未易：此分享已不可用（彼已刪分享，或君已退出）。請易一模型。",
     "REMOTE_AGENT_SHARE_UNAVAILABLE": "模型未易：所分享之供方暫不可用（彼機不在線，或彼暫閉分享）。請稍後再試，或易一模型。",
     "SSH_HOST_KEY_MISMATCH": "SSH 主機金鑰已易",
-    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 不能讀來源附件，訊未遣。請將檔案另存至「下載」或他可存取之卷匣，移除原附件，再以附件按鈕納其副本而後遣之。"
+    "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 不能讀來源附件，訊未遣。請將檔案另存至「下載」或他可存取之卷匣，移除原附件，再以附件按鈕納其副本而後遣之。",
+    "PI_IMAGE_CAPABILITY_REFRESH_FAILED": "圖片輸入能力更新未生效（已回滾或稍後自動重試）。請重試；若持續失敗請重新開啟任務。"
   },
   "providerError": {
     "AUTH_INVALID": "今介面驗證未成，請察位址、金鑰與驗證方式",
@@ -3910,7 +3911,10 @@
             "title": "自縮",
             "hint": "佔用達所擇比例時整理上下文。比例愈低，壓縮愈早；實際時機仍受引擎所限。",
             "default": "{{pct}}%（常例）",
-            "timing": "施於此來源下該模型諸可用引擎。後續執行生效，不斷方生之內容。"
+            "timing": "施於此來源下該模型諸可用引擎。後續執行生效，不斷方生之內容。",
+            "defaultBadge": "預設",
+            "restoreAria": "恢復自動壓縮比例的預設設定",
+            "sliderAria": "調整自動壓縮觸發閾值"
           },
           "contextLimitRoute": "今 {{tokens}} tokens",
           "contextLimitOverWindow": "已逾上游所宣之長度，請求或將未成。",
@@ -3967,7 +3971,28 @@
           },
           "codexContextUnknown": "未讀得 CLI 之設",
           "codexContextValues": "全窗 {{total}} · 可用 {{usable}} · 自縮於 {{compact}} tokens",
-          "contextLimitGptHint": "GPT 預設至多用 272K；可於此自訂為 1M。Codex 將同套視窗與自動壓縮門檻，留 5% 餘量；實際容量受模型服務所限。"
+          "contextLimitGptHint": "GPT 預設至多用 272K；可於此自訂為 1M。Codex 將同套視窗與自動壓縮門檻，留 5% 餘量；實際容量受模型服務所限。",
+          "imageInputOverride": {
+            "declaredFalse": "不支援圖片輸入",
+            "declaredTrue": "支援圖片輸入",
+            "inherit": "跟隨供應商",
+            "label": "圖片輸入能力宣告",
+            "saveFailed": "儲存圖片輸入能力失敗",
+            "saveFailedWithReason": "儲存圖片輸入能力失敗：{{message}}"
+          },
+          "thinking": "思考",
+          "thinkingCapability": {
+            "off": "不支援思考",
+            "on": "支援思考"
+          },
+          "thinkingOverride": {
+            "declared": "已宣告",
+            "inherit": "跟隨供應商",
+            "label": "宣告思考檔位",
+            "saveFailed": "儲存思考宣告失敗",
+            "saveFailedWithReason": "儲存思考宣告失敗：{{reason}}",
+            "sourceHint": "目錄沒有宣告思考檔位；若該模型實際會推理，可在此宣告"
+          }
         },
         "kindFilter": {
           "all": "全",
@@ -9864,7 +9889,46 @@
       "terminateConfirmDescription": "將強制終止此 Agent 處理程序，凡用之差事皆將中斷；其後於任一受累差事中再遣訊，即可按需重啟 Agent。",
       "terminated": "{{name}} 程序已止",
       "terminateFailed": "不能終止此處理程序，或已自行退出；列表將隨下次取樣自更",
-      "sessionDetail": "差事：{{title}}"
+      "sessionDetail": "差事：{{title}}",
+      "tabs": {
+        "hostDaemons": "本機常駐",
+        "label": "資源檢視",
+        "processes": "處理程序"
+      }
+    },
+    "hostDaemons": {
+      "actionFailed": "操作失敗，請重試",
+      "delete": "刪除",
+      "deleteBody": "會從這台電腦徹底刪除這項排程工作，之後不會再自動啟動；Cindy 裡的任務記錄不受影響。",
+      "deleteTitle": "刪除「{{name}}」？",
+      "deleted": "已刪除 {{name}}",
+      "empty": "還沒有由任務建立的本機常駐項目",
+      "loadFailed": "讀取本機常駐失敗",
+      "owner": "建立任務：{{title}}",
+      "ownerUnknown": "未知",
+      "refresh": "重新整理",
+      "refreshFailed": "重新整理失敗，清單可能不是最新的",
+      "run": "啟動",
+      "scanning": "正在掃描本機常駐…",
+      "started": "已啟動 {{name}}",
+      "state": {
+        "disabled": "已停用",
+        "ready": "待執行",
+        "running": "執行中",
+        "unknown": "未知"
+      },
+      "stop": "停止",
+      "stopBody": "只結束這一次執行，任務仍會依原排程再次啟動。",
+      "stopTitle": "停止「{{name}}」？",
+      "stopped": "已停止 {{name}}",
+      "trigger": {
+        "logon": "登入時啟動",
+        "other": "其他觸發方式",
+        "schedule": "依排程啟動",
+        "startup": "開機啟動"
+      },
+      "unsupported": "本機常駐清單目前只支援 Windows",
+      "unrelated_other": "另有 {{count}} 項與本機任務無關的常駐項目未顯示"
     }
   },
   "update": {
@@ -10546,10 +10610,9 @@
         "stopAllHint": "兼及他人所發"
       },
       "header": {
-        "queued": "{{name}} 排隊中",
+        "queued": "{{name}} 候次",
         "stepRunning": "{{name}} 方行第 {{step}} 步",
         "speaking": "{{name}} 方言…",
-        "queued": "{{name}} 候次",
         "planning": "{{name}} 方籌畫…"
       },
       "memberCount_one": "{{count}} 人",
