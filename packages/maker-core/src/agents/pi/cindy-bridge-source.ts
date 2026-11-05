@@ -2597,6 +2597,7 @@ const CINDY_STOP_SESSION_TASK_TOOL = 'stop_session_task';
 const CINDY_SEND_TO_AGENT_TOOL = 'send_to_agent';
 const CINDY_CHECK_AGENT_MESSAGE_TOOL = 'check_agent_message';
 const CINDY_LIST_AGENTS_TOOL = 'list_agents';
+const CINDY_LIST_MACHINES_TOOL = 'list_machines';
 const CINDY_CREATE_TEAMMATE_TOOL = 'create_teammate';
 const CINDY_BOT_MEMORY_TOOL = 'bot_memory';
 const CINDY_DIRECT_BOT_TOOLS = new Set([
@@ -3163,6 +3164,20 @@ function schemaHint(schema: Record<string, unknown>): string {
   return rendered.length <= 16_000 ? rendered : rendered.slice(0, 15_999) + '…';
 }
 
+/**
+ * 判断工具 schema 是否声明了名为 args 的参数。返回:
+ * - true/false  properties 明确声明/未声明 args
+ * - null        无法判定 — properties 缺失/为空(参数可能靠 $ref/allOf 组合声明),
+ *               调用方按「无可靠判据」处理, 宁漏不误拦
+ */
+function schemaDeclaresArgs(schema: { properties?: Record<string, unknown> } | null | undefined): boolean | null {
+  const props = schema?.properties;
+  if (props == null || typeof props !== 'object' || Object.keys(props).length === 0) {
+    return null;
+  }
+  return Object.prototype.hasOwnProperty.call(props, 'args');
+}
+
 class CindyMcpGateway {
   // Older Pi ignores execute-result isError but supports tool_result overrides.
   // Weak identities keep the status private without retaining completed calls.
@@ -3362,6 +3377,13 @@ class CindyMcpGateway {
       args: recordInput(input),
       tool,
     };
+  }
+
+  /** The real MCP identity of a tool the model called by its short name, for the permission and capture hooks. */
+  resolveHookedCall(toolName: string, input: unknown): ResolvedMcpGatewayCall | null {
+    if (toolName === CINDY_MCP_CALL_TOOL) return this.resolveCall(input);
+    if (CINDY_DIRECT_BOT_TOOLS.has(toolName) || toolName === CINDY_LIST_MACHINES_TOOL) return this.resolveDirectHelperTool(toolName, input);
+    return toolName === CINDY_BOT_MEMORY_TOOL ? this.resolveBotMemory(input) : null;
   }
 
   resolveStartSessionTask(input: unknown): ResolvedMcpGatewayCall | null {
@@ -3564,8 +3586,8 @@ class CindyMcpGateway {
    * 返回:
    * - 'missing'          内层列表里没有这个工具 → 放行, 服务端会报 UNKNOWN_TOOL
    * - {declaresArgs}     拿到了内层 schema → 按 args 参数判定
-   * - 'schemaless'       找到工具但没带 schema (Cindy registry 的 list_tools 只给名字+简介),
-   *                      或返回的是类目概览 → 调用方回退两入口形状启发式
+   * - 'schemaless'       找到工具但没带可用 schema (Cindy registry 的 list_tools 只给名字+简介,
+   *                      或返回的是类目概览, 或 properties 缺失/为空判定不了) → 调用方回退两入口形状启发式
    * - null               拉取/解析失败(不缓存, 下次重试) → 同上回退
    */
   private async probeInnerToolSchema(entry: ConnectedMcpTool, innerName: string, signal?: AbortSignal):
@@ -3604,13 +3626,10 @@ class CindyMcpGateway {
     if (listing.kind === 'schemaless') return 'schemaless';
     const match = listing.tools.find((tool) => tool?.name === innerName);
     if (!match) return 'missing';
-    const schema = (match.inputSchema ?? match.parameters ?? match.schema) as
-      { properties?: Record<string, unknown> } | undefined;
-    if (!schema || typeof schema !== 'object') return 'schemaless';
-    return {
-      declaresArgs: schema.properties != null
-        && Object.prototype.hasOwnProperty.call(schema.properties, 'args'),
-    };
+    const declared = schemaDeclaresArgs((match.inputSchema ?? match.parameters ?? match.schema) as
+      { properties?: Record<string, unknown> } | undefined);
+    if (declared === null) return 'schemaless';
+    return { declaresArgs: declared };
   }
 
   list(serverName?: string): Array<{ server: string; name: string; description: string }> {
@@ -3810,8 +3829,8 @@ class CindyMcpGateway {
       if (entrySelf) {
         verdict = true; // name 缺失/填了入口名: 不存在合法形状
       } else if (innerTool !== null) {
-        verdict = !(innerSchema?.properties != null
-          && Object.prototype.hasOwnProperty.call(innerSchema.properties, 'args'));
+        const declared = schemaDeclaresArgs(innerSchema);
+        verdict = declared === null ? null : !declared; // schema 宽松判定不了 → 启发式放行
       } else if (nestedArgsPlain) {
         const probed = await this.probeInnerToolSchema(resolved.tool, innerName, signal);
         if (probed === 'missing') verdict = false; // 内层列表里没有 → 服务端 UNKNOWN_TOOL
@@ -3912,7 +3931,7 @@ class CindyMcpGateway {
     return this.executeResolvedCall(resolved, signal);
   }
 
-  register(pi: any, options: { botMemoryFacade?: boolean } = {}): void {
+  register(pi: any, options: { botMemoryFacade?: boolean; deniedTools?: string[] } = {}): void {
     // Aborted turns may approve a call that Pi never executes.
     pi.on?.('agent_end', () => { this.approvedDefinitions.clear(); });
     pi.on?.('tool_result', (event: any) => {
@@ -4010,6 +4029,19 @@ class CindyMcpGateway {
         },
         execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
           this.executeStartSessionTask(params, signal),
+      });
+    }
+
+    // The first step of any work across computers: behind the MCP gateway, models answered
+    // with their own ssh commands instead of finding it.
+    if (this.resolveDirectHelperTool(CINDY_LIST_MACHINES_TOOL, {})) {
+      pi.registerTool({
+        name: CINDY_LIST_MACHINES_TOOL,
+        label: 'List machines',
+        description: 'List the computers on this account and the SSH hosts configured here, with live CPU, memory and disk. Use it first whenever the user asks about their machines or SSH hosts, or work may need another computer, more resources or a different system; it reads all of them in one call, so do not run ssh or read ~/.ssh yourself for this. It reports facts and picks nothing. Each unreadable machine carries an availability reason: report it as given, and never call host_key_changed a password problem.',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        execute: async (_toolCallId: string, params: unknown, signal?: AbortSignal) =>
+          this.executeDirectHelperTool(CINDY_LIST_MACHINES_TOOL, params, signal),
       });
     }
 
@@ -4200,8 +4232,9 @@ class CindyMcpGateway {
       { name: 'read_workbench_task', description: 'Read the recent bounded transcript of a task you follow (all tasks if you follow every task).', properties: { task_id: taskIdProperty }, required: ['task_id'] },
       { name: 'continue_workbench_task', description: 'Send one message into a task you follow so it continues. Use get_task_digest first; never resend after DELIVERY_UNKNOWN without checking.', properties: { task_id: taskIdProperty, message: { type: 'string', minLength: 1, maxLength: 4000 } }, required: ['task_id', 'message'] },
     ];
+    const deniedTools = new Set(options.deniedTools ?? []);
     for (const tool of [...routineTools, ...followUpTools]) {
-      if (!this.resolveDirectHelperTool(tool.name, {})) continue;
+      if (deniedTools.has(tool.name) || !this.resolveDirectHelperTool(tool.name, {})) continue;
       pi.registerTool({
         name: tool.name,
         label: tool.name,
@@ -5216,13 +5249,7 @@ export default async function cindyBridge(piApi: any) {
     // Pi sees one stable gateway schema, while Host policy and approval UI must
     // continue seeing the real MCP identity and real arguments. That preserves
     // every existing per-server policy without loading each schema at startup.
-    const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
-      ? mcpGateway.resolveCall(event.input)
-      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
-        ? mcpGateway.resolveDirectHelperTool(event.toolName, event.input)
-        : event.toolName === CINDY_BOT_MEMORY_TOOL
-          ? mcpGateway.resolveBotMemory(event.input)
-        : null;
+    const resolvedGatewayCall = mcpGateway.resolveHookedCall(event.toolName, event.input);
     // 分类只认「解析成功」：披露状态不参与权限命名与采集分类，否则被门拦下的那次
     // 会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;
@@ -5232,6 +5259,7 @@ export default async function cindyBridge(piApi: any) {
     if (
       (event.toolName === CINDY_MCP_CALL_TOOL
         || CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
+        || event.toolName === CINDY_LIST_MACHINES_TOOL
         || event.toolName === CINDY_BOT_MEMORY_TOOL)
       && !gatewayCall
     ) return;
@@ -5316,13 +5344,7 @@ export default async function cindyBridge(piApi: any) {
   });
 
   pi.on('tool_result', async (event: any, ctx: any) => {
-    const resolvedGatewayCall = event.toolName === CINDY_MCP_CALL_TOOL
-      ? mcpGateway.resolveCall(event.input)
-      : CINDY_DIRECT_BOT_TOOLS.has(event.toolName)
-        ? mcpGateway.resolveDirectHelperTool(event.toolName, event.input)
-        : event.toolName === CINDY_BOT_MEMORY_TOOL
-          ? mcpGateway.resolveBotMemory(event.input)
-        : null;
+    const resolvedGatewayCall = mcpGateway.resolveHookedCall(event.toolName, event.input);
     // 分类只认「解析成功」：自愈放行的首次调用发生在记账之前，若在这里按披露状态
     // 判定，它会被当成非 gateway 调用，权限命名与采集都会漏掉这一条。
     const gatewayCall = resolvedGatewayCall;
@@ -5679,7 +5701,7 @@ export default async function cindyBridge(piApi: any) {
   // ── MCP 桥 ────────────────────────────────────────────────────────────────
   const raw = process.env.CINDY_PI_MCP_BRIDGE;
   if (!raw) return;
-  let cfg: { token?: string; servers?: McpServerRef[]; botMemoryFacade?: boolean };
+  let cfg: { token?: string; servers?: McpServerRef[]; botMemoryFacade?: boolean; deniedTools?: string[] };
   try {
     cfg = JSON.parse(raw);
   } catch {
@@ -5706,7 +5728,10 @@ export default async function cindyBridge(piApi: any) {
   // every low-frequency/external MCP still stays behind discovery.
   if (servers.length > 0) {
     try {
-      mcpGateway.register(pi, { botMemoryFacade: cfg.botMemoryFacade === true });
+      mcpGateway.register(pi, {
+        botMemoryFacade: cfg.botMemoryFacade === true,
+        deniedTools: Array.isArray(cfg.deniedTools) ? cfg.deniedTools.filter((name) => typeof name === 'string') : [],
+      });
       console.error('[cindy-bridge] MCP gateway ready (' + mcpGateway.size + ' tools; companion facade=' + (cfg.botMemoryFacade === true) + ')');
     } catch (err) {
       console.error('[cindy-bridge] MCP gateway registration failed: ' + String(err));

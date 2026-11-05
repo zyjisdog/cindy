@@ -4,6 +4,10 @@ export default {
   real:'ModelAdvancedDrawer, buildUnionRows, bundled per-engine reasoning metadata, preference writes, themes and translations',
   notCovered:'Account entitlement and live model calls; host context result and speed availability are fixture inputs',
   cases:{
+    'image-unknown':{about:'Undeclared image input: two explicit choices, no default'},
+    'image-unsupported':{about:'Unsupported catalog default restores inheritance'},
+    'image-mixed':{about:'Different engine defaults require an explicit common choice'},
+    'image-inherited':{about:'Mixed override provenance with the same effective image capability'},
     default:{about:'GPT-6 Astra with Codex Ultrafast entitlement'},
     narrow:{about:'Model compaction at phone width', viewport:{width:320,height:800}},
     sol:{about:'GPT-6.1 Sol with Codex Ultrafast entitlement'},
@@ -31,9 +35,19 @@ export default {
     }
     await ui.capture('ultra-selected');
     const imageInput = page.getByRole('button', { name: await ui.t('settings.providers.models.advanced.imageInput'), exact: true });
+    const knownDefault = !['image-unknown', 'image-mixed', 'image-inherited'].includes(ui.case);
+    if (ui.case === 'image-inherited' && !(await imageInput.textContent()).includes(await ui.t('settings.providers.models.advanced.supported'))) throw Error('Mixed override provenance must show its common effective capability');
+    const defaultSupported = ui.case !== 'image-unsupported';
+    const label = async supported => {
+      const value = await ui.t('settings.providers.models.advanced.' + (supported ? 'supported' : 'unsupported'));
+      return knownDefault && supported === defaultSupported
+        ? await ui.t('settings.providers.models.advanced.imageInputDefault', { value }) : value;
+    };
+    await imageInput.scrollIntoViewIfNeeded();
     await imageInput.click();
+    if (await page.getByRole('menuitemradio').count() !== 2) throw Error('Image input must have exactly two choices');
     await ui.capture('image-input-options');
-    await page.getByRole('menuitemradio', { name: await ui.t('settings.providers.models.advanced.unsupported'), exact: true }).click();
+    await page.getByRole('menuitemradio', { name: await label(false), exact: true }).click();
     if (ui.case === 'owner-repair') {
       if (!(await imageInput.isDisabled())) throw Error('In-flight image save should disable the control');
       await page.evaluate(() => window.__uiPage.emit('authChanged', {}));
@@ -45,7 +59,11 @@ export default {
     }
     if (!(await imageInput.textContent()).includes(await ui.t('settings.providers.models.advanced.unsupported'))) throw Error('Explicit image input false was not shown');
     await imageInput.click();
-    await page.getByRole('menuitemradio', { name: await ui.t('settings.providers.models.advanced.imageCapability.default'), exact: true }).click();
+    await page.getByRole('menuitemradio', { name: await label(true), exact: true }).click();
+    if (!(await imageInput.textContent()).includes(await ui.t('settings.providers.models.advanced.supported'))) throw Error('Image input true was not shown');
+    await imageInput.click();
+    await ui.capture('image-input-selected');
+    await page.keyboard.press('Escape');
     const compaction = page.locator('[data-model-compaction]');
     await compaction.locator('summary').click();
     // 滑杆用键盘驱动（与 model-speed fixture 同一手法）：90 → 80 共十次 ArrowLeft。
