@@ -976,6 +976,7 @@ import {
 } from './vision-bridge/vision-bridge-settings-store.js';
 import type { VisionBridgeSettings } from '../shared/visionBridgeSettings.js';
 import { readLspModeSettings, writeLspModeEnabled } from './maker-host/lsp-mode-store.js';
+import { readLiveCompactSettings, writeLiveCompactEnabled } from './maker-host/live-compact-store.js';
 import {
   readChatEmbeddingSettings,
   readChatEmbeddingSettingsState,
@@ -5351,6 +5352,19 @@ const registerIpcHandlers = () => {
     return { effective: 'next-session' as const };
   });
 
+  // 边做边压 (Live Compact) 开关 IPC —— 同 LSP 口径:
+  // pi 进程启动时一次性决定是否 --extension,已开 session 不变。
+  ipcMain.handle(MAKER_IPC_INVOKE.LIVE_COMPACT_GET, async () => {
+    return readLiveCompactSettings();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.LIVE_COMPACT_SET, async (_e, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'live compact enabled required (boolean)');
+    }
+    writeLiveCompactEnabled(enabled);
+    return { effective: 'next-session' as const };
+  });
+
   // 聊天嵌入开关 IPC —— 与 compat-mode 同理提前注册:
   // renderer 启动 bootstrap 同步 localStorage 镜像, 远早于 splash 完成。
   // SET 路径既落 JSON 也立即把 chat-history-embedder 的运行时 enabled 切换 ——
@@ -8845,6 +8859,7 @@ const registerIpcHandlers = () => {
       registerWindowDraftUrls(event.sender, urls);
     });
 
+    const spineDir = path.join(app.getPath('userData'), 'pi-agent-home', 'compaction-spine');
     const storageHandlers = createStorageIpcHandlers({
       clearRemoteMediaMemory: clearLocalEntries,
       getQueueScanTexts: collectAgentInputQueueScanTexts,
@@ -8866,6 +8881,17 @@ const registerIpcHandlers = () => {
         !getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()
           ? Promise.resolve({ bytes: 0, fileCount: 0 })
           : withActiveChatAttachmentRoot((rootDir) => getFixedDirectoryStats(rootDir)),
+      // 「边做边压」扩展把被切走的原文写在这里(spine.log + shadow/)。目录不存在时
+      // 报数为 0、清理为无操作,无需先判断开关状态。
+      // 打开目录一律走 Electron shell + 统一的目标解析:目录由本机拼出来、不接受
+      // renderer 传路径,仍过一次 resolveShellOpenPathTarget,保证这条调用面永远不碰命令执行。
+      openSpineDir: async () => {
+        const target = resolveShellOpenPathTarget(spineDir);
+        if (!target) return false;
+        return openOrCreateFixedDirectory(target, { openPath: (filePath) => shell.openPath(filePath) });
+      },
+      clearSpineDir: () => clearFixedDirectory(spineDir),
+      getSpineDirStats: () => getFixedDirectoryStats(spineDir),
     });
     registerLocalAgentConfirmationIpc(() => mainWindowRef);
     ipcMain.handle('local-agent:connections', (event) => {
@@ -8948,6 +8974,27 @@ const registerIpcHandlers = () => {
           );
         }
         await storageHandlers.clearChatAttachmentsDir();
+        return { cleared: true };
+      }),
+    );
+    ipcMain.handle('cindy-media:spine-stats', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.spineStats();
+    });
+    ipcMain.handle('cindy-media:spine-open-dir', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.openSpineDir();
+    });
+    ipcMain.handle('cindy-media:spine-clear', (event) =>
+      runFixedDirectoryIpcAction('spine-clear', async () => {
+        assertTrustedAppRendererEvent(event);
+        const confirmed = await confirmFixedDirectoryClear(event, {
+          title: t('settings.liveCompact.shadow.clearConfirmTitle'),
+          message: t('settings.liveCompact.shadow.clearConfirmDescription'),
+          confirmButton: t('settings.liveCompact.shadow.clearConfirmButton'),
+        });
+        if (!confirmed) return { cleared: false };
+        await storageHandlers.clearSpineDir();
         return { cleared: true };
       }),
     );
