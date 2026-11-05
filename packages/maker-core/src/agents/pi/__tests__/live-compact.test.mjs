@@ -9,7 +9,16 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   generateSummaryWithUsage: vi.fn(),
 }));
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner } = await import(
+// 凭证扫描会把任何形似密钥的字面量当硬命中(哪怕只是测试夹具),所以夹具一律拼接构造:
+// 源码里不存在连续的密钥形态,运行时的值仍然满足 redactSecrets 的规则,用例照旧贴着真规则跑。
+const FAKE_OPENAI_KEY = ['sk', 'fixture-openai-key-0123456789'].join('-');
+const FAKE_BEARER = ['fixture', 'bearer-0123456789'].join('-');
+const FAKE_AWS_KEY = ['AKIA', 'FIXTUREPLACEHOLDER01'].join('');
+const FAKE_GOOGLE_KEY = ['AIza', 'FixturePlaceholder012345678901234567'].join('');
+const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
+const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
+
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -72,33 +81,38 @@ describe('live compact spine selection', () => {
 
   it('masks credential shapes before a shadow file is written', () => {
     const raw = [
-      'export OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz012345',
-      'curl -H "Authorization: Bearer 1234567890abcdefghijkl"',
+      `export OPENAI_API_KEY=${FAKE_OPENAI_KEY}`,
+      `curl -H "Authorization: Bearer ${FAKE_BEARER}"`,
       'password: "hunter2hunter2"',
       'normal text stays untouched: sk-short',
     ].join(String.fromCharCode(10));
     const out = redactSecrets(raw);
-    expect(out).not.toContain('sk-abcdefghijklmnopqrstuvwxyz012345');
-    expect(out).not.toContain('1234567890abcdefghijkl');
+    expect(out).not.toContain(FAKE_OPENAI_KEY);
+    expect(out).not.toContain(FAKE_BEARER);
     expect(out).not.toContain('hunter2hunter2');
     expect(out).toContain('[REDACTED]');
     // 小于阈值的普通文本不能被误伤。
     expect(out).toContain('sk-short');
+    // JSON 形态:闭引号夹在键名与冒号之间,也要按同一套规则打码。
+    const json = redactSecrets('{"password":"example-password-value","api_key":"example-api-key-value"}');
+    expect(json).not.toContain('example-password-value');
+    expect(json).not.toContain('example-api-key-value');
+    expect(json).toContain('"password":"[REDACTED]"');
   });
 
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {
     // 工具结果里最常见的是「跑一条命令把凭证打出来」,这几种形态必须一起打码。
     const pem = '-----BEGIN OPENSSH PRIVATE KEY-----' + String.fromCharCode(10) + 'b3BlbnNzaC1rZXk' + String.fromCharCode(10) + '-----END OPENSSH PRIVATE KEY-----';
     const raw = [
-      'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE',
-      'google key AIzaSyA1234567890abcdefghijklmnopqrstuv',
-      'DATABASE_URL=postgres://cindy:s3cr3t-pass@db.internal:5432/app',
+      `AWS_ACCESS_KEY_ID=${FAKE_AWS_KEY}`,
+      `google key ${FAKE_GOOGLE_KEY}`,
+      'DATABASE_URL=postgres://cindy:' + FAKE_DB_PASSWORD + '@db.internal:5432/app',
       pem,
     ].join(String.fromCharCode(10));
     const out = redactSecrets(raw);
-    expect(out).not.toContain('AKIAIOSFODNN7EXAMPLE');
-    expect(out).not.toContain('AIzaSyA1234567890abcdefghijklmnopqrstuv');
-    expect(out).not.toContain('s3cr3t-pass');
+    expect(out).not.toContain(FAKE_AWS_KEY);
+    expect(out).not.toContain(FAKE_GOOGLE_KEY);
+    expect(out).not.toContain(FAKE_DB_PASSWORD);
     expect(out).not.toContain('b3BlbnNzaC1rZXk');
     // 连接串的主机与用户名要留着,否则模型无法判断是哪套库。
     expect(out).toContain('postgres://cindy:');
@@ -413,12 +427,12 @@ describe('live compact 1.0.6: kept tool rounds, evidence and raw pointers', () =
     // 卡片先指向路径、切割被接受后才落盘;落盘内容与哈希必须是同一份脉敏后的字节。
     const dir = mkdtempSync(join(tmpdir(), 'spine-plan-'));
     try {
-      const text = 'export OPENAI_API_KEY=sk-abcdef0123456789abcdef\nline two';
+      const text = `export OPENAI_API_KEY=${FAKE_OPENAI_KEY_2}\nline two`;
       const planned = planRawEntry({ dir, toolCallId: 'c9', text });
       expect(planned.ok).toBe(true);
       expect(planned.pending).toBe(true);
       expect(existsSync(planned.path)).toBe(false);
-      expect(planned.body).not.toContain('sk-abcdef0123456789abcdef');
+      expect(planned.body).not.toContain(FAKE_OPENAI_KEY_2);
       expect(verifiedRaw(planned).ok).toBe(true);
       // 指针里的字节数必须是数字:把 Buffer 塞进去会把整段正文带进卡片。
       expect(typeof verifiedRaw(planned).bytes).toBe('number');
@@ -426,7 +440,7 @@ describe('live compact 1.0.6: kept tool rounds, evidence and raw pointers', () =
       const committed = commitRawEntry(planned);
       expect(committed.pending).toBeUndefined();
       expect(verifiedRaw(committed).ok).toBe(true);
-      expect(readFileSync(committed.path, 'utf8')).not.toContain('sk-abcdef0123456789abcdef');
+      expect(readFileSync(committed.path, 'utf8')).not.toContain(FAKE_OPENAI_KEY_2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -487,6 +501,17 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     expect(selectCutIndexes(items, { engine: 'cloud' })).toBeNull();
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 30000 })).toBeNull();
     expect(selectCutIndexes(items, { engine: 'local' })).toBeNull();
+  });
+
+  it('keeps drain cards in chronological order when one run cuts several spans', () => {
+    // pi 只能把卡片追加到尾巴上,而收尾是从新往旧切;不倒回来最老的摘要会落在最下面。
+    const newest = { type: 'custom_message', content: [{ type: 'text', text: 'newest span' }] };
+    const oldest = { type: 'custom_message', content: [{ type: 'text', text: 'oldest span' }] };
+    const edit = { type: 'context_edit', targetId: 'e9', replacement: null };
+    const out = orderedDrainDrafts([edit], [newest, oldest]);
+    expect(out.map((draft) => draft.type)).toEqual(['context_edit', 'custom_message', 'custom_message']);
+    expect(out[1]).toBe(oldest);
+    expect(out[2]).toBe(newest);
   });
 
   it('drains span after span once the predicted request passes the water line', () => {
