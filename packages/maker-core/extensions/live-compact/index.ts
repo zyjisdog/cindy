@@ -80,12 +80,24 @@
  * 硬行装不下就整刀拒绝,不是截断卡片。dev 实测 30 轮小/中/大读码负载成卡 1.1–5.4K 字符,
  * 预算从未成为约束(A/B 用 SPINE_CARD_BUDGET=8000 复跑,切刀决策一致);而 33.5K 字符的
  * 中文文档只按 8000 会漏 87 条硬行 → 永不切,按放大预算(30,189)则全部装下。
+ * 两处数据安全偏离(语义等价,只是失败路径不再丢原文;上游同版本没有):
+ *   - 容量轮换先 rename 进 `.rotate-<pid>-<ts>` 隔离目录,确认装得下再真删,装不下原路搬回。
+ *     上游边算边删,中途撞上占用会「删了旧备份又放弃这一刀」,已有卡片就指向空文件。
+ *     隔离目录里删不掉的文件搬回原位,占用照实算(不把「移走」当「已释放」);两次都失败的
+ *     残留在下一次轮换补删,补删前仍计入用量。这类回滚会让用量短暂超出上限,但**不因此拒绝**
+ *     这一刀 —— 已经删成功的旧备份回不来,拒绝只会白删。
+ *   - 被拒的一刀会撤掉本次刚落盘、无卡片引用的 `raw-*.txt` 与其 meta —— 原文写入不走容量轮换,
+ *     不清理会一轮轮堆积突破单会话上限。
+ * 脱敏规则与上游的分道:上游只枚举少数键名,本仓键名规则按「类」匹配(大写下划线标识符以
+ * KEY/TOKEN/SECRET/PASSWORD/PASSWD/CREDENTIAL(S)/AUTH 结尾即命中,MONKEY/TURKEY/HOCKEY/
+ * WHISKEY/JOKEY 用 stoplist 挡;camel/小写保留小显式列表),并补齐认证头、npm_ 前缀等
+ * blob 形态 —— 严格强于上游,是十多轮安全 review 逼出来的收敛(语料在 live-compact.test.mjs)。
  * Logging: stderr lines prefixed "[pi-live-compact]" (grep "spine cut"), plus an
  * append-only spine.log next to the shadow directory for test verification.
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -839,6 +851,16 @@ export function withoutFullBackupClaim(text: string, shadowFile: string): string
   return String(text).replace(backupHint(shadowFile), "这次切文件里没有完整工具原文。没有指针的结果按无完整备份处理。");
 }
 
+/**
+ * 1.0.6: 卡片确需指向备份时才加提示。切范围内有被修剪过的工具结果(shadow 里只有修剪后的
+ * 表面文本)时,提示必须在**加完之后**再撤掉——先撤后加等于没撤。
+ */
+export function withBackupHint(card: any, shadowFile: string, claimable = true) {
+  const hinted = attachBackupHint(card, shadowFile);
+  if (claimable || !hinted?.text) return hinted;
+  return { ...hinted, text: withoutFullBackupClaim(hinted.text, shadowFile) };
+}
+
 export function toolExcerpt(spans: SpanPiece[] | null, backupId = "") {
   const tools = (spans || []).filter((span) => span.role === "tool" && String(span.text || "").trim().length > 0);
   if (tools.length === 0) return { text: "", omitted: 0, needsBackup: false };
@@ -924,7 +946,8 @@ export function attachBackupHint(card: any, shadowFile?: string) {
   return {
     ...card,
     shadowFile,
-    text: `${card.text}\n省略的工具原文在 ${shadowFile}。需要这条原文再读,不要默认读进来。`,
+    // 与 withoutFullBackupClaim 用同一句提示:两处各写一份就一定会漂,删除时对不上。
+    text: `${card.text}\n${backupHint(shadowFile)}`,
   };
 }
 
@@ -1140,18 +1163,42 @@ function estimateTokens(message: any): number {
 // shadow 会落盘成 .txt,而 toolResult 里可能含 `export KEY=sk-...` 这类命令;
 // 写入前对常见凭证形态打码 —— 卡片里的路径是给模型 read 的,读到打码版比读到明文密钥安全。
 const REDACT_RULES: Array<[RegExp, string]> = [
-  // 键名后允许再跟一个引号:JSON 形态 `{"password":"..."}` 的闭引号夹在键与冒号之间。
-  [/((?:api[_-]?key|access[_-]?token|secret|password|passwd|client[_-]?secret)["'`]?\s*[=:]\s*)(["'`]?)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
+  // PEM 私钥整块必须**排在最前**:键名规则会把 `private_key="-----BEGIN` 先换成 `[REDACTED]`,
+  // 之后整块规则就认不出开始标记,密钥正文会原样留下。先按块整体吃掉,再让键名规则收尾。
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
+  // HTTP 认证头要先单独处理:`Authorization: Basic dXNlcjpwYXNz` 的值不是"键名=值"形态,
+  // 键名规则只认到方案名(不足 8 字),base64 里的可复用凭证会原样留下。Bearer 仍由下面那条兜。
+  // 冒号后可能是引号(JSON `{"Authorization":"Basic …"}`),方案后面也可能是 Digest 那种
+  // `username="…", response="…"` 参数串 —— 两种形态各一条规则。
+  [/((?:proxy-)?authorization["'`]?\s*[=:]\s*["'`]?(?:digest|negotiate)\s+)(?!\[REDACTED)[^\r\n]*/gi, "$1[REDACTED]"],
+  [/((?:proxy-)?authorization["'`]?\s*[=:]\s*["'`]?(?:basic|token)\s+)(?!\[REDACTED)[A-Za-z0-9+/=._~-]{8,}/gi, "$1[REDACTED]"],
+  // 键名规则按「类」匹配,不再枚举厂商:十多轮 review 的漏点全是同一种形态 ——
+  // `AWS_SESSION_TOKEN=`、`NPM_TOKEN=`、`STRIPE_SECRET_KEY=` 这类「下划线大写 + 敏感后缀」。
+  // 大写下划线键名(env/配置的通用写法)只要以 KEY/TOKEN/SECRET/... 结尾就命中;
+  // MONKEY/TURKEY/HOCKEY/WHISKEY/JOKEY 这类以 KEY 结尾的普通词用小 stoplist 挡掉。
+  // 「MAX_TOKENS」「MODEL_TOKEN_LIMIT」这类不以后缀结尾的不受影响(后缀后必须紧跟引号?/=/:)。
+  // 开头的 (?<![A-Z0-9_]) 是性能红线:没有它,连续大写/数字段会从每个位置重扫,
+  // 128K 字符要 25 秒(实测);有它只从标识符起点尝试,同样输入 <1ms。redactSecrets
+  // 跑在同步的 agent_before_settle 钩子里,卡住就是卡住整个 settle。
+  [/((?<![A-Z0-9_])[_A-Z0-9]*(?:KEY|TOKEN|SECRET|PASSWD|PASSWORD|CREDENTIALS?|AUTH)(?<!MONKEY)(?<!TURKEY)(?<!HOCKEY)(?<!WHISKEY)(?<!JOKEY)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/g, "$1$2[REDACTED]"],
+  // 小写/驼峰/连字符键名没有统一后缀(apiKey、refresh-token),保留显式小列表。
+  // 值里允许 `[`(密码可能含方括号),只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
+  [/((?:api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|session[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|secret)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
   [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._-]{16,}/gi, "Bearer [REDACTED]"],
   [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
-  // 云厂商固定前缀凭证:AWS AK/ASIA、Google AIza、Stripe sk_live。
+  // Stripe 形态是 `sk_live_...` / `rk_test_...`:前缀分段,上一条的 `sk-` 匹配不到。
+  [/(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}/g, "[REDACTED]"],
+  // GitHub:传统 PAT 是 gh[pousr]_,细粒度 PAT 是 github_pat_ 前缀(长度不固定)。
+  [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
+  // npm 的 registry 令牌是 `npm_` + 随机串;`.npmrc` 的 `_authToken=` 由上面的键名规则覆盖。
+  [/(?<![A-Za-z0-9])npm_[A-Za-z0-9]{16,}/g, "[REDACTED]"],
+  // 云厂商固定前缀凭证:AWS AK/ASIA、Google AIza、Stripe 的 live 前缀。
   [/(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}/g, "[REDACTED]"],
   [/(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}/g, "[REDACTED]"],
   // 连接串里内嵌的密码:postgres://user:pass@host → 只打码密码段。
-  [/([a-z][a-z0-9+.-]*:\/\/[^:/\s@]+:)([^@\s/]{4,})(@)/gi, "$1[REDACTED]$3"],
-  // PEM 私钥整块(含 OPENSSH 与 RSA/EC)。
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
+  // 起始边界同样是性能红线:没有它,/i 下连续 [a-z0-9+.-] 类字符段(含大写)会从每个
+  // 起点贪吃再逐位回溯,128K 要 17 秒(实测);有它每个 scheme 起点只试一次。
+  [/((?<![A-Za-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/[^:/\s@]+:)([^@\s/]{4,})(@)/gi, "$1[REDACTED]$3"],
 ];
 export function redactSecrets(text: string): string {
   let out = text;
@@ -1286,14 +1333,16 @@ export function rotateShadow(options: {
   cap?: number;
   /** 测试注入:上游同样把 unlink 做成参数。 */
   unlink?: (path: string) => void;
+  rename?: (from: string, to: string) => void;
 }) {
   const unlink = options.unlink ?? unlinkSync;
+  const rename = options.rename ?? renameSync;
   const cap = options.cap ?? shadowMaxBytes();
   const protect = new Set<string>();
   if (options.protectPath) protect.add(resolve(options.protectPath));
   for (const path of options.protectPaths ?? []) protect.add(resolve(path));
   const files = listShadowFiles(options.dir);
-  let used = files.reduce((sum, file) => sum + file.size, 0);
+  let used = files.reduce((sum, file) => sum + file.size, 0) + sweepRotationTrash(options.dir);
   if (options.incomingBytes > cap) {
     return { ok: false, deleted: 0, freed: 0, used, cap, oversize: true };
   }
@@ -1302,9 +1351,9 @@ export function rotateShadow(options: {
   }
   const low = Math.floor(cap * 0.8);
   const candidates = files.filter((file) => !protect.has(resolve(file.path))).sort((left, right) => left.mtimeMs - right.mtimeMs);
-  // 先算出「要删哪些才够」,再一次性删。上游是边算边删:删完才发现装不下(受保护/删不掉的文件
+  // 先算出「要删哪些才够」,再动手。上游是边算边删:删完才发现装不下(受保护/删不掉的文件
   // 占满了额度)会带着 ok:false 返回,调用方据此放弃这一刀 —— 但旧备份已经被删,已有卡片就
-  // 指向了空文件。计划阶段能把这种「删了又不切」整段避免掉。
+  // 指向了空文件。这里的计划只用来判断「删得够不够」,不当作删除清单。
   const plan: Array<{ path: string; size: number }> = [];
   let planned = used;
   for (const file of candidates) {
@@ -1313,33 +1362,129 @@ export function rotateShadow(options: {
     planned -= file.size;
   }
   if (planned + options.incomingBytes > cap) {
-    // 删光所有候选也装不下:一个都不删。
+    // 删光所有候选也装不下:一个都不碰。
+    return { ok: false, deleted: 0, freed: 0, used, cap, oversize: false };
+  }
+  const plannedPaths = new Set(plan.map((file) => file.path));
+  // 两阶段:先把候选 rename 进隔离目录(同卷、可逆),确认装得下再真删。
+  // 直接 unlink 的话,中途遇到占用导致最终仍装不下时,已经删掉的旧备份就回不来了。
+  const trash = join(options.dir, `.rotate-${process.pid}-${Date.now()}`);
+  try {
+    mkdirSync(trash, { recursive: true, mode: 0o700 });
+  } catch {
+    return { ok: false, deleted: 0, freed: 0, used, cap, oversize: false };
+  }
+  const moved: Array<{ from: string; to: string; size: number }> = [];
+  for (const file of candidates) {
+    if (used + options.incomingBytes <= low) break;
+    if (!plannedPaths.has(file.path) && used + options.incomingBytes <= cap) break;
+    const to = join(trash, basename(file.path));
+    try {
+      rename(file.path, to);
+    } catch {
+      continue;
+    }
+    moved.push({ from: file.path, to, size: file.size });
+    used -= file.size;
+  }
+  if (used + options.incomingBytes > cap) {
+    // 装不下:原路搬回,一个都不少。搬不回去说明该文件此刻仍被占用,留一份记录便于排查。
+    for (const item of moved.slice().reverse()) {
+      try {
+        rename(item.to, item.from);
+      } catch (error) {
+        logLine({ key: "rotate" }, `spine rotation rollback failed: ${(error as Error)?.message ?? error}`);
+      }
+    }
+    try {
+      rmdirSync(trash);
+    } catch {}
     return { ok: false, deleted: 0, freed: 0, used, cap, oversize: false };
   }
   let deleted = 0;
   let freed = 0;
-  // 计划只用来判断「删得够不够」;实际删除仍遍历全部候选,计划内的删不掉(Windows 上被占用)
-  // 就继续往下删,不让一个占用的旧文件顶掉整轮压缩。
-  const plannedPaths = new Set(plan.map((file) => file.path));
-  for (const file of candidates) {
-    if (used + options.incomingBytes <= low) break;
-    if (!plannedPaths.has(file.path) && used + options.incomingBytes <= cap) break;
+  // 删不掉的文件已经搬回原位(卡片路径仍然有效),这里不再拿「装不装得下」当拒绝条件:
+  // 走到这一步说明按计划删得下,只有个别文件删不掉才回滚 —— 此时若因为超上限而放弃这一刀,
+  // 前面删成功的旧备份就白删了。宁可让用量短暂超一点(下一次轮换会再淘汰),也不制造孤儿。
+  let undeletable = 0;
+  for (const item of moved) {
     try {
-      unlink(file.path);
+      unlink(item.to);
+    } catch {
+      // 删不掉就搬回原位:卡片指向的路径仍然有效,占用也照实算 —— 不能把「移进隔离目录」
+      // 当成「已释放」。搬不回去时文件留在隔离目录里,仍算占用,由下一次轮换补删。
+      try {
+        rename(item.to, item.from);
+      } catch (error) {
+        logLine({ key: "rotate" }, `spine rotation restore failed: ${(error as Error)?.message ?? error}`);
+      }
+      used += item.size;
+      undeletable += 1;
+      continue;
+    }
+    // 原文的 .meta.json 要跟着正文一起回收;它不进容量统计(上游同样只算列出的备份文件)。
+    if (basename(item.from).startsWith("raw-")) {
+      try {
+        unlink(`${item.from}.meta.json`);
+      } catch {}
+    }
+    deleted += 1;
+    freed += item.size;
+  }
+  try {
+    rmdirSync(trash);
+  } catch {}
+  if (undeletable > 0 && used + options.incomingBytes > cap) {
+    logLine({ key: "rotate" }, `spine shadow over cap after ${undeletable} undeletable file(s): used=${used} incoming=${options.incomingBytes} cap=${cap}`);
+  }
+  return { ok: true, deleted, freed, used, cap, oversize: false, undeletable };
+}
+
+/**
+ * 上一轮删不掉、又搬不回去的文件会留在 `.rotate-*` 里;它们不再被任何卡片引用,这里补删。
+ * 返回来没能删掉的字节数 —— 它们照样占磁盘,要算进用量,不能让上限被绕过去。
+ */
+function sweepRotationTrash(dir: string): number {
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir).filter((name) => name.startsWith(".rotate-"));
+  } catch {
+    return 0;
+  }
+  const now = Date.now();
+  let leftover = 0;
+  for (const name of names) {
+    const trash = join(dir, name);
+    let files: string[] = [];
+    try {
+      files = readdirSync(trash);
     } catch {
       continue;
     }
-    used -= file.size;
-    freed += file.size;
-    deleted += 1;
-    // 原文的 .meta.json 要跟着正文一起回收;它不进容量统计(上游同样只算列出的备份文件)。
-    if (basename(file.path).startsWith("raw-")) {
+    // 只补删放了 10 分钟以上的:同一进程正在用的隔离目录不能被自己扫掉。
+    let recent = true;
+    try {
+      recent = now - statSync(trash).mtimeMs < 10 * 60 * 1000;
+    } catch {}
+    for (const file of files) {
+      const full = join(trash, file);
+      if (!recent) {
+        try {
+          unlinkSync(full);
+          continue;
+        } catch {}
+      }
       try {
-        unlinkSync(`${file.path}.meta.json`);
+        leftover += statSync(full).size;
+      } catch {}
+    }
+    if (!recent) {
+      try {
+        rmdirSync(trash);
       } catch {}
     }
   }
-  return { ok: used + options.incomingBytes <= cap, deleted, freed, used, cap, oversize: false };
+  return leftover;
 }
 
 /**
@@ -1858,6 +2003,19 @@ function rawPlanner(state: SpineState, entries: SpineEntry[]) {
   return { lookup, planned };
 }
 
+/** 一刀被拒时撤掉刚落盘、又没有任何卡片引用的原文快照(连同它的 meta)。 */
+export function discardRawSnapshots(paths: string[], unlink: (path: string) => void = unlinkSync): void {
+  for (const path of paths) {
+    if (!path) continue;
+    try {
+      unlink(path);
+    } catch {}
+    try {
+      unlink(`${path}.meta.json`);
+    } catch {}
+  }
+}
+
 export function selectNewestChunk(
   entries: SpineEntry[],
   diag?: (why: string) => void,
@@ -2218,10 +2376,7 @@ function attemptCut(options: {
     // 卡片正文会一直留在上下文里(小工具结果是整段原样进卡片),脱敏必须在这一侧也做。
     const redacted = { ...chunk.card, text: redactSecrets(chunk.card.text) };
     // 1.0.6: 切范围内存在被修剪过的工具结果时,不宣称「有完整备份」。
-    const claimed = backupClaimOk(spanEntries)
-      ? redacted
-      : { ...redacted, text: withoutFullBackupClaim(redacted.text, file) };
-    const card = attachBackupHint(claimed, file);
+    const card = withBackupHint(redacted, file, backupClaimOk(spanEntries));
     // 1.0.8: 卡片不再用官方摘要标记,改成自己的正文开头(原仓 SPINE_SOURCE_KIND 的对应物)。
     const content = [{ type: "text", text: `${CHECKPOINT_PREAMBLE}\n\n${MARK}` }, { type: "text", text: card.text }];
     const framedTokens = estimateTokens({ role: "user", content, timestamp: Date.now() });
@@ -2237,20 +2392,29 @@ function attemptCut(options: {
     // 卡片引用的原文快照先落盘:写不进去就不切——否则卡片会指向一个不存在的文件。
     // 快照已经写在磁盘上,所以不再重复计入待写字节;仍要加入保护清单。
     const pending = raws.planned();
-    for (const record of pending) {
-      const committed = commitRawEntry(record);
-      if (!committed.ok) {
-        throw new Error(`spine: raw snapshot was not written (${committed.reason || "unknown"})`);
+    // 这些快照在卡片被接受之前就落盘了;这一刀随后被拒的话,它们没有任何卡片引用,
+    // 而原文写入不走容量轮换 —— 不清理就会一轮轮堆积,突破单会话上限。
+    const writtenRaw: string[] = [];
+    try {
+      for (const record of pending) {
+        const committed = commitRawEntry(record);
+        if (!committed.ok) {
+          throw new Error(`spine: raw snapshot was not written (${committed.reason || "unknown"})`);
+        }
+        if (committed.path) writtenRaw.push(committed.path);
       }
+      saveShadow(
+        state,
+        shadow,
+        file,
+        body,
+        0,
+        pending.map((record) => record.path || "").filter(Boolean),
+      );
+    } catch (error) {
+      discardRawSnapshots(writtenRaw);
+      throw error;
     }
-    saveShadow(
-      state,
-      shadow,
-      file,
-      body,
-      0,
-      pending.map((record) => record.path || "").filter(Boolean),
-    );
     pruneShadowSessions(join(spineRoot(), "shadow"));
 
     const drafts = [

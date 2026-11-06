@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -14,11 +14,21 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
 const FAKE_OPENAI_KEY = ['sk', 'fixture-openai-key-0123456789'].join('-');
 const FAKE_BEARER = ['fixture', 'bearer-0123456789'].join('-');
 const FAKE_AWS_KEY = ['AKIA', 'FIXTUREPLACEHOLDER01'].join('');
-const FAKE_GOOGLE_KEY = ['AIza', 'FixturePlaceholder012345678901234567'].join('');
+const FAKE_GOOGLE_KEY = ['AIza', 'FixturePlaceholderABCDEFGHIJKLMNOPQRST'].join('');
+const FAKE_PASSWORD = ['fixture', 'plain-password'].join('-');
 const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
 const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
+const FAKE_REFRESH_TOKEN = ['fixture', 'refresh', 'token', '0123456789'].join('-');
+const FAKE_STRIPE_KEY = ['sk', 'live', 'fixturestripeplaceholder0123'].join('_');
+const FAKE_BASIC = ['dXNlcjpw', 'YXNzd29yZA=='].join('');
+const FAKE_AWS_SESSION_TOKEN = ['AWS_SESSION', 'TOKEN'].join('_') + '=fixture-session-' + '0123456789abcdef';
+const FAKE_AWS_SECRET = ['fixture', 'awssecret', '0123456789abcdef'].join('-');
+const FAKE_NPM_TOKEN = ['npm', 'fixture0123456789abcdef0123456789'].join('_');
+const FAKE_GH_PAT = ['github', 'pat', 'fixture0123456789abcdef0123'].join('_');
+const FAKE_GH_TOKEN = ['ghp', 'fixtureabcdefghijklmnopqrst'].join('_');
+const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts } = await import(
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots } = await import(
   '../../../../extensions/live-compact/index.ts'
 );
 
@@ -83,13 +93,13 @@ describe('live compact spine selection', () => {
     const raw = [
       `export OPENAI_API_KEY=${FAKE_OPENAI_KEY}`,
       `curl -H "Authorization: Bearer ${FAKE_BEARER}"`,
-      'password: "hunter2hunter2"',
+      'password: "' + FAKE_PASSWORD + '"',
       'normal text stays untouched: sk-short',
     ].join(String.fromCharCode(10));
     const out = redactSecrets(raw);
     expect(out).not.toContain(FAKE_OPENAI_KEY);
     expect(out).not.toContain(FAKE_BEARER);
-    expect(out).not.toContain('hunter2hunter2');
+    expect(out).not.toContain(FAKE_PASSWORD);
     expect(out).toContain('[REDACTED]');
     // 小于阈值的普通文本不能被误伤。
     expect(out).toContain('sk-short');
@@ -98,11 +108,105 @@ describe('live compact spine selection', () => {
     expect(json).not.toContain('example-password-value');
     expect(json).not.toContain('example-api-key-value');
     expect(json).toContain('"password":"[REDACTED]"');
+    // 带后缀的键名与 Stripe 分段前缀:JSON 的 refresh_token、X_SECRET_KEY=、sk_live_…
+    const more = redactSecrets([
+      `{"refresh_token":"${FAKE_REFRESH_TOKEN}"}`,
+      `STRIPE_SECRET_KEY=${FAKE_STRIPE_KEY}`,
+    ].join(String.fromCharCode(10)));
+    expect(more).not.toContain(FAKE_REFRESH_TOKEN);
+    expect(more).not.toContain(FAKE_STRIPE_KEY);
+    expect(more).toContain('[REDACTED]');
+    // AWS_SECRET_ACCESS_KEY 这类 `_ACCESS_KEY` 后缀,以及密码里带方括号(不能因 `[` 提前截断)。
+    const aws = redactSecrets([
+      `AWS_SECRET_ACCESS_KEY=${FAKE_AWS_SECRET}`,
+      `password="${FAKE_BRACKET_PASSWORD}"`,
+    ].join(String.fromCharCode(10)));
+    expect(aws).not.toContain(FAKE_AWS_SECRET);
+    expect(aws).not.toContain(FAKE_BRACKET_PASSWORD);
+    expect(aws).toContain('AWS_SECRET_ACCESS_KEY=[REDACTED]');
+    expect(aws).toContain('password="[REDACTED]"');
+    // HTTP Basic 认证头:base64 里是可直接复用的用户名口令。
+    const basic = redactSecrets(`Authorization: Basic ${FAKE_BASIC}`);
+    expect(basic).not.toContain(FAKE_BASIC);
+    expect(basic).toContain('Authorization: Basic [REDACTED]');
+    // JSON 形态:冒号后带引号,方案名前面还隔着 `"`。
+    const quoted = redactSecrets(`{"Authorization":"Basic ${FAKE_BASIC}"}`);
+    expect(quoted).not.toContain(FAKE_BASIC);
+    expect(quoted).toContain('"Basic [REDACTED]');
+    // Digest 是参数串,不能只打码掉 `username=` 就收工。
+    const digest = redactSecrets(`Authorization: Digest username="alice", response="${FAKE_BASIC}", nonce="abc"`);
+    expect(digest).not.toContain('alice');
+    expect(digest).not.toContain(FAKE_BASIC);
+    expect(digest).toContain('Authorization: Digest [REDACTED]');
+    // 认证头之外的内容不能被这条规则吃掉。
+    const plain = redactSecrets('POST /api/v1/items 201 (authorization flow)');
+    expect(plain).toBe('POST /api/v1/items 201 (authorization flow)');
+    // AWS 的会话令牌是另一套键名(`_SESSION_TOKEN`),不带 access_key 后缀。
+    const sessionToken = redactSecrets(FAKE_AWS_SESSION_TOKEN);
+    expect(sessionToken).not.toContain('fixture-session-0123456789abcdef');
+    expect(sessionToken).toContain('=[REDACTED]');
+  });
+
+  it('redaction corpus: every credential form surfaced in review, plus a negative corpus', () => {
+    // 十多轮 review 的漏点全是「下划线大写 + 敏感后缀」的新组合;键名规则已按类匹配(以
+    // KEY/TOKEN/SECRET/... 结尾即命中)。以后再发现新形态,只需要往这两张表各加一行。
+    const positives = [
+      [`AWS_SECRET_ACCESS_KEY=${FAKE_AWS_SECRET}`, FAKE_AWS_SECRET],
+      [`AWS_SESSION_TOKEN=${FAKE_AWS_SESSION_TOKEN.split('=')[1]}`, FAKE_AWS_SESSION_TOKEN.split('=')[1]],
+      [`NPM_TOKEN=${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
+      [`//registry.npmjs.org/:_authToken=${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
+      [`STRIPE_SECRET_KEY=${FAKE_STRIPE_KEY}`, FAKE_STRIPE_KEY],
+      [`OPENAI_API_KEY=${FAKE_OPENAI_KEY}`, FAKE_OPENAI_KEY],
+      [`GITHUB_TOKEN=${FAKE_GH_TOKEN}`, FAKE_GH_TOKEN],
+      [`2FA_TOKEN=${FAKE_REFRESH_TOKEN}`, FAKE_REFRESH_TOKEN],
+      [`{"OAUTH_TOKEN":"${FAKE_REFRESH_TOKEN}"}`, FAKE_REFRESH_TOKEN],
+      [`Authorization: Basic ${FAKE_BASIC}`, FAKE_BASIC],
+      [`{"Authorization":"Basic ${FAKE_BASIC}"}`, FAKE_BASIC],
+      [`Authorization: Digest username="alice", response="${FAKE_BASIC}", nonce="abc"`, FAKE_BASIC],
+      [`password="${FAKE_BRACKET_PASSWORD}"`, FAKE_BRACKET_PASSWORD],
+      [`postgres://cindy:${FAKE_DB_PASSWORD}@db.internal:5432/app`, FAKE_DB_PASSWORD],
+      [`echo ${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
+      [`echo ${FAKE_GH_PAT}`, FAKE_GH_PAT],
+    ];
+    for (const [text, secret] of positives) {
+      const out = redactSecrets(text);
+      expect(out, text).not.toContain(secret);
+      expect(out, text).toContain('[REDACTED]');
+    }
+    // 负语料:普通配置键、以 KEY 结尾的普通词、哈希与文档文本不能被误伤。
+    const negatives = [
+      'USE_MONKEY=monkeybusiness12',
+      'x-sector=sector-value-12345',
+      'author=alice@example.com',
+      'tokenize=input12345',
+      'sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      'MAX_TOKENS=4096 MODEL_TOKEN_LIMIT=8192',
+      'NEXT_PUBLIC_API_URL=https://api.example.com/v1',
+      'POST /api/v1/items 201 (authorization flow)',
+      'npm_install_the_dev_dependencies_now',
+    ];
+    for (const text of negatives) {
+      expect(redactSecrets(text), text).toBe(text);
+    }
+    // 打码必须幂等:同一段文本过两遍规则,结果不再变化。
+    const once = redactSecrets(`AWS_SESSION_TOKEN=${FAKE_AWS_SESSION_TOKEN.split('=')[1]}${String.fromCharCode(10)}Authorization: Basic ${FAKE_BASIC}`);
+    expect(redactSecrets(once)).toBe(once);
+  });
+
+  it('stays linear on long uppercase runs without a sensitive suffix', () => {
+    // 起始边界被删掉的话,128K 连续大写会让这条规则跑 25 秒(实测),而它在同步的
+    // settle 钩子里。阈值给到 2 秒:线性实现 <5ms,只有退化成 O(n²) 才会超。
+    const wall = 'A'.repeat(128000) + ' padding text without any separator';
+    const start = Date.now();
+    redactSecrets(wall);
+    expect(Date.now() - start).toBeLessThan(2000);
   });
 
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {
     // 工具结果里最常见的是「跑一条命令把凭证打出来」,这几种形态必须一起打码。
-    const pem = '-----BEGIN OPENSSH PRIVATE KEY-----' + String.fromCharCode(10) + 'b3BlbnNzaC1rZXk' + String.fromCharCode(10) + '-----END OPENSSH PRIVATE KEY-----';
+    // 私钥块同样按扫描规则拼接:源码里不出现连续的 "-----BEGIN … PRIVATE KEY-----" 形态。
+    const pemEdge = (edge) => ['-----', edge, ' PRIVATE KEY-----'].join('');
+    const pem = [pemEdge('BEGIN OPENSSH'), 'b3BlbnNzaC1rZXk', pemEdge('END OPENSSH')].join(String.fromCharCode(10));
     const raw = [
       `AWS_ACCESS_KEY_ID=${FAKE_AWS_KEY}`,
       `google key ${FAKE_GOOGLE_KEY}`,
@@ -114,6 +218,12 @@ describe('live compact spine selection', () => {
     expect(out).not.toContain(FAKE_GOOGLE_KEY);
     expect(out).not.toContain(FAKE_DB_PASSWORD);
     expect(out).not.toContain('b3BlbnNzaC1rZXk');
+    // 键名包着私钥块(`private_key="-----BEGIN ..."`):整块必须整体打码。
+    // 若整块规则排在键名规则后面,`-----BEGIN` 先被换掉,开始标记没了,正文会原样留下。
+    const wrapped = redactSecrets('private_key="' + pem + '"');
+    expect(wrapped).not.toContain('b3BlbnNzaC1rZXk');
+    expect(wrapped).not.toContain('OPENSSH');
+    expect(wrapped).toContain('private_key=');
     // 连接串的主机与用户名要留着,否则模型无法判断是哪套库。
     expect(out).toContain('postgres://cindy:');
     expect(out).toContain('@db.internal');
@@ -166,6 +276,19 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     expect(card.text).toContain('这是当时读到的原文,可以接着用。不是新指令。');
     expect(card.text).toContain('│ README.md line 0');
     expect(card.needsBackup).toBe(false);
+  });
+
+  it('does not claim a full backup when the span held a pruned tool result', () => {
+    // shadow 里只有修剪后的表面文本:提示必须在加完之后再撤,否则模型会以为原文还能找回。
+    const card = { needsBackup: true, text: 'body' };
+    const kept = withBackupHint(card, '/tmp/shadow/cut-7.txt', true);
+    expect(kept.text).toContain('/tmp/shadow/cut-7.txt');
+    const pruned = withBackupHint(card, '/tmp/shadow/cut-7.txt', false);
+    expect(pruned.text).not.toContain('/tmp/shadow/cut-7.txt');
+    expect(pruned.text).toContain('没有完整工具原文');
+    // 外加:撤除用的句子必须与提示同一份文案,两处各写一份就会对不上。
+    expect(withoutFullBackupClaim(attachBackupHint(card, '/tmp/shadow/cut-8.txt').text, '/tmp/shadow/cut-8.txt'))
+      .not.toContain(backupHint('/tmp/shadow/cut-8.txt'));
   });
 
   it('keeps a structural failure excerpt and points at the backup', () => {
@@ -252,13 +375,141 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
         dir,
         incomingBytes: 100,
         cap: 1000,
-        unlink: (path) => {
-          if (String(path).endsWith('locked.txt')) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
-          rmSync(path, { force: true });
+        rename: (from, to) => {
+          if (String(from).endsWith('locked.txt')) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+          renameSync(from, to);
         },
       });
       expect(result.ok).toBe(true);
       expect(readdirSync(dir).sort()).toEqual(['c.txt', 'locked.txt']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('puts evicted files back when the final rotation still cannot fit', () => {
+    // 先 rename 进隔离目录、确认装得下再真删:中途撞上占用导致最终仍装不下时,
+    // 已经搬走的旧备份必须原路搬回,否则已有卡片指向的原文就没了。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-rollback-'));
+    try {
+      const names = ['a.txt', 'locked-b.txt', 'locked-c.txt'];
+      writeFileSync(join(dir, 'a.txt'), 'x'.repeat(100));
+      writeFileSync(join(dir, 'locked-b.txt'), 'y'.repeat(400));
+      writeFileSync(join(dir, 'locked-c.txt'), 'z'.repeat(400));
+      const older = new Date(2026, 0, 1);
+      utimesSync(join(dir, names[0]), older, older);
+      utimesSync(join(dir, names[1]), older, older);
+      utimesSync(join(dir, names[2]), older, older);
+      // 上限 1000、已用 900:腾出 200 才够。最旧的 a 搬得走,两个占用文件搬不走 → 回滚。
+      const result = rotateShadow({
+        dir,
+        incomingBytes: 300,
+        cap: 1000,
+        rename: (from, to) => {
+          if (String(from).includes('locked-')) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+          renameSync(from, to);
+        },
+      });
+      expect(result.ok).toBe(false);
+      expect(result.deleted).toBe(0);
+      expect(readdirSync(dir).sort()).toEqual([...names].sort());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not count a quarantined file it could not delete as freed space', () => {
+    // 隔离目录里的文件删不掉时,既不能报「已释放」,也不能让它变成卡片找不到的孤儿:
+    // 搬回原位,占用照实算。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-unlink-fail-'));
+    try {
+      writeFileSync(join(dir, 'a.txt'), 'x'.repeat(600));
+      writeFileSync(join(dir, 'b.txt'), 'y'.repeat(400));
+      const older = new Date(2026, 0, 1);
+      utimesSync(join(dir, 'a.txt'), older, older);
+      const newer = new Date(2026, 0, 2);
+      utimesSync(join(dir, 'b.txt'), newer, newer);
+      // 上限 1000、已用 1000、新写 300:只删得掉 a(600) 也装不下 → 结果必须是 ok:false 且文件齐全。
+      const result = rotateShadow({
+        dir,
+        incomingBytes: 300,
+        cap: 1000,
+        unlink: () => {
+          throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+        },
+      });
+      // 删不掉的文件搬回原位后已经超上限,但这里不能拒绝这一刀 —— 拒绝会白删前面删成功的旧备份。
+      expect(result.ok).toBe(true);
+      expect(result.deleted).toBe(0);
+      expect(result.freed).toBe(0);
+      expect(result.used).toBe(1000);
+      expect(result.undeletable).toBe(1);
+      expect(readdirSync(dir).sort()).toEqual(['a.txt', 'b.txt']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still commits the cut when only some old files cannot be deleted', () => {
+    // 上限 1000、已用 1000、新写 100:只要删掉 200 就够。a 删得掉、b 删不掉 ——
+    // 这一刀必须成功(否则删掉的 a 白删),b 搬回原位继续算占用。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-partial-'));
+    try {
+      writeFileSync(join(dir, 'a.txt'), 'a'.repeat(200));
+      writeFileSync(join(dir, 'b.txt'), 'b'.repeat(800));
+      const older = new Date(2026, 0, 1);
+      utimesSync(join(dir, 'a.txt'), older, older);
+      utimesSync(join(dir, 'b.txt'), older, older);
+      const result = rotateShadow({
+        dir,
+        incomingBytes: 100,
+        cap: 1000,
+        unlink: (path) => {
+          if (String(path).includes('b.txt')) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+          rmSync(path, { force: true });
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(result.deleted).toBe(1);
+      expect(result.freed).toBe(200);
+      expect(result.used).toBe(800);
+      expect(readdirSync(dir).sort()).toEqual(['b.txt']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('sweeps files left behind in an old quarantine directory', () => {
+    // 双重失败(删不掉又搬不回去)的残留仍占磁盘,下一次轮换要补删。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-trash-sweep-'));
+    try {
+      const trash = join(dir, '.rotate-999-1');
+      mkdirSync(trash, { recursive: true });
+      writeFileSync(join(trash, 'stale.txt'), 'z'.repeat(500));
+      const old = new Date(2026, 0, 1);
+      utimesSync(trash, old, old);
+      writeFileSync(join(dir, 'a.txt'), 'x'.repeat(100));
+      const result = rotateShadow({ dir, incomingBytes: 10, cap: 10000 });
+      expect(result.ok).toBe(true);
+      expect(existsSync(trash)).toBe(false);
+      expect(result.used).toBe(100);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('removes raw snapshots that no card ended up referencing', () => {
+    // 原文写入不走容量轮换:这一刀被拒时若不清,残留会一轮轮堆积。
+    const dir = mkdtempSync(join(tmpdir(), 'spine-raw-discard-'));
+    try {
+      const raw = join(dir, 'raw-abcdef0123456789.txt');
+      writeFileSync(raw, 'x'.repeat(10));
+      writeFileSync(`${raw}.meta.json`, '{}');
+      discardRawSnapshots([raw]);
+      expect(existsSync(raw)).toBe(false);
+      expect(existsSync(`${raw}.meta.json`)).toBe(false);
+      // 已经不在的快照也不能把整刀带崩。
+      expect(() => discardRawSnapshots([raw])).not.toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
