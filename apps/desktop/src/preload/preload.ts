@@ -6987,6 +6987,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       context === undefined
         ? ipcRenderer.invoke('maker:mcp:custom:list')
         : ipcRenderer.invoke('maker:mcp:custom:list', context),
+    listMcpDuplicates: (): Promise<import('../shared/customMcp').McpDuplicateReport> =>
+      ipcRenderer.invoke('maker:mcp:duplicates:list'),
+    chooseMcpDuplicate: (input: { id: string; choice: import('../shared/customMcp').McpDuplicateChoice | null }): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:mcp:duplicates:choose', input),
     createCustomMcpServer: (
       config: import('../shared/customMcp').CustomMcpConfig,
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:mcp:custom:create', config),
@@ -8377,7 +8381,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       sessionId: string;
       completionRevision: number;
       cancel: true;
-    }): Promise<{ prompt: string | null }> => ipcRenderer.invoke('maker:predict-prompt', request),
+    }): Promise<{ prompt: string | null; retryable?: boolean }> => ipcRenderer.invoke('maker:predict-prompt', request),
     helpAsk: (
       request: import('../shared/helpTypes').HelpAskRequest,
     ): Promise<import('../shared/helpTypes').HelpAnswerResult> =>

@@ -1232,6 +1232,7 @@ import { registerProviderHandlers } from './providerHandlers.js';
 import { readModelImageInputOverride, writeModelImageInputOverride } from '../maker-host/model-catalog-override-store.js';
 import { createLocalCliScanDeps, scanLocalCliAuth } from './localCliDetect.js';
 import { registerMcpHandlers } from './mcpHandlers.js';
+import { listMcpDuplicates, saveMcpDuplicateChoice } from '../maker-host/mcp-duplicate-preferences.js';
 import {
   getBuiltinMcpServerNames,
   refreshCustomMcpProviders,
@@ -8307,6 +8308,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       invalidatePiEnvironment();
     };
   registerMcpHandlers(createElectronIpcHandlerRegistry(), {
+    listDuplicates: () => listMcpDuplicates(),
+    chooseDuplicate: saveMcpDuplicateChoice,
     listMcpServers: listBotRuntimeMcpServers,
     resolveBotContext: async (sessionId, chain) => {
       const route = await reconcileBotModelRoute.preview(sessionId, chain);
@@ -10056,6 +10059,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return !!snapshot?.runtimeEpochChanged;
       },
     });
+    if (outcome === 'kept-current-runtime') {
+      log.info('Bot capability refresh waits for background tasks; input runs on current runtime', {
+        sessionId: live.id,
+      });
+    }
     if (outcome === 'deferred') {
       throwIpcError(
         'PRECONDITION_FAILED',

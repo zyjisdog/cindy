@@ -1,5 +1,4 @@
 import { registerRuntimeSettingsSection } from './app-settings/runtime.js';
-import { initializeRuntimeAppIcon } from './app-icon.js';
 import { z as settingsSchema } from 'zod';
 import { deliverRoutineResult, listRoutineDeliveryTargets } from './routines/delivery.js';
 import { flushPluginUsageLifecycle } from './plugin-usage/current.js';
@@ -579,6 +578,8 @@ import {
 import { createHostDaemonsService, type HostDaemonsService } from './host-daemons/service.js';
 import { readToolMessages } from './host-daemons/toolHistory.js';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
+import { readMainHeapSamplingFlag, startMainHeapSampling } from './process-monitor/heap-sampling.js';
+import { startMemoryLog } from './process-monitor/memory-log.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
 import {
   initAppBadgeService,
@@ -1183,7 +1184,6 @@ import {
   refreshGhostLocalization,
   refreshPluginUsageBindings,
   registerGhostIpc,
-  restorePluginAppIcon,
   setRemotePluginManagementServices,
   runStableOwnerPostCommitTask,
   setGhostNodeRuntimeStartAttemptContextReader,
@@ -1704,6 +1704,7 @@ import {
   keepRecentSync,
   keepRecentSessionCcDebugSync,
   createLogger,
+  getLogDir,
   setCcDebugTailingEnabled,
   type LogLevel,
 } from './logger.js';
@@ -9509,9 +9510,18 @@ app.on('ready', async () => {
 
   initializeUpdatePresentationRecovery();
 
-  await initializeRuntimeAppIcon().then(restorePluginAppIcon).catch(err => {
-    createLogger('dock-icon').warn('Runtime icon initialization failed', { error: String(err) });
-  });
+  // mac dev 下 Dock 显示的是 Electron 默认图标——macOS 忽略 BrowserWindow.icon,
+  // Dock 图标取自可执行 bundle 的 icns,而 dev 跑的是 node_modules 里的官方
+  // Electron 二进制。这里 dev-only 手动设成 Cindy 图标;packaged 版由
+  // resources/icon.icns 自然生效,不需要也不该动。
+  if (!app.isPackaged && process.platform === 'darwin') {
+    try {
+      app.dock?.setIcon(path.join(__dirname, '../../resources/icon-dock.png'));
+    } catch (err) {
+      // 仅影响 dev Dock 观感,失败不挡启动
+      createLogger('dock-icon').warn('setIcon failed', { error: String(err) });
+    }
+  }
 
   await ensureMainAppPresence('app-ready');
 
@@ -10330,17 +10340,22 @@ app.on('ready', async () => {
   );
   authCredentialRecovery.request();
 
-  // Memory diagnostics — dev only, log per-process memory every 30s
-  if (!app.isPackaged) {
-    setInterval(() => {
-      const parts = app
-        .getAppMetrics()
-        .map(
-          (m) =>
-            `${m.type}:${(m.memory.workingSetSize / 1024).toFixed(0)}MB/${m.cpu.percentCPUUsage.toFixed(1)}%`,
-        );
-      console.log(`[mem] ${parts.join(' | ')}`);
-    }, 30_000);
+  // 各进程内存采样进 main 日志(scope memory-usage):正式版 10 分钟一次,dev 保持 30s。
+  const stopMemoryLog = startMemoryLog({
+    getMetrics: () => app.getAppMetrics(),
+    memoryUsage: () => process.memoryUsage(),
+    log: createLogger('memory-usage'),
+    intervalMs: app.isPackaged ? 10 * 60_000 : 30_000,
+  });
+  onQuit('memory-usage-log', stopMemoryLog, 'sync');
+  // 主进程堆采样:只在开发版、日志目录 log-config.json 写了 mainHeapSampling 时运行。
+  if (!app.isPackaged && readMainHeapSamplingFlag(getLogDir())) {
+    const stopHeapSampling = startMainHeapSampling({
+      dir: path.join(getLogDir(), 'heap-sampling'),
+      intervalMs: 30 * 60_000,
+      log: createLogger('heap-sampling'),
+    });
+    onQuit('main-heap-sampling', stopHeapSampling, 'sync');
   }
 });
 
