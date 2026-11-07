@@ -4084,6 +4084,7 @@
             "title": "Automatische Komprimierung",
             "hint": "Kontext beim gewählten Auslastungsprozentsatz komprimieren. Niedrigere Werte führen zu früherer Komprimierung; die Engine-Limits gelten weiterhin.",
             "timing": "Gilt für alle verfügbaren Engines für dieses Modell und diese Quelle bei nachfolgenden Durchläufen, ohne eine Antwort zu unterbrechen.",
+            "default": "{{pct}} % (Standard)",
             "defaultBadge": "Standard",
             "sliderAria": "Schwelle für die automatische Komprimierung anpassen",
             "restoreAria": "Standardmäßiges Verhältnis der automatischen Komprimierung wiederherstellen"

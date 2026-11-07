@@ -4138,6 +4138,7 @@
             "title": "Compactação automática",
             "hint": "Compacta o contexto no percentual de uso selecionado. Valores menores compactam mais cedo; os limites do mecanismo continuam valendo.",
             "timing": "Aplica-se a todos os mecanismos disponíveis para este modelo e fonte nas próximas execuções, sem interromper uma resposta.",
+            "default": "{{pct}}% (Padrão)",
             "defaultBadge": "Padrão",
             "sliderAria": "Ajustar o limite de compactação automática",
             "restoreAria": "Restaurar a proporção padrão de compactação automática"

@@ -4138,6 +4138,7 @@
             "title": "Compactación automática",
             "hint": "Contexto compacto en el porcentaje de uso seleccionado. Los valores más bajos se compactan antes; Los límites del motor aún se aplican.",
             "timing": "Se aplica a todos los motores disponibles para este modelo y se genera en ejecuciones posteriores, sin interrumpir una respuesta.",
+            "default": "{{pct}}% (predeterminado)",
             "defaultBadge": "Predeterminado",
             "sliderAria": "Ajustar el umbral de compactación automática",
             "restoreAria": "Restaurar la proporción de compactación automática predeterminada"
