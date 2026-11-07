@@ -4137,11 +4137,10 @@
           "compaction": {
             "title": "Compactación automática",
             "hint": "Contexto compacto en el porcentaje de uso seleccionado. Los valores más bajos se compactan antes; Los límites del motor aún se aplican.",
-            "default": "{{pct}}% (predeterminado)",
             "timing": "Se aplica a todos los motores disponibles para este modelo y se genera en ejecuciones posteriores, sin interrumpir una respuesta.",
             "defaultBadge": "Predeterminado",
-            "restoreAria": "Restaurar el valor predeterminado de la relación de compactación automática",
-            "sliderAria": "Ajustar el umbral de compactación automática"
+            "sliderAria": "Ajustar el umbral de compactación automática",
+            "restoreAria": "Restaurar la proporción de compactación automática predeterminada"
           },
           "contextLimitRoute": "Tokens {{tokens}} actuales",
           "contextLimitOverWindow": "Por encima de la ventana declarada por el proveedor; las solicitudes pueden fallar.",

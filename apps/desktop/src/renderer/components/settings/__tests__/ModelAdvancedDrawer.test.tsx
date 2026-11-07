@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, resolveModelMetadata } from '@cindy/model-providers';
@@ -17,6 +17,12 @@ const mocks = vi.hoisted(() => ({
   imageMixed: false,
   imageError: false,
   limit: null as number | null,
+  compaction: { pct: 90, isCustomized: false } as { pct: number; isCustomized: boolean },
+  compactionEnabled: false,
+  setCompaction: vi.fn(async () => {}),
+  ownerGeneration: 1,
+  sliderValue: null as number | null,
+  pressValue: null as number | null,
   mixed: false,
 }));
 vi.mock('react-i18next', () => {
@@ -40,6 +46,11 @@ vi.mock('@/hooks/useModelContextLimit', () => ({
 }));
 vi.mock('@/lib/toast', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
+}));
+vi.mock('@/contexts/dataOwnerGeneration', () => ({
+  getDataOwnerGeneration: () => ({ dataOwnerId: 'owner', generation: mocks.ownerGeneration }),
+  isDataOwnerGenerationCurrent: (owner: { generation: number }) =>
+    owner.generation === mocks.ownerGeneration,
 }));
 vi.mock('@/hooks/useModelImageInputOverride', () => ({
   useModelImageInputOverride: (target: unknown) => {
@@ -72,6 +83,48 @@ vi.mock('../ModelPriceOverrideDialog', async (importOriginal) => {
   };
 });
 import type { ModelImageInputCatalogModel } from '../../../../shared/modelImageInputOverride';
+// Radix 滑杆在 jsdom 里量不到轨道，手势语义另有 ui/slider 自己的用例；这里换成
+// 一个可控的 range 输入，直接驱动“预览 / 提交”两条通道。
+vi.mock('@/components/ui/slider', () => ({
+  Slider: ({ value, min, max, step, onValueChange, onValueCommit, onValueCancel, onPointerCancel, ...rest }: {
+    value?: number[];
+    min?: number;
+    max?: number;
+    step?: number;
+    onValueChange?: (next: number[]) => void;
+    onValueCommit?: (next: number[]) => void;
+    onValueCancel?: (restored: number[]) => void;
+    onPointerCancel?: (event: unknown) => void;
+    'aria-label'?: string;
+  }) => {
+    // 受控 input 在 jsdom 里不回写未变化的 DOM value，断言直接读收到的 value prop。
+    mocks.sliderValue = value?.[0] ?? min ?? null;
+    return (
+    <input
+      type="range"
+      aria-label={rest['aria-label']}
+      value={value?.[0] ?? min}
+      min={min}
+      max={max}
+      step={step}
+      onPointerDown={(event) => {
+        // 共享 Slider 记下按下时的值，取消时回放它。
+        mocks.pressValue = value?.[0] ?? min ?? null;
+      }}
+      onPointerCancel={(event) => {
+        onPointerCancel?.(event);
+        // 共享 Slider 的取消语义：先报告取消，再回放按下前的值。
+        // 回放值不等于落盘值（真实场景：按下 90、别的窗口存了 70）。
+        const restored = [mocks.pressValue ?? value?.[0] ?? min ?? 0];
+        onValueCancel?.(restored);
+        onValueChange?.(restored);
+      }}
+      onChange={(event) => onValueChange?.([Number(event.target.value)])}
+      onBlur={(event) => onValueCommit?.([Number(event.target.value)])}
+    />
+    );
+  },
+}));
 import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
 import { setModelVisibility } from '@/state/modelVisibilityPrefs';
 import { setProviderModelEffort, getProviderModelEffort, clearProviderModelEffort } from '@/state/providerModelMemory';
@@ -127,6 +180,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.realPricing = false;
   mocks.limit = null;
+  mocks.compactionEnabled = false;
+  mocks.compaction = { pct: 90, isCustomized: false };
+  mocks.ownerGeneration = 1;
+  mocks.sliderValue = null;
+  mocks.pressValue = null;
   mocks.mixed = false;
   mocks.imageValue = null;
   mocks.imageMixed = false;

@@ -4137,11 +4137,10 @@
           "compaction": {
             "title": "Compactação automática",
             "hint": "Compacta o contexto no percentual de uso selecionado. Valores menores compactam mais cedo; os limites do mecanismo continuam valendo.",
-            "default": "{{pct}}% (Padrão)",
             "timing": "Aplica-se a todos os mecanismos disponíveis para este modelo e fonte nas próximas execuções, sem interromper uma resposta.",
             "defaultBadge": "Padrão",
-            "restoreAria": "Restaurar o padrão da proporção de compactação automática",
-            "sliderAria": "Ajustar o limiar de compactação automática"
+            "sliderAria": "Ajustar o limite de compactação automática",
+            "restoreAria": "Restaurar a proporção padrão de compactação automática"
           },
           "contextLimitRoute": "Atual: {{tokens}} tokens",
           "contextLimitOverWindow": "Acima da janela declarada pelo provedor; as requisições podem falhar.",
