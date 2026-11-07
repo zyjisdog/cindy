@@ -6844,6 +6844,76 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  it("restores off after an image capability reload when the session started with thinking disabled", async () => {
+    // 启动时 thinkingEnabled:false 直接发 off、不经 setThinkingEnabled：已确认开关状态
+    // 若不同步（仍停在初始 true），图片声明后的重载会把会话恢复成原档位 max，
+    // 悄悄重开思考（等待时间与费用都涨）。
+    const declared = { image: false };
+    const agent = new PiAgent({
+      ...byomDeps(
+        async () => ({
+          providers: [
+            {
+              id: "native-start-off",
+              name: "Native Start Off",
+              baseUrl: "http://start-off.test",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "local-model",
+                  input: ["text"],
+                  reasoning: true,
+                  thinkingLevelMap: { low: "low", max: "max" },
+                },
+              ],
+            },
+          ],
+          env: {},
+        }),
+      ),
+      readModelImageInput: (providerId, modelId) =>
+        providerId === "native-start-off" && modelId === "local-model" && declared.image
+          ? true
+          : undefined,
+    });
+    const handle = await agent.startSession({
+      sessionId: "image-reload-start-off",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "native-start-off",
+      effort: "max",
+      thinkingEnabled: false,
+    });
+    declared.image = true;
+    const imagePath = path.join(cwd, "start-off.png");
+    writeFileSync(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY4YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    captured.requests.length = 0;
+    await handle.send({
+      type: "user" as const,
+      content: [
+        {
+          type: "image" as const,
+          path: imagePath,
+          managedUrl: "xdt-image://pi-managed/start-off.png",
+        },
+      ],
+    });
+
+    const requestTypes = captured.requests.map((request) => request.type);
+    expect(requestTypes).toContain("switch_session");
+    const restores = captured.requests.filter(
+      (request) => request.type === "set_thinking_level",
+    );
+    expect(restores).toEqual([{ type: "set_thinking_level", level: "off" }]);
+    await handle.close();
+  });
+
   it("restores the applied effort level, not the stale off state, when thinking was re-enabled via setEffort", async () => {
     // 关闭思考后用 setEffort 应用新档位：应用档位本身就意味着思考开着，关闭记录必须被
     // 覆盖。否则 reload 恢复会把刚应用的档位用 off 关掉，后续回答不再按用户选的档位跑。

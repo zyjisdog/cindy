@@ -6628,6 +6628,10 @@ export class PiAgent extends BaseAgent {
         });
         if (!resp.success) {
           this.deps.logger.warn('pi set_thinking_level rejected', { effort: 'off', error: resp.error });
+        } else {
+          // 已确认下发 off：发图重载等恢复分支靠这个开关区分「档位在 max 的思考」与
+          // 「已关闭的思考」——不同步的话重载会把用户启动时关掉的思考悄悄重开。
+          mutableThinkingEnabled = false;
         }
       } else if (startupEffort) {
         const resp = await proc.request({
@@ -8147,6 +8151,8 @@ export class PiAgent extends BaseAgent {
             if (appliedEffort) mutableEffort = appliedEffort;
             if (explicitThinking === true) thinkingExplicitlyOff = false;
             else if (explicitThinking === false) thinkingExplicitlyOff = true;
+            // 应用具体档位即思考开着（此分支 level 不可能是 off）。
+            mutableThinkingEnabled = true;
           } else {
             // 拒绝可能是瞬时（例如 Pi 正在处理前一条档位请求）：重试一次再放弃。
             // 仍失败只告警：模型路由已经确认，抛出会让上层回滚它。
@@ -8159,6 +8165,10 @@ export class PiAgent extends BaseAgent {
                   // 不支持思考而下发的 off 不是用户意图，标记仍为开）；失败沿用原标记。
                   if (explicitThinking === true) thinkingExplicitlyOff = false;
                   else if (explicitThinking === false) thinkingExplicitlyOff = true;
+                  // 已确认开关状态同步：off（显式关闭/无载体保留关闭/目标不支持）→
+                  // 恢复分支按 off 恢复；具体档位 → 思考开着。不同步的话，图片重载会把
+                  // 关闭状态按原档位重开（等待时间与费用都涨）。
+                  mutableThinkingEnabled = level !== 'off';
                   break;
                 }
                 if (attempt === 1) {
