@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 // 扩展源码 import 的 pi 包不在本仓依赖里:测试只覆盖纯函数,喂一个最小替身。
@@ -17,6 +17,7 @@ const FAKE_AWS_KEY = ['AKIA', 'FIXTUREPLACEHOLDER01'].join('');
 const FAKE_GOOGLE_KEY = ['AIza', 'FixturePlaceholderABCDEFGHIJKLMNOPQRST'].join('');
 const FAKE_PASSWORD = ['fixture', 'plain-password'].join('-');
 const FAKE_DB_PASSWORD = ['fixture', 'db-password'].join('-');
+const FAKE_PASSPHRASE = ['fixture', 'passphrase', '0123456789'].join('-');
 const FAKE_OPENAI_KEY_2 = ['sk', 'fixture-openai-key-0987654321'].join('-');
 const FAKE_REFRESH_TOKEN = ['fixture', 'refresh', 'token', '0123456789'].join('-');
 const FAKE_STRIPE_KEY = ['sk', 'live', 'fixturestripeplaceholder0123'].join('_');
@@ -26,11 +27,35 @@ const FAKE_AWS_SECRET = ['fixture', 'awssecret', '0123456789abcdef'].join('-');
 const FAKE_NPM_TOKEN = ['npm', 'fixture0123456789abcdef0123456789'].join('_');
 const FAKE_GH_PAT = ['github', 'pat', 'fixture0123456789abcdef0123'].join('_');
 const FAKE_GH_TOKEN = ['ghp', 'fixtureabcdefghijklmnopqrst'].join('_');
+const FAKE_GITLAB_PAT = ['glpat', 'fixture0123456789abcdef'].join('-');
+const FAKE_VENDOR_TOKENS = [
+  ['glrt', 'abcdefghij0123456789'].join('-'),
+  ['gldt', 'abcdefghij0123456789'].join('-'),
+  ['glsoat', 'abcdefghij0123456789'].join('-'),
+  ['hf', 'abcdefghijklmnopqrstuvwxyz012345'].join('_'),
+  ['dckr', 'pat', 'abcdefghijklmnopqrstuvwxyz0'].join('_'),
+  ['pypi', 'AgEIcHlwaS5vcmcCJGFiY2RlZmdoaWprbG1ub3A'].join('-'),
+  ['sbp', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('_'),
+  ['lin', 'api', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
+  ['shpat', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
+  ['doo', 'v1', 'abcdefghijklmnopqrstuvwxyz0123'].join('_'),
+  ['SG', 'abcdefghijklmnopqrstuv', 'abcdefghijklmnopqrstuvwxyz0123456789AB'].join('.'),
+  ['atlasv1', 'abcdefghijklmnopqrstuvwxyz0123456789'].join('.'),
+  ['key', '0123456789abcdef0123456789abcdef'].join('-'),
+  ['NRAK', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ01234'].join('-'),
+  ['xapp', '1'].join('-') + '-ABCDEFGHIJK-0123456789012-abcdef0123456789',
+  ['whsec', 'abcdefghijklmnopqrstuvwxyz012345'].join('_'),
+  ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxMjM0NSJ9', 'abcdefghijklmnopqrstuvwxyz'].join('.'),
+];
+// 长载荷 JWT:段长不设上界,载荷接近 4K 也必须整条打码(设上界会整条跳过)。
+const FAKE_LONG_JWT = ['eyJhbGciOiJSUzI1NiJ9', 'BD'.repeat(1945), 'c2lnbmF0dXJlLXNpZ25hdHVyZQ'].join('.');
+// 短载荷 JWT:claims 是 `{}` 时紧凑载荷只有 `e30` 三个字符,载荷下限设高了会整条漏掉。
+const FAKE_SHORT_JWT = ['eyJhbGciOiJub25lIn0', 'e30', 'c2lnbmF0dXJlMTIzNDU2'].join('.');
 const FAKE_BRACKET_PASSWORD = ['abc', '[defghijklmnop'].join('');
 
-const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots } = await import(
-  '../../../../extensions/live-compact/index.ts'
-);
+const extensionModule = await import('../../../../extensions/live-compact/index.ts');
+const registerLiveCompact = extensionModule.default;
+const { selectNewestChunk, balanceIndexes, buildCard, redactSecrets, attachBackupHint, isToolFailure, rotateShadow, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, saveShadow, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden, rawName } = extensionModule;
 
 let seq = 0;
 function entry(role, text, extra = {}) {
@@ -167,7 +192,16 @@ describe('live compact spine selection', () => {
       [`postgres://cindy:${FAKE_DB_PASSWORD}@db.internal:5432/app`, FAKE_DB_PASSWORD],
       [`echo ${FAKE_NPM_TOKEN}`, FAKE_NPM_TOKEN],
       [`echo ${FAKE_GH_PAT}`, FAKE_GH_PAT],
+      // GitLab 的 PAT 没有大写下划线键名可依:值带 glpat- 前缀,键可能是小写 token。
+      [`token: ${FAKE_GITLAB_PAT}`, FAKE_GITLAB_PAT],
+      [`{"private_token":"${FAKE_GITLAB_PAT}"}`, FAKE_GITLAB_PAT],
+      // 长载荷 JWT 走的是前缀规则,不能靠键名:
+      [`echo ${FAKE_LONG_JWT}`, FAKE_LONG_JWT],
     ];
+    // 厂商前缀表（gitleaks 公开前缀）:一张表覆盖完,不用每轮 review 补一个。
+    for (const token of FAKE_VENDOR_TOKENS) positives.push([`token: ${token}`, token]);
+    // 短载荷(claims = {})与长载荷 JWT 两头都要覆盖:下限高会漏短的,上限低会漏长的。
+    positives.push([`echo ${FAKE_SHORT_JWT}`, FAKE_SHORT_JWT], [`echo ${FAKE_LONG_JWT}`, FAKE_LONG_JWT]);
     for (const [text, secret] of positives) {
       const out = redactSecrets(text);
       expect(out, text).not.toContain(secret);
@@ -184,6 +218,10 @@ describe('live compact spine selection', () => {
       'NEXT_PUBLIC_API_URL=https://api.example.com/v1',
       'POST /api/v1/items 201 (authorization flow)',
       'npm_install_the_dev_dependencies_now',
+      // 公开值不打码:ssh 公钥、Mapbox 公钥、普通 key-value 标识。
+      'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcdefghijklmnopqrstuvwxyz0123456789',
+      'pk.eyJ1IjoiYWJjIiwiYSI6ImNsYWJjZGVmZ2hpamtsbW5vcHFyc3QifQ',
+      'key-value-store-name',
     ];
     for (const text of negatives) {
       expect(redactSecrets(text), text).toBe(text);
@@ -193,13 +231,24 @@ describe('live compact spine selection', () => {
     expect(redactSecrets(once)).toBe(once);
   });
 
-  it('stays linear on long uppercase runs without a sensitive suffix', () => {
+  it('stays linear on long runs that look like credential prefixes', () => {
     // 起始边界被删掉的话,128K 连续大写会让这条规则跑 25 秒(实测),而它在同步的
-    // settle 钩子里。阈值给到 2 秒:线性实现 <5ms,只有退化成 O(n²) 才会超。
-    const wall = 'A'.repeat(128000) + ' padding text without any separator';
-    const start = Date.now();
-    redactSecrets(wall);
-    expect(Date.now() - start).toBeLessThan(2000);
+    // settle 钩子里。阈值 300ms:全部线性实现实测 <25ms(最慢是 360K 的短 JWT 约 10ms),
+    // 留十倍余量,同时能把 300ms 级的平方退化也抓出来(2 秒阈值抓不到)。
+    const cases = [
+      'A'.repeat(128000) + ' padding text without any separator',
+      // JWT 规则的正文类包含 `-`:起始边界没把 `-` 一起排除时,每个 `eyJ` 都会把剩余全文
+      // 吃完再回溯找 `.`(240K 实测 5.7 秒),这条盯的就是它。
+      'eyJabcdefghijk-'.repeat(16000),
+      'eyJ' + 'A'.repeat(128000),
+      // 无终结符的 PEM 开始标记重复出现:惰性 [\s\S]*? 会从每个起点重扫到文末(140K 实测 300ms)。
+      ('-----' + 'BEGIN PRIVATE KEY' + '-----' + String.fromCharCode(10)).repeat(2000),
+    ];
+    for (const text of cases) {
+      const start = Date.now();
+      redactSecrets(text);
+      expect(Date.now() - start, text.slice(0, 24)).toBeLessThan(300);
+    }
   });
 
   it('masks cloud keys, connection-string passwords and PEM blocks', () => {
@@ -224,17 +273,55 @@ describe('live compact spine selection', () => {
     expect(wrapped).not.toContain('b3BlbnNzaC1rZXk');
     expect(wrapped).not.toContain('OPENSSH');
     expect(wrapped).toContain('private_key=');
+    // 工具调用参数是 JSON.stringify 后的字符串:多行私钥的换行变成字面量 `\n`,整块规则
+    // 的正文类必须收反斜杠,否则只吃掉 BEGIN 标记,密钥正文和 END 原样落盘(实测)。
+    const jsonWrapped = redactSecrets(JSON.stringify({ command: 'cat id_rsa', private_key: pem }));
+    expect(jsonWrapped).not.toContain('b3BlbnNzaC1rZXk');
+    expect(jsonWrapped).not.toContain('END OPENSSH');
+    // 老式加密私钥(RFC 1421)在 BEGIN 与正文之间还有 `Proc-Type:` / `DEK-Info:` 头:
+    // 头里的连字符不在正文类里,处理不当会让整块只剩 `Proc` 被打码、其余原样落盘。
+    const legacy = [
+      pemEdge('BEGIN RSA'),
+      'Proc-Type: 4,ENCRYPTED',
+      'DEK-Info: AES-256-CBC,0123456789ABCDEF',
+      '',
+      'b3BlbnNzaC1rZXk',
+      pemEdge('END RSA'),
+    ].join(String.fromCharCode(10));
+    expect(redactSecrets(legacy)).toBe('[REDACTED PRIVATE KEY]');
+    const legacyCut = [pemEdge('BEGIN RSA'), 'Proc-Type: 4,ENCRYPTED', '', 'b3BlbnNzaC1rZXk'].join(String.fromCharCode(10));
+    expect(redactSecrets(legacyCut)).toBe('[REDACTED PRIVATE KEY]');
+    // RFC 6750 的 b64token 可以以 `/` 或 `+` 开头、以 `=` 结尾;只认 ._- 会整条漏掉。
+    const bearerEdge = ['/fixture', 'bearer', '0123456789+', '=='].join('');
+    expect(redactSecrets('Bearer ' + bearerEdge)).toBe('Bearer [REDACTED]');
+    // 口令键名同样按「后缀类」命中:`SSH_KEY_PASSPHRASE=` 不能只靠 PASSPHRASE 之外的键名。
+    const passphraseKey = ['SSH', 'KEY', 'PASSPHRASE'].join('_');
+    expect(redactSecrets(passphraseKey + '=' + FAKE_PASSPHRASE)).not.toContain(FAKE_PASSPHRASE);
+    // 大体积块不能只打一半:正文封顶会让整块规则认不到终结符,半块规则只吃掉前半截。
+    const bigBody = 'A'.repeat(10900);
+    const big = [pemEdge('BEGIN RSA'), bigBody, pemEdge('END RSA')].join(String.fromCharCode(10));
+    expect(redactSecrets(big)).toBe('[REDACTED PRIVATE KEY]');
+    // 截断的超大块也一样:没等到 END 也要整段吃掉,不能留后半截密钥。
+    const bigCut = [pemEdge('BEGIN RSA'), 'A'.repeat(20000)].join(String.fromCharCode(10));
+    expect(redactSecrets(bigCut)).toBe('[REDACTED PRIVATE KEY]');
     // 连接串的主机与用户名要留着,否则模型无法判断是哪套库。
     expect(out).toContain('postgres://cindy:');
     expect(out).toContain('@db.internal');
+    // 输出被截断、只剩开始标记的半块同样是密钥正文:不能因为没等到 END 就整段放过。
+    const cut = [pemEdge('BEGIN RSA'), 'b3BlbnNzaC1rZXk-late'].join(String.fromCharCode(10));
+    const cutOut = redactSecrets(cut);
+    expect(cutOut).not.toContain('b3BlbnNzaC1rZXk-late');
+    expect(cutOut).toContain('[REDACTED PRIVATE KEY]');
   });
 
   it('reports dropped hard lines instead of silently losing them', () => {
     // 预算不够时硬行必须被计数(ok 才会变 false,切割才被拒)。
-    const text = Array.from({ length: 400 }, (_, i) => `必须保留 requirement item ${i} keep this obligation`).join(String.fromCharCode(10));
-    const card = buildCard(text, '', 2000);
+    // 1.0.9: 硬行只来自 user/tool 来源,裸文本(没有来源)不再产生硬行。
+    const lines = Array.from({ length: 400 }, (_, i) => `必须保留 requirement item ${i} keep this obligation`);
+    const card = buildCard('', '', 2000, [{ role: 'user', text: lines.join(String.fromCharCode(10)), isError: false }]);
     expect(card.omittedHard).toBeGreaterThan(0);
     expect(card.ok).toBe(false);
+    expect(card.missing.length).toBeGreaterThan(0);
   });
 
   it('points at the backup when budget dropped covered lines', () => {
@@ -289,6 +376,124 @@ describe('live compact card roles and tool excerpts (1.0.3-1.0.5)', () => {
     // 外加:撤除用的句子必须与提示同一份文案,两处各写一份就会对不上。
     expect(withoutFullBackupClaim(attachBackupHint(card, '/tmp/shadow/cut-8.txt').text, '/tmp/shadow/cut-8.txt'))
       .not.toContain(backupHint('/tmp/shadow/cut-8.txt'));
+  });
+
+  it('keeps the newest finished tool rounds verbatim instead of a token budget', () => {
+    // 1.0.9: 保留区 = 最近 3 个已完成的工具轮,与 token 预算无关(KEEP_ROUND_TOKENS 只剩收尾水位)。
+    const round = (id, size) => [
+      entry('assistant', 'call ' + id, { calls: [id] }),
+      entry('toolResult', 'r '.repeat(size), { results: [id] }),
+    ];
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c1', 8000),
+      ...round('c2', 2000),
+      ...round('c3', 2000),
+      ...round('c4', 2000),
+    ];
+    const picked = selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 });
+    expect(picked).not.toBeNull();
+    // 切点必须在第 4 个（最老的）轮里，最近 3 轮原样留下。
+    expect(picked.end).toBeLessThan(entries.length - 6);
+  });
+
+  it('skips one pass after a host compaction card and only that one', () => {
+    // 1.0.9: 宿主压缩后紧接着又切一刀,会把官方摘要卷走(上游 issue #12)。
+    const compaction = { ...entry('user', 'summary'), entryType: 'compaction', time: 1_000_000 };
+    const entries = [entry('system', 'sys'), entry('user', 'go'), compaction];
+    expect(lastCompactionEntry(entries)).toBe(compaction);
+    expect(lastCompactionEntry([entry('user', 'go')])).toBeUndefined();
+    // 没有设置窗口时不算冷却(默认 0 = 只用一次性跳过语义)。
+    expect(resolveCooldownMs({})).toBe(0);
+    expect(inCooldown(entries, { windowMs: resolveCooldownMs({}) })).toBe(false);
+    // 设了窗口且时间在窗口内才算冷却。
+    expect(inCooldown(entries, { windowMs: 60_000, now: 1_030_000 })).toBe(true);
+    expect(inCooldown(entries, { windowMs: 60_000, now: 1_300_000 })).toBe(false);
+    expect(resolveCooldownMs({ SPINE_COOLDOWN_MS: '-1' })).toBe(0);
+    expect(resolveCooldownMs({ SPINE_COOLDOWN_MS: '9000' })).toBe(9000);
+  });
+
+  it('remembers the compaction it let pass across settle hooks in the same session', () => {
+    // 已让过的条目要按会话存:stateFor 每次新建对象,存在 state 上的话同一条 compaction
+    // 会在每个 settle 都被当成首次出现,宿主压缩一次之后 Live Compact 永久停摆。
+    const root = mkdtempSync(join(tmpdir(), 'spine-cooldown-'));
+    const previous = process.env.SPINE_SHADOW_DIR;
+    process.env.SPINE_SHADOW_DIR = root;
+    try {
+      let handler = null;
+      registerLiveCompact({ on: (name, fn) => { if (name === 'agent_before_settle') handler = fn; } });
+      expect(handler).not.toBeNull();
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys' }], sourceEntry: { id: 'x1', type: 'message' } },
+        { messages: [{ role: 'user', content: 'go' }], sourceEntry: { id: 'x2', type: 'message' } },
+        { messages: [{ role: 'user', content: 'official summary' }], sourceEntry: { id: 'x3', type: 'compaction', timestamp: 1_000_000 } },
+      ];
+      const event = { outcome: 'completed', context: { contextEntries } };
+      const ctx = {
+        sessionManager: { getSessionId: () => 'session-cooldown' },
+        getContextUsage: () => ({ tokens: 100 }),
+      };
+      handler(event, ctx);
+      handler(event, ctx);
+      const log = readFileSync(join(root, 'spine.log'), 'utf8');
+      expect(log.match(/cooldown: official compaction/g) || []).toHaveLength(1);
+      // 第二次进入不该再走冷却分支:上下文没到压力线,只留 idle 一行。
+      expect(log).toContain('spine idle');
+    } finally {
+      if (previous === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('asks for the backup pointer when a cut span hides its call arguments', () => {
+    // 卡片只写 callCommand(命令或工具名):write/edit 这类带路径与正文的调用切走后,
+    // 后续轮次看不到写入目标与内容,可能重复执行副作用 —— 这类 span 要给出备份指针。
+    const meta = (name, command, hiddenArgs = false) => new Map([['c1', { name, command, hiddenArgs }]]);
+    expect(spanHidesCallArgs([{ callMeta: meta('bash', 'npm test') }])).toBe(false);
+    expect(spanHidesCallArgs([{ callMeta: meta('write', 'write') }])).toBe(true);
+    // 命令被换行或 80 字截断时,卡片只留前半段;后半段同样没出处。
+    expect(spanHidesCallArgs([{ callMeta: meta('bash', 'npm test', true) }])).toBe(true);
+    expect(spanHidesCallArgs([])).toBe(false);
+    // 判定本身:没有 command 参数、或参数被截断都算「参数被隐藏」。
+    expect(callArgsHidden({ command: 'npm test' })).toBe(false);
+    expect(callArgsHidden({ command: 'line one' + String.fromCharCode(10) + 'line two' })).toBe(true);
+    expect(callArgsHidden({ command: 'x'.repeat(120) })).toBe(true);
+    expect(callArgsHidden({ file_path: '/tmp/a' })).toBe(true);
+  });
+
+  it('counts a hard fact only when it comes from the same source', () => {
+    // 1.0.9 的覆盖判定按 (来源, 行) 记账:同一句话来自别的来源不能替这条硬事实过关
+    // (上游 issue #14 P0-2:关键事实没进卡片也 ok:true)。
+    const fact = '必须保留 CHUNK_MIN 的默认值';
+    const card = buildCard('', '', 4000, [
+      { role: 'user', text: '无关的一句', isError: false },
+      { role: 'user', text: fact, isError: false },
+    ]);
+    // 硬行进了卡片、也来自同一条 user 来源 -> ok
+    expect(card.ok).toBe(true);
+    expect(card.text).toContain(fact);
+    // 同样一句放在 assistant 来源里不进硬行(助手自述不算证据)
+    const assistantOnly = buildCard('', '', 4000, [{ role: 'assistant', text: fact, isError: false }]);
+    expect(assistantOnly.hardCount).toBe(0);
+  });
+
+  it('reads a provider baseURL from patch text and keeps header priority', () => {
+    // 1.0.9 的地址解析链:请求头优先,其次配置/补丁里的这一家,最后才是内置目录。
+    const patch = [
+      'providers:',
+      '  minimax:',
+      '    baseURL: https://api.minimax.chat/v1',
+      '  other:',
+      '    baseURL: https://other.example.com',
+    ].join(String.fromCharCode(10));
+    expect(providerURLFromPatch(patch, 'minimax')).toBe('https://api.minimax.chat/v1');
+    expect(providerURLFromPatch(patch, 'missing')).toBe('');
+    expect(resolveProviderBaseURL({ provider: 'minimax', headerURL: 'http://127.0.0.1:8080', patchText: patch }))
+      .toBe('http://127.0.0.1:8080');
+    expect(resolveProviderBaseURL({ provider: 'minimax', patchText: patch })).toBe('https://api.minimax.chat/v1');
+    expect(resolveProviderBaseURL({ provider: 'deepseek' })).toBe('https://api.deepseek.com/anthropic');
   });
 
   it('keeps a structural failure excerpt and points at the backup', () => {
@@ -726,8 +931,11 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
   it('resolves the engine from the env override, the provider name or the address', () => {
     expect(resolveEngine({ provider: 'minimax', env: { SPINE_ENGINE: 'local' } })).toEqual({ engine: 'local', source: 'env' });
     expect(resolveEngine({ provider: 'strata-local', env: {} })).toEqual({ engine: 'local', source: 'provider' });
-    expect(resolveEngine({ provider: 'ollama', env: {} })).toEqual({ engine: 'local', source: 'provider' });
-    expect(resolveEngine({ provider: 'minimax', env: {} })).toEqual({ engine: 'cloud', source: 'provider' });
+    // 1.0.9 的 resolveEngine 只认地址与 strata:读不到地址就是 local/unknown(不猜)。
+    expect(resolveEngine({ provider: 'minimax', env: {} })).toEqual({ engine: 'local', source: 'unknown' });
+    // pi 拿不到 baseURL,所以调用方用 resolveSpineEngine 补一层 provider 名兜底。
+    expect(resolveSpineEngine('minimax')).toEqual({ engine: 'cloud', source: 'provider' });
+    expect(resolveSpineEngine('ollama')).toEqual({ engine: 'local', source: 'provider' });
     expect(resolveEngine({ provider: 'x', baseURL: 'http://127.0.0.1:8080/v1', env: {} })).toEqual({ engine: 'local', source: 'address' });
     expect(resolveEngine({ provider: 'x', baseURL: 'https://api.example.com', env: {} })).toEqual({ engine: 'cloud', source: 'address' });
     // 没有任何证据时按原仓的保守默认:不跨 user。
@@ -755,11 +963,12 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
   });
 
   it('keeps drain cards in chronological order when one run cuts several spans', () => {
-    // pi 只能把卡片追加到尾巴上,而收尾是从新往旧切;不倒回来最老的摘要会落在最下面。
-    const newest = { type: 'custom_message', content: [{ type: 'text', text: 'newest span' }] };
+    // 卡片按切出来的先后发出:切点右边还有卡片就不切,后一刀只能落在前一张卡片右边,
+    // 所以这个先后就是上下文里的时间序(与上游原地替换看到的一致)。
     const oldest = { type: 'custom_message', content: [{ type: 'text', text: 'oldest span' }] };
+    const newest = { type: 'custom_message', content: [{ type: 'text', text: 'newest span' }] };
     const edit = { type: 'context_edit', targetId: 'e9', replacement: null };
-    const out = orderedDrainDrafts([edit], [newest, oldest]);
+    const out = orderedDrainDrafts([edit], [oldest, newest]);
     expect(out.map((draft) => draft.type)).toEqual(['context_edit', 'custom_message', 'custom_message']);
     expect(out[1]).toBe(oldest);
     expect(out[2]).toBe(newest);
@@ -781,10 +990,10 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 40000, maxEnd: 2 })).toBeNull();
     // 低于水位且没在收尾:一律不切。
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 30000, maxEnd: 2 })).toBeNull();
-    // 收尾模式不看保留区边界:总量还在水位之上就继续切(这里切到最新一轮)。
+    // 1.0.9: 收尾同样受调用方给的 maxEnd 约束(切点在保留区之前),不再无视边界切到最新一轮。
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 40000, drain: true, maxEnd: 2 })).toMatchObject({
-      start: 7,
-      end: 8,
+      start: 1,
+      end: 2,
     });
     // 过了紧急线(48000)即使没标 drain 也进入批量切。
     expect(selectCutIndexes(items, { engine: 'cloud', totalTokens: 60000, maxEnd: 2 })).not.toBeNull();
@@ -840,8 +1049,10 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     ]);
     expect(entries[4].opaque).toBe(true);
     expect(entries[6].opaque).toBe(false);
-    // 后面三轮都太小,凑够 CHUNK_MIN 就必须跨过带图的那一轮 —— 所以这里只能不切。
-    expect(selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 })).toBeNull();
+    // 1.0.9 保留最近 3 个工具轮,屏障前的那一轮(c0)才是可切段;带图的 c1 永不在段内。
+    const picked = selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 });
+    expect(picked).toMatchObject({ start: 1, end: 2 });
+    expect(picked.end).toBeLessThan(4);
   });
 
   it('does not drain while the whole cuttable history is inside the kept rounds', () => {
@@ -875,18 +1086,10 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     ];
     expect(selectNewestChunk(entries, undefined, { drain: true, totalTokens: 60000 })).toBeNull();
 
-    // 对照:同一个超大结果独占一条调用消息时,指针切法照旧成立。
-    const control = [
-      entry('system', 'sys'),
-      entry('user', 'older'),
-      entry('assistant', 'call', { calls: ['c9'] }),
-      entry('toolResult', 'older result '.repeat(400), { results: ['c9'] }),
-      entry('user', 'read one thing'),
-      entry('assistant', 'call', { calls: ['c0'] }),
-      entry('toolResult', huge, { results: ['c0'] }),
-    ];
-    const pointerCut = selectNewestChunk(control, undefined, { drain: true, totalTokens: 60000 });
-    expect(pointerCut).toMatchObject({ start: 5, end: 6 });
+    // 对照:同一个超大结果没有兄弟结果时,指针段的后缀是平衡的,切法照旧成立。
+    // 1.0.9 的保留区是最近 3 个已完成的工具轮,所以对照里要留出更老的轮次才切得到指针段。
+    // 1.0.9 的保留区是最近 3 个已完成工具轮:这里两轮都在保留区内,切点会一路退到 user 之外。
+    // 「指针段不留下孤儿结果」的判据仍由后缀平衡兜底 —— 指针刀能成立的情形见上面那条用例。
   });
 
   it('keeps an oversized tool result as a pointer instead of refusing the cut', () => {
@@ -894,18 +1097,19 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
       ['user', 50],
       ['assistant', 100],
       ['tool', 40000],
-      ['user', 50],
-      ['assistant', 100],
-      ['tool', 500],
     ]);
-    const picked = selectCutIndexes(items, { engine: 'cloud', chunkMax: 32000 });
-    expect(picked).toMatchObject({ start: 2, end: 2, pointerOnly: true });
+    // 1.0.9: 指针刀只在最后一条 user 之后找,这里超大结果就在它后面。
+    expect(selectCutIndexes(items, { engine: 'cloud', chunkMax: 32000, drain: true, totalTokens: 60000 })).toMatchObject({
+      start: 2,
+      end: 2,
+      pointerOnly: true,
+    });
+    expect(selectCutIndexes(items, { engine: 'local', chunkMax: 32000 })).toMatchObject({ start: 2, end: 2, pointerOnly: true });
     // 指针段不能带最后一条 user。
     expect(pointerSpanAllowed(items, 2, 2, 'cloud')).toBe(true);
     expect(pointerSpanAllowed(items, 1, 2, 'cloud')).toBe(true);
-    expect(pointerSpanAllowed(items, 2, 3, 'cloud')).toBe(false);
-    // 本地切法整段必须在最后一条 user 之后:这条超大的在它前面,不能动。
-    expect(selectCutIndexes(items, { engine: 'local', chunkMax: 32000 })).toBeNull();
+    // 未到紧急线、也没有收尾时,云端一刀不切(1.0.9 收紧了「平时只切超大结果」的口径)。
+    expect(selectCutIndexes(items, { engine: 'cloud', chunkMax: 32000 })).toBeNull();
   });
 
   it('keeps an earlier user message as one-line JSON inside the card', () => {
@@ -925,5 +1129,372 @@ describe('live compact 1.0.8: cache-safe drains, pointer-only spans, no cross-us
     expect(withRaw).toContain('read big.txt');
     expect(withRaw).toContain('raw-c9.txt');
     expect(pointerOnlyText([{ role: 'tool', text: 'x', name: 'read', toolCallId: 'c8', raw: { ok: false, toolCallId: 'c8' } }])).toContain('无完整备份');
+  });
+});
+describe('live compact 1.1.x: 卡片地板与长 read 独占一刀', () => {
+  const round = (id, text) => [
+    entry('assistant', `call ${id}`, { calls: [id] }),
+    entry('toolResult', text, { results: [id] }),
+  ];
+  // 长 read:调用名是 read、结果本身够大。上游把这类结果从保留区里摘出来单独切。
+  const readRound = (id, text) => [
+    entry('assistant', `read ${id}`, {
+      calls: [id],
+      callMeta: new Map([[id, { name: 'read', command: '', filePath: '', jobId: '', hiddenArgs: false }]]),
+    }),
+    entry('toolResult', text, { results: [id] }),
+  ];
+  const card = () => ({ ...entry('user', 'Spine extract.\nsummary'), entryType: 'compaction' });
+
+  it('never cuts to the left of the newest checkpoint card', () => {
+    const mk = () => [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c6', 'older '.repeat(2500)),
+      ...round('c7', 'older '.repeat(2500)),
+      ...round('c8', 'older '.repeat(2500)),
+      ...round('c9', 'older '.repeat(2500)),
+      ...round('c0', 'tiny '.repeat(100)),
+      card(),
+      entry('assistant', 'done'),
+    ];
+    // 卡片左边全是可切内容,但那是已进缓存的前缀:平时和收尾都不许切过去。
+    expect(selectNewestChunk(mk(), undefined, { totalTokens: 90000 })).toBeNull();
+    expect(selectNewestChunk(mk(), undefined, { drain: true, totalTokens: 90000 })).toBeNull();
+
+    // 卡片右边又长出几轮之后,切点必须落在卡片右侧,而不是回到卡片左边。
+    const grown = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c6', 'older '.repeat(2500)),
+      ...round('c7', 'older '.repeat(2500)),
+      ...round('c8', 'older '.repeat(2500)),
+      ...round('c9', 'older '.repeat(2500)),
+      ...round('c0', 'tiny '.repeat(100)),
+      card(),
+      ...round('c2', 'old '.repeat(2000)),
+      ...round('c3', 'tiny '.repeat(100)),
+      ...round('c4', 'tiny '.repeat(100)),
+      ...round('c5', 'tiny '.repeat(100)),
+    ];
+    const floor = grown.findIndex((item) => item.entryType === 'compaction');
+    const picked = selectNewestChunk(grown, undefined, { drain: true, totalTokens: 90000 });
+    expect(picked).not.toBeNull();
+    expect(picked.start).toBeGreaterThan(floor);
+    expect(picked.end).toBeGreaterThan(floor);
+  });
+
+  it('stops selectCutIndexes from cutting left of a checkpoint in the same item list', () => {
+    const items = [
+      ['user', 50], ['assistant', 100], ['tool', 9000],
+      ['user', 50], ['assistant', 100], ['tool', 9000],
+      ['user', 50],
+    ].map(([type, tokens]) => ({ type, tokens, checkpoint: false, barrier: false }));
+    items[0] = { ...items[0], checkpoint: true };
+    // 卡片在要切的那一段左边:照常切这一段。
+    expect(selectCutIndexes(items, { engine: 'cloud', drain: true, maxEnd: 5 })).toMatchObject({ start: 4, end: 5 });
+    // 卡片在切点右边(那是已缓存前缀的边界):这一刀落在前缀里,拒绝。
+    const withCardAhead = items.map((item, index) => (index === 6 ? { ...item, checkpoint: true } : item));
+    expect(selectCutIndexes(withCardAhead, { engine: 'cloud', drain: true, maxEnd: 5 })).toBeNull();
+  });
+
+  it('cuts a long read round on its own instead of keeping it with the short rounds', () => {
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c9', 'older '.repeat(2500)),
+      ...readRound('r0', 'file '.repeat(4000)),
+      ...round('c1', 'tiny '.repeat(100)),
+      ...round('c2', 'tiny '.repeat(100)),
+      ...round('c3', 'tiny '.repeat(100)),
+    ];
+    // 长 read 的那一轮不占保留位:保留区只有后面三个短轮,切点正好只盖住它自己那一轮。
+    const longStart = entries.findIndex((item) => item.text === 'read r0');
+    expect(keptToolRounds(entries, 3, longReadResults(entries)).at(0).start).toBeGreaterThan(longStart);
+    const picked = selectNewestChunk(entries, undefined, { drain: true, totalTokens: 70000 });
+    expect(picked).toMatchObject({ start: longStart, end: longStart + 1 });
+    expect(picked.pointerOnly).toBeUndefined();
+  });
+
+  it('pointer-cuts the only long read round when its single result is oversized', () => {
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      ...round('c1', 'tiny '.repeat(100)),
+      ...readRound('r0', 'x'.repeat(200000)),
+      ...round('c2', 'tiny '.repeat(100)),
+      ...round('c3', 'tiny '.repeat(100)),
+    ];
+    const longStart = entries.findIndex((item) => item.text === 'read r0');
+    const picked = selectNewestChunk(entries, undefined, { drain: true, totalTokens: 90000 });
+    // 指针刀把发起调用的 assistant 一起换掉,卡片里只留指针(原文一个字都不进卡片)。
+    expect(picked).toMatchObject({ start: longStart, end: longStart + 1 });
+    expect(picked.card.text).toContain('无完整备份');
+    expect(picked.card.text).not.toContain('xxxxxxxxxx');
+  });
+});
+
+describe('live compact 1.1.x: 指针段不能吞掉图片', () => {
+  const round = (id, text) => [
+    entry('assistant', `call ${id}`, { calls: [id] }),
+    entry('toolResult', text, { results: [id] }),
+  ];
+  it('rejects a pointer span that stretches back over an image result', () => {
+    // 一条 assistant 同时发两个调用:图片结果先回来,超大文本结果后回来。
+    // 指针刀会从超大结果往回扩到调用,中间的图片一并被删 —— 卡片和备份只有文本,图片回不来。
+    const entries = [
+      entry('system', 'sys'),
+      entry('user', 'go'),
+      entry('assistant', 'two calls', { calls: ['cImg', 'cBig'] }),
+      entry('toolResult', 'shot in the dark', { results: ['cImg'], opaque: true }),
+      entry('toolResult', 'x'.repeat(200000), { results: ['cBig'] }),
+      ...round('c1', 'tiny '.repeat(100)),
+      ...round('c2', 'tiny '.repeat(100)),
+      ...round('c3', 'tiny '.repeat(100)),
+    ];
+    expect(entries[3].opaque).toBe(true);
+    const items = entries.map((item) => ({
+      type: item.role === 'toolResult' ? 'tool' : item.role,
+      tokens: item.est,
+      checkpoint: false,
+      barrier: Boolean(item.opaque),
+    }));
+    expect(pointerSpanAllowed(items, 2, 4, 'cloud')).toBe(false);
+    expect(pointerSpanAllowed(items, 4, 4, 'cloud')).toBe(true);
+    expect(selectNewestChunk(entries, undefined, { drain: true, totalTokens: 90000 })).toBeNull();
+  });
+});
+
+describe('live compact 1.1.x: 轮换不改写已有备份', () => {
+  it('protects a reused raw snapshot that the new card points at', () => {
+    // 恢复/分叉的会话里,切范围内的工具原文可能早就落过盘(同一个 toolCallId)。
+    // 它不在 planned() 里,但新卡片会引用它:轮换若把它当最老的文件删掉,卡片就成了空指针。
+    const root = mkdtempSync(join(tmpdir(), 'spine-rawprotect-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    const previousCap = process.env.SPINE_SHADOW_MAX_BYTES;
+    process.env.SPINE_SHADOW_DIR = root;
+    process.env.SPINE_SHADOW_MAX_BYTES = '800000';
+    try {
+      const sessionId = 'session-rawprotect';
+      const dir = join(root, 'shadow', sessionId);
+      mkdirSync(dir, { recursive: true });
+      const text = 'needle '.repeat(30000);
+      const raw = commitRawEntry(planRawEntry({ dir, toolCallId: 'cBig', text, turn: 1, name: 'bash', pathLabel: 'bash big.log' }));
+      expect(raw.ok).toBe(true);
+      utimesSync(raw.path, 1, 1);
+      const old1 = join(dir, 'aa-old1.txt');
+      const old2 = join(dir, 'zz-old2.txt');
+      writeFileSync(old1, 'o'.repeat(300000));
+      writeFileSync(old2, 'o'.repeat(300000));
+      utimesSync(old1, 2, 2);
+      utimesSync(old2, 3, 3);
+
+      let handler = null;
+      registerLiveCompact({ on: (name, fn) => { if (name === 'agent_before_settle') handler = fn; } });
+      const toolCall = { messages: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'cBig', name: 'bash', arguments: {} }] }], sourceEntry: { id: 'a1' } };
+      const toolResult = { messages: [{ role: 'toolResult', toolCallId: 'cBig', content: [{ type: 'text', text }] }], sourceEntry: { id: 'r1' } };
+      const tiny = (id) => [
+        { messages: [{ role: 'assistant', content: [{ type: 'toolCall', id, name: 'bash', arguments: {} }] }], sourceEntry: { id: `${id}-a` } },
+        { messages: [{ role: 'toolResult', toolCallId: id, content: [{ type: 'text', text: 'ok '.repeat(20) }] }], sourceEntry: { id: `${id}-r` } },
+      ];
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys' }], sourceEntry: { id: 's1' } },
+        { messages: [{ role: 'user', content: 'go' }], sourceEntry: { id: 'u1' } },
+        toolCall,
+        toolResult,
+        ...tiny('c1'),
+        ...tiny('c2'),
+        ...tiny('c3'),
+      ];
+      const event = { outcome: 'completed', context: { contextEntries } };
+      const ctx = {
+        sessionManager: { getSessionId: () => sessionId },
+        getContextUsage: () => ({ tokens: 120000 }),
+      };
+      const result = handler(event, ctx);
+      expect(result).toBeTruthy();
+      const card = result.entries.find((draft) => draft.type === 'custom_message');
+      expect(card).toBeTruthy();
+      const cardText = card.content.map((block) => block.text || '').join(String.fromCharCode(10));
+      // 卡片指向这份原文,轮换就不能删它。
+      expect(cardText).toContain(basename(raw.path));
+      expect(existsSync(raw.path)).toBe(true);
+      // 腾地方只能牺牲没有被引用的旧文件。
+      expect(existsSync(old1)).toBe(false);
+      expect(existsSync(old2)).toBe(false);
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
+      if (previousCap === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
+      else process.env.SPINE_SHADOW_MAX_BYTES = previousCap;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not evict old backups when the final shadow rename fails', () => {
+    // 轮换会真的删掉旧备份。它必须排在「新备份已经改名成功」之后:
+    // 反过来时,改名失败会让这一刀被拒,而旧卡片指向的原文已经没了。
+    const root = mkdtempSync(join(tmpdir(), 'spine-rename-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    const previousCap = process.env.SPINE_SHADOW_MAX_BYTES;
+    process.env.SPINE_SHADOW_DIR = root;
+    process.env.SPINE_SHADOW_MAX_BYTES = '1000';
+    try {
+      const dir = join(root, 'shadow', 'session-rename');
+      mkdirSync(dir, { recursive: true });
+      const old = join(dir, 'old.txt');
+      writeFileSync(old, 'o'.repeat(900));
+      utimesSync(old, 1, 1);
+      const target = join(dir, 'new.txt');
+      expect(() => saveShadow({ key: 'session-rename' }, dir, target, 'n'.repeat(500), [], {
+        rename: () => { throw new Error('boom'); },
+      })).toThrow(/shadow backup was not written/);
+      expect(existsSync(old)).toBe(true);
+      expect(existsSync(target)).toBe(false);
+      expect(existsSync(`${target}.tmp`)).toBe(false);
+
+      // 正常路径仍然会腾地方:旧文件被淘汰,新备份就位。
+      saveShadow({ key: 'session-rename' }, dir, target, 'n'.repeat(500));
+      expect(existsSync(target)).toBe(true);
+      expect(existsSync(old)).toBe(false);
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
+      if (previousCap === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
+      else process.env.SPINE_SHADOW_MAX_BYTES = previousCap;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('live compact 1.1.x: 收尾多刀与指针兜底', () => {
+  const toolCall = (id, name = 'bash', args = {}) => ({
+    messages: [{ role: 'assistant', content: [{ type: 'toolCall', id, name, arguments: args }] }],
+    sourceEntry: { id: `${id}-a` },
+  });
+  const toolResult = (id, text) => ({
+    messages: [{ role: 'toolResult', toolCallId: id, content: [{ type: 'text', text }] }],
+    sourceEntry: { id: `${id}-r` },
+  });
+  const small = (id) => [toolCall(id), toolResult(id, 'ok '.repeat(20))];
+  const settle = (root, sessionId, contextEntries, tokens = 200000) => {
+    let handler = null;
+    registerLiveCompact({ on: (name, fn) => { if (name === 'agent_before_settle') handler = fn; } });
+    const event = { outcome: 'completed', context: { contextEntries } };
+    const ctx = {
+      sessionManager: { getSessionId: () => sessionId },
+      getContextUsage: () => ({ tokens }),
+    };
+    return handler(event, ctx);
+  };
+
+  it('keeps draining after a long-read cut, like upstream does', () => {
+    // 上游的卡片是原地替换,所以卡片右边、保留区之前还有一段能切;
+    // pi 的卡片只能追加到尾巴上 —— 选段时若把新卡片当地板,第二刀就永远选不出来。
+    const root = mkdtempSync(join(tmpdir(), 'spine-drain-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    process.env.SPINE_SHADOW_DIR = root;
+    try {
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys', provider: 'minimax' }], sourceEntry: { id: 's1' } },
+        { messages: [{ role: 'user', content: 'go', provider: 'minimax' }], sourceEntry: { id: 'u1' } },
+        toolCall('cOld'), toolResult('cOld', 'mid '.repeat(2000)),
+        toolCall('cLong', 'read'), toolResult('cLong', 'x'.repeat(200000)),
+        toolCall('cMid'), toolResult('cMid', 'tail '.repeat(2000)),
+        ...small('c1'),
+        ...small('c2'),
+        ...small('c3'),
+      ];
+      const result = settle(root, 'session-drain', contextEntries);
+      expect(result).toBeTruthy();
+      const cards = result.entries.filter((draft) => draft.type === 'custom_message');
+      // 第一刀是长 read 的指针刀,第二刀切掉卡片与保留区之间的那一段。
+      expect(cards.length).toBe(2);
+      // 卡片按切出来的先后发出:长 read 更早,卡片与保留区之间那段更新。
+      expect(cards[0].details.shadowedSeqs).toContain('cLong-a');
+      expect(cards[1].details.shadowedSeqs).toContain('cMid-a');
+      const log = readFileSync(join(root, 'spine.log'), 'utf8');
+      expect(log.match(/spine cut /g) || []).toHaveLength(2);
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not let the next cut delete a backup an earlier card still points at', () => {
+    // 同一批收尾的卡片是一起提交的:第二刀的容量轮换不能删掉第一刀卡片还指着的备份。
+    // 腾不出地方就停在这一刀 —— 不拿还没提交的卡片开刀。
+    const root = mkdtempSync(join(tmpdir(), 'spine-batch-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    const previousCap = process.env.SPINE_SHADOW_MAX_BYTES;
+    process.env.SPINE_SHADOW_DIR = root;
+    // 第一刀(长 read)的原文快照与汇总备份各约 300KB,合起来装得下;第二刀装不下。
+    process.env.SPINE_SHADOW_MAX_BYTES = '606000';
+    try {
+      const sessionId = 'session-batch';
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys', provider: 'minimax' }], sourceEntry: { id: 's1' } },
+        { messages: [{ role: 'user', content: 'go', provider: 'minimax' }], sourceEntry: { id: 'u1' } },
+        toolCall('cLong', 'read'), toolResult('cLong', 'x'.repeat(300000)),
+        toolCall('cMid'), toolResult('cMid', 'tail '.repeat(2000)),
+        ...small('c1'),
+        ...small('c2'),
+        ...small('c3'),
+      ];
+      const result = settle(root, sessionId, contextEntries);
+      expect(result).toBeTruthy();
+      const cards = result.entries.filter((draft) => draft.type === 'custom_message');
+      expect(cards.length).toBe(1);
+      // 第一张卡片指着的原文快照还在。
+      expect(existsSync(join(root, 'shadow', sessionId, rawName('cLong')))).toBe(true);
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
+      if (previousCap === undefined) delete process.env.SPINE_SHADOW_MAX_BYTES;
+      else process.env.SPINE_SHADOW_MAX_BYTES = previousCap;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('points a pointer-only card at the main shadow when the raw pointer cannot be verified', () => {
+    // 原文快照写了一半就崩(meta 缺失)时,卡片里核不出指针。
+    // 这时切走的结果就彻底没了下文 —— 主 shadow 里还有这一段的正文,必须挂上。
+    const root = mkdtempSync(join(tmpdir(), 'spine-pointer-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    process.env.SPINE_SHADOW_DIR = root;
+    try {
+      const sessionId = 'session-pointer';
+      const dir = join(root, 'shadow', sessionId);
+      mkdirSync(dir, { recursive: true });
+      // 原文文件在、meta 不在:核不出哈希与字节数,指针不可用。
+      writeFileSync(join(dir, rawName('cBig')), 'x'.repeat(1000));
+
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys', provider: 'minimax' }], sourceEntry: { id: 's1' } },
+        { messages: [{ role: 'user', content: 'go', provider: 'minimax' }], sourceEntry: { id: 'u1' } },
+        toolCall('cBig', 'bash', { command: 'cat big.log' }), toolResult('cBig', 'y'.repeat(200000)),
+        ...small('c1'),
+        ...small('c2'),
+        ...small('c3'),
+      ];
+      const result = settle(root, sessionId, contextEntries);
+      expect(result).toBeTruthy();
+      const card = result.entries.find((draft) => draft.type === 'custom_message');
+      expect(card).toBeTruthy();
+      const cardText = card.content.map((block) => block.text || '').join(String.fromCharCode(10));
+      // 指针核不上 → 卡片说没有可核的指针,但必须给出主 shadow 的路径。
+      expect(cardText).toContain('无完整备份');
+      expect(cardText).toContain('省略的工具原文在');
+      // 主 shadow 里确实有这一段的正文。
+      const shadowDir = join(root, 'shadow', sessionId);
+      const shadows = readdirSync(shadowDir).filter((name) => name.endsWith('.txt') && !name.startsWith('raw-'));
+      expect(shadows.length).toBeGreaterThan(0);
+      expect(readFileSync(join(shadowDir, shadows[0]), 'utf8')).toContain('y'.repeat(100));
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR;
+      else process.env.SPINE_SHADOW_DIR = previousRoot;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
