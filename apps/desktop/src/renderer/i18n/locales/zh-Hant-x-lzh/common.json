@@ -9957,44 +9957,44 @@
       "terminateFailed": "不能終止此處理程序，或已自行退出；列表將隨下次取樣自更",
       "sessionDetail": "差事：{{title}}",
       "tabs": {
-        "hostDaemons": "本機常駐",
         "label": "資源檢視",
-        "processes": "處理程序"
+        "processes": "處理程序",
+        "hostDaemons": "背景項目"
       }
     },
     "hostDaemons": {
-      "actionFailed": "操作失敗，請重試",
-      "delete": "刪除",
-      "deleteBody": "會從這台電腦徹底刪除這項排程工作，之後不會再自動啟動；Cindy 裡的任務記錄不受影響。",
-      "deleteTitle": "刪除「{{name}}」？",
-      "deleted": "已刪除 {{name}}",
-      "empty": "還沒有由任務建立的本機常駐項目",
-      "loadFailed": "讀取本機常駐失敗",
-      "owner": "建立任務：{{title}}",
-      "ownerUnknown": "未知",
+      "scanning": "正在掃描背景項目…",
       "refresh": "重新整理",
-      "refreshFailed": "重新整理失敗，清單可能不是最新的",
-      "run": "啟動",
-      "scanning": "正在掃描本機常駐…",
-      "started": "已啟動 {{name}}",
+      "loadFailed": "無法讀取背景項目",
+      "refreshFailed": "重新整理失敗；此列表可能不是最新的",
+      "unsupported": "背景項目僅在 Windows 上可用",
+      "empty": "尚未有由任務建立的背景項目",
+      "owner": "建立者：{{title}}",
+      "ownerUnknown": "未知",
       "state": {
-        "disabled": "已停用",
-        "ready": "待執行",
         "running": "執行中",
+        "ready": "閒置",
+        "disabled": "已停用",
         "unknown": "未知"
       },
-      "stop": "停止",
-      "stopBody": "只結束這一次執行，任務仍會依原排程再次啟動。",
-      "stopTitle": "停止「{{name}}」？",
-      "stopped": "已停止 {{name}}",
       "trigger": {
-        "logon": "登入時啟動",
-        "other": "其他觸發方式",
-        "schedule": "依排程啟動",
-        "startup": "開機啟動"
+        "logon": "登入時",
+        "startup": "開機時",
+        "schedule": "依排程",
+        "other": "其他觸發方式"
       },
-      "unsupported": "本機常駐清單目前只支援 Windows",
-      "unrelated_other": "另有 {{count}} 項與本機任務無關的常駐項目未顯示"
+      "stop": "停止",
+      "delete": "刪除",
+      "run": "啟動",
+      "started": "已啟動 {{name}}",
+      "stopTitle": "要停止「{{name}}」嗎？",
+      "stopBody": "只會結束目前這一次執行；任務仍會依其排程再次啟動。",
+      "deleteTitle": "要刪除「{{name}}」嗎？",
+      "deleteBody": "會從這台電腦永久移除這個排程任務，因此它不再自動啟動。Cindy 中的任務紀錄不受影響。",
+      "stopped": "已停止 {{name}}",
+      "deleted": "已刪除 {{name}}",
+      "actionFailed": "動作失敗，請再試一次。",
+      "unrelated_other": "已隱藏 {{count}} 個無關的背景項目"
     }
   },
   "update": {

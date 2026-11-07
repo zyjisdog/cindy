@@ -10080,46 +10080,46 @@
       "sessionDetail": "Tarefa: {{title}}",
       "processCount_many": "Árvore de processos: {{count}} processos",
       "tabs": {
-        "hostDaemons": "Itens em segundo plano",
         "label": "Vista de recursos",
-        "processes": "Processos"
+        "processes": "Processos",
+        "hostDaemons": "Elementos em segundo plano"
       }
     },
     "hostDaemons": {
-      "actionFailed": "A ação falhou; tente novamente",
-      "delete": "Eliminar",
-      "deleteBody": "Remove definitivamente esta tarefa agendada deste computador; deixará de ser iniciada automaticamente. Os registos de tarefas no Cindy não são afetados.",
-      "deleteTitle": "Eliminar «{{name}}»?",
-      "deleted": "{{name}} eliminado",
-      "empty": "Ainda não há itens em segundo plano criados por tarefas",
-      "loadFailed": "Não foi possível ler os itens em segundo plano",
+      "scanning": "A procurar elementos em segundo plano…",
+      "refresh": "Atualizar",
+      "loadFailed": "Não foi possível ler os elementos em segundo plano",
+      "refreshFailed": "A atualização falhou; esta lista pode estar desatualizada",
+      "unsupported": "Os elementos em segundo plano só estão disponíveis no Windows",
+      "empty": "Ainda não existem elementos em segundo plano criados por tarefas",
       "owner": "Criado por: {{title}}",
       "ownerUnknown": "Desconhecido",
-      "refresh": "Atualizar",
-      "refreshFailed": "Falha ao atualizar; a lista pode estar desatualizada",
-      "run": "Iniciar",
-      "scanning": "A analisar itens em segundo plano…",
-      "started": "{{name}} iniciado",
       "state": {
-        "disabled": "Desativado",
-        "ready": "À espera",
         "running": "Em execução",
+        "ready": "Inativo",
+        "disabled": "Desativado",
         "unknown": "Desconhecido"
       },
-      "stop": "Parar",
-      "stopBody": "Termina apenas esta execução; a tarefa voltará a iniciar conforme o agendamento.",
-      "stopTitle": "Parar «{{name}}»?",
-      "stopped": "{{name}} parado",
       "trigger": {
         "logon": "Ao iniciar sessão",
-        "other": "Outro acionamento",
-        "schedule": "Conforme agendamento",
-        "startup": "Ao arrancar"
+        "startup": "Ao arrancar",
+        "schedule": "Segundo a programação",
+        "other": "Outro acionador"
       },
-      "unsupported": "Os itens em segundo plano só estão disponíveis no Windows",
-      "unrelated_one": "{{count}} item em segundo plano não relacionado está oculto",
-      "unrelated_other": "{{count}} itens em segundo plano não relacionados estão ocultos",
-      "unrelated_many": "{{count}} itens em segundo plano não relacionados estão ocultos"
+      "stop": "Parar",
+      "delete": "Eliminar",
+      "run": "Iniciar",
+      "started": "{{name}} iniciado",
+      "stopTitle": "Parar «{{name}}»?",
+      "stopBody": "Termina apenas a execução atual. A tarefa voltará a arrancar segundo a sua programação.",
+      "deleteTitle": "Eliminar «{{name}}»?",
+      "deleteBody": "Remove permanentemente esta tarefa programada deste computador, pelo que deixa de arrancar automaticamente. Os registos de tarefas no Cindy não são afetados.",
+      "stopped": "{{name}} parado",
+      "deleted": "{{name}} eliminado",
+      "actionFailed": "A ação falhou. Tente novamente.",
+      "unrelated_one": "{{count}} elemento em segundo plano não relacionado está oculto",
+      "unrelated_other": "{{count}} elementos em segundo plano não relacionados estão ocultos",
+      "unrelated_many": "{{count}} elemento em segundo plano não relacionado está oculto"
     }
   },
   "update": {

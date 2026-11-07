@@ -10000,45 +10000,45 @@
       "terminateFailed": "Dieser Prozess konnte nicht gestoppt werden – möglicherweise wurde er bereits beendet. Die Liste wird bei der nächsten Erfassung aktualisiert.",
       "sessionDetail": "Aufgabe: {{title}}",
       "tabs": {
-        "hostDaemons": "Hintergrundelemente",
         "label": "Ressourcenansicht",
-        "processes": "Prozesse"
+        "processes": "Prozesse",
+        "hostDaemons": "Hintergrundelemente"
       }
     },
     "hostDaemons": {
-      "actionFailed": "Aktion fehlgeschlagen. Bitte erneut versuchen",
-      "delete": "Löschen",
-      "deleteBody": "Entfernt diese geplante Aufgabe endgültig von diesem Computer; sie startet nicht mehr automatisch. Aufgabenaufzeichnungen in Cindy sind nicht betroffen.",
-      "deleteTitle": "„{{name}}“ löschen?",
-      "deleted": "{{name}} gelöscht",
-      "empty": "Noch keine von Aufgaben erstellten Hintergrundelemente",
+      "scanning": "Hintergrundelemente werden geprüft…",
+      "refresh": "Aktualisieren",
       "loadFailed": "Hintergrundelemente konnten nicht gelesen werden",
+      "refreshFailed": "Aktualisierung fehlgeschlagen; diese Liste ist möglicherweise veraltet",
+      "unsupported": "Hintergrundelemente sind nur unter Windows verfügbar",
+      "empty": "Noch keine von Aufgaben erstellten Hintergrundelemente",
       "owner": "Erstellt von: {{title}}",
       "ownerUnknown": "Unbekannt",
-      "refresh": "Aktualisieren",
-      "refreshFailed": "Aktualisierung fehlgeschlagen; die Liste ist möglicherweise veraltet",
-      "run": "Starten",
-      "scanning": "Hintergrundelemente werden gescannt…",
-      "started": "{{name}} gestartet",
       "state": {
-        "disabled": "Deaktiviert",
-        "ready": "Bereit",
         "running": "Läuft",
+        "ready": "Bereit",
+        "disabled": "Deaktiviert",
         "unknown": "Unbekannt"
       },
-      "stop": "Beenden",
-      "stopBody": "Beendet nur diesen Lauf; die Aufgabe startet gemäß Zeitplan erneut.",
-      "stopTitle": "„{{name}}“ beenden?",
-      "stopped": "{{name}} beendet",
       "trigger": {
         "logon": "Bei der Anmeldung",
-        "other": "Anderer Auslöser",
+        "startup": "Beim Start",
         "schedule": "Nach Zeitplan",
-        "startup": "Beim Systemstart"
+        "other": "Andere Auslöser"
       },
-      "unsupported": "Hintergrundelemente sind nur unter Windows verfügbar",
-      "unrelated_one": "{{count}} unbezogenes Hintergrundelement ist ausgeblendet",
-      "unrelated_other": "{{count}} unbezogene Hintergrundelemente sind ausgeblendet"
+      "stop": "Stoppen",
+      "delete": "Löschen",
+      "run": "Starten",
+      "started": "{{name}} gestartet",
+      "stopTitle": "„{{name}}“ stoppen?",
+      "stopBody": "Beendet nur den aktuellen Lauf. Die Aufgabe startet wieder nach ihrem Zeitplan.",
+      "deleteTitle": "„{{name}}“ löschen?",
+      "deleteBody": "Entfernt diese geplante Aufgabe dauerhaft von diesem Rechner, sodass sie nicht mehr automatisch startet. Aufgabeneinträge in Cindy bleiben unberührt.",
+      "stopped": "{{name}} gestoppt",
+      "deleted": "{{name}} gelöscht",
+      "actionFailed": "Aktion fehlgeschlagen. Versuche es erneut.",
+      "unrelated_one": "{{count}} nicht zugehöriges Hintergrundelement ist ausgeblendet",
+      "unrelated_other": "{{count}} nicht zugehörige Hintergrundelemente sind ausgeblendet"
     }
   },
   "update": {
