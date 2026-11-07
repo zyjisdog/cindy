@@ -15,12 +15,19 @@
  * active-catalog 合并,是路由/能力派生的输入,MCP create_worker / scheduler 等
  * 无窗口路径也要一致生效,真源必须 main 可靠可读。
  *
- * 设置页只写明确选择的能力字段；其它覆盖与隔离中的条目原样保留。
+ * 写入面：设置页只写明确选择的能力字段，其它覆盖与隔离中的条目原样保留。本机声明面
+ * 开「模型级图片输入能力」(setModelCatalogImageInput)与「模型级思考档位」
+ * (setModelCatalogThinking)两组字段——「未声明」与「声明错误」都是真实状态，用户必须
+ * 能自己显式声明(见 model-metadata-precedence.md 的字段继承与用户显式覆盖)。仍然
+ * **不开通用 patch 写入口**：那会让任意目录字段可从 renderer 改写，超出当前需求；价格、
+ * defaultEnabled、routing 依旧不在此列。用户仍可直接手改文件；坏 JSON/超限文件原样保留，
+ * 修正后下一次同步自动恢复。
  */
+
+import fs from 'node:fs';
 
 import { desktopMakerLogger } from './logger-adapter.js';
 import { createOverrideSettingsFile, portableOverrideSettings } from './override-settings-file.js';
-import fs from 'node:fs';
 import {
   EMPTY_MODEL_CATALOG_OVERRIDES,
   MAX_OVERRIDE_ENTRIES_PER_SECTION,
@@ -28,15 +35,23 @@ import {
   type ModelCatalogOverrideEntry,
   type ModelCatalogOverrides,
 } from './model-plane/localCatalogOverrides.js';
+import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
 import type { AgentKind, Effort } from '@cindy/model-providers';
 import type { ModelCatalogThinkingView } from '../../shared/modelCatalogThinking.js';
-import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
 import type { ModelPriceOverrideTarget } from '../../shared/modelPriceOverride.js';
 
 const log = desktopMakerLogger.child('model-catalog-overrides');
 
 /** main 同步读取的硬上限；目录 override 正常只有数 KB。 */
 export const MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES = 1_048_576;
+
+/**
+ * 写入会丢掉手改条目时抛出（写在锁内、不落盘）。用独立类型而不是普通 Error，
+ * 让 IPC 层能把它映射成可执行的 PRECONDITION_FAILED（带指引），而不是笼统的 INTERNAL。
+ */
+export class ModelCatalogOverrideLossError extends Error {
+  override readonly name = 'ModelCatalogOverrideLossError';
+}
 
 function normalize(raw: unknown): ModelCatalogOverrides {
   const { overrides, invalid } = sanitizeModelCatalogOverrides(raw);
@@ -49,9 +64,6 @@ function normalize(raw: unknown): ModelCatalogOverrides {
   return overrides;
 }
 
-export class ModelCatalogOverrideLossError extends Error {
-  override readonly name = 'ModelCatalogOverrideLossError';
-}
 function createStore(filePath: () => string, scopeKey?: () => string) {
   return createOverrideSettingsFile<ModelCatalogOverrides>({
     filePath,
@@ -184,6 +196,12 @@ export async function writeModelImageInputOverride(
   }
 }
 
+/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
+export const modelCatalogOverridePortableSettings = portableOverrideSettings(store, {
+  optionalKeys: ['baseModels', 'localModels'],
+});
+
+/** 模型级图片输入能力的 override 目标。agent 只影响读取时的有效值(base + perAgent 合并)。 */
 export interface ModelCatalogImageInputTarget {
   providerId: string;
   modelId: string;
@@ -210,7 +228,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** patch 条目的键格式，与 sanitize/合并侧保持一致。 */
-
 function patchKey(providerId: string, modelId: string): string {
   return `${encodeURIComponent(providerId)}:${modelId}`;
 }
@@ -272,7 +289,6 @@ function widenAgentsForDeclaredTargets(
 }
 
 /** 从条目里拿指定 agent 的有效图片能力声明（perAgent 覆盖 base，与合并侧一致）。 */
-
 function effectiveImageInput(
   entry: ModelCatalogOverrideEntry | undefined,
   agent: AgentKind | undefined,
@@ -293,7 +309,6 @@ function effectiveImageInput(
  * perAgent 里残留的 supportsImageInput 会遮蔽 base（导致 UI 显示与运行期不一致），连同
  * 本次写入一起清掉；条目里其它字段与其它条目原样保留。
  */
-
 export async function setModelCatalogImageInput(
   target: ModelCatalogImageInputTarget | readonly ModelCatalogImageInputTarget[],
   value: boolean | null,
@@ -360,7 +375,6 @@ function assertPatchCountWithinLimit(patches: Record<string, ModelCatalogOverrid
  * 「显式声明了一个刚好等于目录的值」—— 只报 value 会让「恢复跟随供应商」无从表达。
  * 给了 agent 就按合并语义算有效值(base + perAgent[agent])，否则只看 base。
  */
-
 export function readModelCatalogImageInput(target: ModelCatalogImageInputTarget): {
   value: boolean | null;
   isCustomized: boolean;
@@ -373,7 +387,6 @@ export function readModelCatalogImageInput(target: ModelCatalogImageInputTarget)
 
 
 /** 从条目里拿指定 agent 的有效思考档位声明（perAgent 覆盖 base，与合并侧一致）。 */
-
 function effectiveThinking(
   entry: ModelCatalogOverrideEntry | undefined,
   agent: AgentKind | undefined,
@@ -511,8 +524,3 @@ export function readModelCatalogThinkingDivergence(
     ),
   };
 }
-
-/** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
-export const modelCatalogOverridePortableSettings = portableOverrideSettings(store, {
-  optionalKeys: ['baseModels', 'localModels'],
-});

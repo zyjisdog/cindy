@@ -34,11 +34,11 @@ import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuCheckboxItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu';
 import { MODEL_HARNESS_COLOR } from '@/lib/modelHarnessPresentation';
 import { ModelCompatibilityNotice } from '@/components/new-chat/ModelCompatibilityNotice';
@@ -51,8 +51,8 @@ import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
 import { useModelContextLimit } from '@/hooks/useModelContextLimit';
 import { useModelImageInputOverride } from '@/hooks/useModelImageInputOverride';
-import { useModelCatalogThinking } from '@/hooks/useModelCatalogThinking';
 import { parseContextTokenInput } from '../../../shared/modelContextLimit';
+import { useModelCatalogThinking } from '@/hooks/useModelCatalogThinking';
 import { ModelCompactionSettings } from './ModelCompactionSettings';
 import { modelPriceDetailRows, type ModelPricePresentation } from '@/lib/modelPriceFormat';
 import {
@@ -307,8 +307,9 @@ export function ModelAdvancedDrawer({
     [contextAgent, contextModel, provider.id, row, chatAgents],
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
-  const imageInputOverride = useModelImageInputOverride(open ? contextTarget : null);
-
+  // 思考档位的本地声明。目标形状与上下文上限同一个 contextTarget：必须覆盖该行全部引擎
+  // 的 id —— 运行期真正消费 thinking 档位的是 Pi，桥接投影两端 id 不同，只写主展示引擎
+  // 会让声明对运行期无效、UI 却显示「已声明」。
   const thinking = useModelCatalogThinking(open ? contextTarget : null);
   /**
    * 档位组合用固定候选（与目录 Effort 全集同序）而不是自由输入：组合爆炸（2^7）无法
@@ -343,6 +344,7 @@ export function ModelAdvancedDrawer({
       );
     }
   };
+  const imageInputOverride = useModelImageInputOverride(open ? contextTarget : null);
   const canEditProtocol = provider.source === 'user' && !provider.auth?.native && !isManagedSidecarProviderId(provider.id);
   const imageAgents = canEditProtocol
     ? provider.agents.filter(agent => provider.routing?.[agent]?.imageApi === 'openai-images')
@@ -424,6 +426,14 @@ export function ModelAdvancedDrawer({
 
 
   const [ctxDraft, setCtxDraft] = useState('');
+  // 提交后写入是异步的：hook 先置 loading、等 IPC 回声才落新值。若提交瞬间就丢掉草稿，
+  // 说明行会先退回**旧的** effectiveLimit、回声到了再跳新值 —— 用户实测到的「闪一下旧值」。
+  // 这里把「提交在途」也当成还在编辑：显示值继续取草稿，直到写入收口。
+  const [ctxCommitting, setCtxCommitting] = useState(false);
+  // 提交代次：目标（模型/agent/provider）一变或又一次提交开始，旧提交的 finally 就不许再
+  // 清掉新的 committing 状态 —— 否则 A 写未完成时切到 B 并提交，A 完成会把 B 的「提交在途」
+  // 提前收掉，B 在写入期间重新显示旧的 effectiveLimit（本次修改要消除的闪回原地复活）。
+  const ctxCommitGen = useRef(0);
   const ctxDirtyRef = useRef(false);
   const defaultWindow =
     contextAgent === 'codex' && ctx.codexContext
@@ -452,6 +462,8 @@ export function ModelAdvancedDrawer({
   const effectiveLimit = ctx.limit ?? (defaultWindow > 0 ? defaultWindow : null);
   useEffect(() => {
     ctxDirtyRef.current = false;
+    ctxCommitGen.current += 1;
+    setCtxCommitting(false);
     setCtxDraft('');
   }, [open, primaryAgent, primaryModel?.id, provider.id]);
   useEffect(() => {
@@ -468,7 +480,14 @@ export function ModelAdvancedDrawer({
   const commitCtxDraft = useCallback(() => {
     if (!ctxDirtyRef.current || ctxInvalid || ctx.loading || localConfigurationBlocked) return;
     ctxDirtyRef.current = false;
-    void ctx.setLimit(ctxDraft.trim() === '' ? null : parsedTokens);
+    // 提交在途期间锁住 displayedLimit：hook 的 promise 在它把新值（或失败回滚后的值）
+    // 写进 state 之后才 resolve，不锁会闪回一帧旧值。仅当没有更新的提交/重置发生时
+    // 才清状态（ctxCommitGen 递增即代表有更新的那次）。
+    const generation = (ctxCommitGen.current += 1);
+    setCtxCommitting(true);
+    void Promise.resolve(ctx.setLimit(ctxDraft.trim() === '' ? null : parsedTokens)).finally(() => {
+      if (ctxCommitGen.current === generation) setCtxCommitting(false);
+    });
   }, [ctx, ctxDraft, ctxInvalid, parsedTokens, localConfigurationBlocked]);
   const resetCtx = useCallback(() => {
     if (localConfigurationBlocked) return;
@@ -486,9 +505,11 @@ export function ModelAdvancedDrawer({
   }
 
   const capabilityModel = primaryModel.mode === 'video_generation' ? videoModel ?? primaryModel : imageModel ?? videoModel ?? primaryModel;
-  const vision = imageModel?.modalities
-    ? imageModel.modalities.input.includes('image') ? 'vision' : 'no-vision'
-    : primaryModel.supportsImageInput !== undefined
+  // 本行的能力事实必须属于**被编辑的那个模型**：图片输入控件把声明写到该行选中模型的
+  // override，图标/文案却显示图片/视频生成模型（上游 capabilityModel）会变成「编辑 A 却
+  // 显示 B」。生成模型的能力展示由上游新增的图片/视频能力行与 modalities 行承担。
+  const vision =
+    primaryModel.supportsImageInput !== undefined
       ? primaryModel.supportsImageInput
         ? 'vision'
         : 'no-vision'
@@ -552,12 +573,22 @@ export function ModelAdvancedDrawer({
   const protocols = modelProtocolComparison(provider, row.byAgent);
   const protocolLabel = (api: PiModelApi | null) =>
     api ? MODEL_PROTOCOL_LABEL[api] ?? null : t('settings.providers.models.advanced.undeclared');
-  const displayedLimit = ctxDirtyRef.current
+  const displayedLimit = ctxDirtyRef.current || ctxCommitting
     ? ctxDraft.trim() === ''
       ? defaultWindow
       : parsedTokens
     : effectiveLimit;
-  const editRouteWindow = routeWindow;
+  // 只有「上游声明的容量」比它小时才该告警；未声明容量时拿工作默认值当窗口会误报
+  // （自定义连接上 200K 只是兜底，不是任何人的声明）。来源与上方「上游最大上下文」同一套：
+  // contextWindowMax → 已验证的 contextWindow → 未声明，否则「已验证窗口但无 max」的模型
+  // 把限制填到窗口以上也不会告警。
+  const editCapacity = contextModel?.contextWindowMax ?? 0;
+  const editRouteWindow =
+    editCapacity > 0
+      ? editCapacity
+      : contextModel?.contextWindowVerified === true
+        ? (contextModel.contextWindow ?? 0)
+        : 0;
   const overRouteWindow =
     editRouteWindow > 0 &&
     displayedLimit !== null &&
@@ -1246,6 +1277,11 @@ export function ModelAdvancedDrawer({
                         />
                       </span>}
                     </Row>
+                    {imageInputOverride.error && (
+                      <p role="alert" className="text-12 leading-5 text-[var(--error-fg)]">
+                        {t('settings.providers.custom.toast.saveFailed')}
+                      </p>
+                    )}
                     <Row label={t('settings.providers.models.advanced.thinking')}>
                       {/*
                         思考档位三态声明：目录说「不支持思考」时，Pi 客户端就没有 thinking
@@ -1269,6 +1305,9 @@ export function ModelAdvancedDrawer({
                               isOrganizationManagedProvider(provider)
                             }
                             aria-label={t('settings.providers.models.advanced.thinkingOverride.label')}
+                            // 下拉触发器是动作入口（档位勾选项才是设置本体）：登记操作说明，
+                            // 让设置搜索能解释这个控件，而不是把它当设置控件本身。
+                            data-settings-search-action="Declare the thinking tiers for this model"
                             title={
                               (primaryModel.efforts?.length ?? 0) > 0
                                 ? t('settings.providers.models.advanced.catalogCapabilities')
@@ -1326,12 +1365,6 @@ export function ModelAdvancedDrawer({
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </Row>
-
-                    {imageInputOverride.error && (
-                      <p role="alert" className="text-12 leading-5 text-[var(--error-fg)]">
-                        {t('settings.providers.custom.toast.saveFailed')}
-                      </p>
-                    )}
                     {capabilityModel.modalities &&
                       (['input', 'output'] as const).map((direction) => (
                         <Row

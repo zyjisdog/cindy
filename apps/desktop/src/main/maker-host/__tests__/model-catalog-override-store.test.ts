@@ -27,8 +27,8 @@ vi.mock('../../appSessionState.js', () => ({
 
 const {
   MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES,
-  modelCatalogOverridePortableSettings,
   ModelCatalogOverrideLossError,
+  modelCatalogOverridePortableSettings,
   readModelCatalogOverrides,
   readModelCatalogImageInput,
   setModelCatalogImageInput,
