@@ -55,15 +55,21 @@ export function useModelCatalogThinking(target: ModelCatalogThinkingTarget | nul
   /** 当前渲染周期的 target key 与 run：写入落定时用它判断「用户是否已经切回/切走」。 */
   const latestKey = useRef(key);
   latestKey.current = key;
-  const latestRun = useRef<(write?: WriteShape) => Promise<boolean>>(async () => true);
+  const latestRun = useRef<(write?: WriteShape) => Promise<RunResult>>(async () => ({ ok: true }));
 
   type WriteShape = { tiers: string[] | null; defaultTier: string | null };
+  /**
+   * 写入结果：`ok` 之外带本次失败原因。失败原因必须随返回值走而不是让调用方读
+   * state —— state 是渲染时快照，失败回调里读到的可能是发起保存前的旧值，
+   * 导致首次失败显示通用文案、二次失败显示上一次的原因（Greptile P2）。
+   */
+  type RunResult = { ok: boolean; reason?: string };
 
   const run = useCallback(
-    async (write?: WriteShape): Promise<boolean> => {
+    async (write?: WriteShape): Promise<RunResult> => {
       // 写在途时不发 GET：广播（含本次写入自己触发的那次）可能在写盘前到达，其结果比写入的
       // 回声旧，却会顶掉 generation 使写入结果被丢弃 —— UI 会停在旧值而写其实已经成功。
-      if (!write && writesInFlight.current > 0 && writesInFlightKey.current === key) return true;
+      if (!write && writesInFlight.current > 0 && writesInFlightKey.current === key) return { ok: true };
       const request = ++generation.current;
       if (!stableTarget) {
         setState({
@@ -75,7 +81,7 @@ export function useModelCatalogThinking(target: ModelCatalogThinkingTarget | nul
           error: false,
           errorReason: undefined,
         });
-        return false;
+        return { ok: false };
       }
       const owner = getDataOwnerGeneration();
       const current = () => request === generation.current && isDataOwnerGenerationCurrent(owner);
@@ -130,7 +136,7 @@ export function useModelCatalogThinking(target: ModelCatalogThinkingTarget | nul
             errorReason: undefined,
           });
         }
-        return true;
+        return { ok: true };
       } catch (error) {
         log.warn('model catalog thinking request failed', error);
         const reason = toDisplayReason(error);
@@ -151,7 +157,7 @@ export function useModelCatalogThinking(target: ModelCatalogThinkingTarget | nul
                 errorReason: reason,
               });
             }
-            return false;
+            return { ok: false, reason };
           } catch (readError) {
             log.warn('model catalog thinking recovery read failed', readError);
           }
@@ -168,7 +174,7 @@ export function useModelCatalogThinking(target: ModelCatalogThinkingTarget | nul
             errorReason: reason,
           });
         }
-        return false;
+        return { ok: false, reason };
       } finally {
         if (write) {
           writesInFlight.current -= 1;
