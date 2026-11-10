@@ -103,13 +103,34 @@
  * 这时把主 shadow 的路径挂上(那一段的正文在里面)—— 上游的指针指向会话事件号,DSH 随时能回查,
  * 本仓的指针指向本地文件,核不上就真的没了下文。
  *
- * 与上游 1.1.0 行为一致、但和上游文档各说各话的两点(已向上游提问,未单方面改):
+ * 与上游 1.1.0 行为一致、但和上游文档各说各话的两点(2026-11-07 上游已裁决,本仓照旧不改):
  *   - 上游 README 说「同一次收尾可以连切」;1.1.0 把卡片当地板之后,普通切法的第一刀落在
  *     保留区前面,卡片正好贴着保留区,第二刀算出的切点就是这张卡片本身,于是本次收尾只切一刀
  *     (上游代码同理)。长 read / 指针刀落在历史中间时,卡片右边还有一段,收尾能接着切。
+ *     上游答复:看到的「多刀」是记账把「只落卡没切内容」也算成了 cut,不是插件连切。
  *   - 1.1.1 说「长 read 这一轮切不下来,才按原来的规则切更早的轮」;但卡片贴着保留区时,
  *     保留区分支先按地板返回 null,长 read 那一轮(在卡片右边、比保留区新)根本没被试切。
- *     本仓逐字复刻这两处,等上游裁决后再决定改不改。
+ *     上游答复:卡片是硬边界,切点跨卡片等于在前缀缓存里插刀,宁可少切一刀;长 read 不会
+ *     永久饿死 —— 保留区窗口跟着尾巴走,下一轮它落到窗口左侧就成了卡片右侧的可切候选,
+ *     代价是延后一轮而不是丢失。所以本仓逐字复刻这两处,并按上游建议在 longSpan 处写明
+ *     「切点落在卡片上就放弃这一刀」是有意为之,免得以后被当 bug 改掉。
+ *   - 上游同时撤回了两条建议:`longSpan` 加 `end > floorCard` 是无效条件(实测长 read 轮是
+ *     连续段,start > floorCard 恒有 end > floorCard);`cutCrossesNewerCheckpoint` 扩成
+ *     `[start..end]` 是冗余防御(不跨卡片在选段阶段就已成立),签名保持与 1.1.0 一致。
+ *
+ * 1.1.3(上游 2026-11-09 发布)只改了一处运行时行为,其余是 README、幻灯片与版本号:
+ *   - 上游修 issue #34:长会话在「工具结果提交处」整个 harness 冻结。根因是 DSH 在
+ *     `session/event` 处理器里同步做 shadow/ACL 文件操作,模型拿工具结果时被磁盘操作卡住。
+ *     改法是把捕获推到事件循环之后(setImmediate 队列 + 按 toolCallId 去重),维护开始前
+ *     等队列排空,`captureNew` 继续负责补抓与重试;权限失败仍只拒绝备份,不 fatal 宿主。
+ *   - 本仓没有这条路径可改:pi 扩展只有 `agent_before_settle` 一个钩子,工具结果不触发任何
+ *     写盘 —— 原文快照是「切割被接受时才写」(懒执行),写盘发生在整轮跑完之后的 settle 里,
+ *     模型拿工具结果时不会被磁盘操作卡住,没有可推迟的捕获。
+ *   - 与之相关的两点本就等价:原文快照按 toolCallId 幂等(同一结果事件重复到达不会重复写);
+ *     维护/轮换之前快照必然已写完(它就在同一刀里写,写成功才发卡片),没有待排队的捕获。
+ *   - 重启回填仍是 1.1.0 第 3 条那处偏差:上游靠 `captureNew` 补抓,本仓每个 settle 都给
+ *     全量消息,原文快照幂等,没有需要补抓的缺口。
+ *   - 1.1.3 没有改任何阈值或选段逻辑(上游 diff 只碰了事件捕获、测试、文档与版本号)。
  * 收尾的选段几何与上游一致:上游的卡片是原地替换(surfaceOp replace),所以卡片左边是已进缓存
  * 的前缀(不能切),卡片右边、保留区之前还能切。本仓的卡片实际落在尾巴上(pi 的 custom_message
  * 只能追加),但收尾内部选段时把卡片放回被切掉那一段的位置 —— 否则新卡片当地板会把整段历史
@@ -160,10 +181,12 @@
  *     这一刀 —— 已经删成功的旧备份回不来,拒绝只会白删。
  *   - 被拒的一刀会撤掉本次刚落盘、无卡片引用的 `raw-*.txt` 与其 meta —— 原文写入不走容量轮换,
  *     不清理会一轮轮堆积突破单会话上限。
- * 脱敏规则与上游的分道:上游只枚举少数键名,本仓键名规则按「类」匹配(大写下划线标识符以
- * KEY/TOKEN/SECRET/PASSWORD/PASSWD/PASSPHRASE/CREDENTIAL(S)/AUTH 结尾即命中,MONKEY/TURKEY/HOCKEY/
- * WHISKEY/JOKEY 用 stoplist 挡;camel/小写保留小显式列表),并补齐认证头、npm_ 前缀等
- * blob 形态 —— 严格强于上游,是十多轮安全 review 逼出来的收敛(语料在 live-compact.test.mjs)。
+ * 不做运行时密钥打码(与上游一致):密钥在工具结果进入上下文的那一刻就已经发给当时所选的
+ * provider,客户端侧打码无法撤销首次暴露;同一 provider 下重复发送没有实质保密差别。影子备份
+ * 与原文快照是本机同账号磁盘上的恢复副本,与 pi 会话文件里的明文同级,不是新增暴露面 —— 打码
+ * 只会腐蚀备份(恢复时拿回 [REDACTED],「完整备份」名不副实)。磁盘侧保护走文件权限(0600)、
+ * 用户 profile ACL 与 7 天回收;模型需要原文时按指针从快照取回(用户可见、可审计)。此前各轮
+ * 打码修复在旧威胁模型下是对的,撤销它是威胁模型重新归位,不是回退。
  * Logging: stderr lines prefixed "[pi-live-compact]" (grep "spine cut"), plus an
  * append-only spine.log next to the shadow directory for test verification.
  */
@@ -1643,90 +1666,6 @@ function estimateTokens(message: any): number {
   return base + Math.ceil(cjk * (2 / 3 - 1 / 4));
 }
 
-// shadow 会落盘成 .txt,而 toolResult 里可能含 `export KEY=sk-...` 这类命令;
-// 写入前对常见凭证形态打码 —— 卡片里的路径是给模型 read 的,读到打码版比读到明文密钥安全。
-const REDACT_RULES: Array<[RegExp, string]> = [
-  // PEM 私钥整块必须**排在最前**:键名规则会把 `private_key="-----BEGIN` 先换成 `[REDACTED]`,
-  // 之后整块规则就认不出开始标记,密钥正文会原样留下。先按块整体吃掉,再让键名规则收尾。
-  // 段的长度不能设上界:8192 的封顶会让大体积块(如 RSA-16384 约 10.9K 正文)整块规则
-  // 认不到终结符,半块规则只吃掉前 8192 个字符,剩下的密钥正文和 END 原样落盘(实测:
-  // 10000 字正文残留 1861 字)。线性度靠的是正文类不收 `-`:无终结符的 BEGIN 后面紧跟
-  // 另一个 BEGIN 时,类在 `-` 处立刻断住,不会每个标记都重扫到文末。
-  // `\\` 必须在类里:工具调用参数是 JSON.stringify 后的字符串,多行私钥里的换行变成
-  // 了字面量 `\n` 两个字符 —— 不许反斜杠的话整块规则认不到终结符,下面那条半块规则
-  // 只能吃掉 BEGIN 标记,私钥正文和 END 会原样写进影子文件(实测)。
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\r?\n(?:Proc-Type|DEK-Info):[^\r\n]*)*\r?\n?[A-Za-z0-9+/=:,\s\\]*?-----END [A-Z ]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]"],
-  // 只留开始标记(输出被截断)的那半块同样是密钥正文:上一条只吃有终结符的块,这里把没等到
-  // 终结符的半块一并打掉 —— 否则截断得越巧,密钥越完整地留在备份里。贪心吃完整段
-  // base64/空白(无上界),所以超大块与截断块都不会只打一半。
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\r?\n(?:Proc-Type|DEK-Info):[^\r\n]*)*\r?\n?[A-Za-z0-9+/=:,\s\\]+/g, "[REDACTED PRIVATE KEY]"],
-  // HTTP 认证头要先单独处理:`Authorization: Basic dXNlcjpwYXNz` 的值不是"键名=值"形态,
-  // 键名规则只认到方案名(不足 8 字),base64 里的可复用凭证会原样留下。Bearer 仍由下面那条兜。
-  // 冒号后可能是引号(JSON `{"Authorization":"Basic …"}`),方案后面也可能是 Digest 那种
-  // `username="…", response="…"` 参数串 —— 两种形态各一条规则。
-  [/((?:proxy-)?authorization["'`]?\s*[=:]\s*["'`]?(?:digest|negotiate)\s+)(?!\[REDACTED)[^\r\n]*/gi, "$1[REDACTED]"],
-  [/((?:proxy-)?authorization["'`]?\s*[=:]\s*["'`]?(?:basic|token)\s+)(?!\[REDACTED)[A-Za-z0-9+/=._~-]{8,}/gi, "$1[REDACTED]"],
-  // 键名规则按「类」匹配,不再枚举厂商:十多轮 review 的漏点全是同一种形态 ——
-  // `AWS_SESSION_TOKEN=`、`NPM_TOKEN=`、`STRIPE_SECRET_KEY=` 这类「下划线大写 + 敏感后缀」。
-  // 大写下划线键名(env/配置的通用写法)只要以 KEY/TOKEN/SECRET/... 结尾就命中;
-  // MONKEY/TURKEY/HOCKEY/WHISKEY/JOKEY 这类以 KEY 结尾的普通词用小 stoplist 挡掉。
-  // 「MAX_TOKENS」「MODEL_TOKEN_LIMIT」这类不以后缀结尾的不受影响(后缀后必须紧跟引号?/=/:)。
-  // 开头的 (?<![A-Z0-9_]) 是性能红线:没有它,连续大写/数字段会从每个位置重扫,
-  // 128K 字符要 25 秒(实测);有它只从标识符起点尝试,同样输入 <1ms。redactSecrets
-  // 跑在同步的 agent_before_settle 钩子里,卡住就是卡住整个 settle。
-  [/((?<![A-Z0-9_])[_A-Z0-9]*(?:KEY|TOKEN|SECRET|PASSWD|PASSWORD|PASSPHRASE|CREDENTIALS?|AUTH)(?<!MONKEY)(?<!TURKEY)(?<!HOCKEY)(?<!WHISKEY)(?<!JOKEY)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/g, "$1$2[REDACTED]"],
-  // 小写/驼峰/连字符键名没有统一后缀(apiKey、refresh-token),保留显式小列表。
-  // 值里允许 `[`(密码可能含方括号),只豁免「已经是替换标记」的情况,否则会把标记再啃一口。
-  [/((?:api[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|session[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|secret[_-]?key|private[_-]?key|password|passwd|secret)["'`]?\s*[=:]\s*)(["'`]?)(?!\[REDACTED)([^\s"'`]{8,})/gi, "$1$2[REDACTED]"],
-  // RFC 6750 的 b64token 还允许 `~ + /` 和结尾的 `=`:只认 `._-` 时,以 `/` 或 `+` 开头的
-  // base64 凭证第一个字符就被排除,整条 token 原样留下。
-  [/(?<![A-Za-z0-9])Bearer\s+[A-Za-z0-9._~+/-]{16,}={0,2}/gi, "Bearer [REDACTED]"],
-  [/(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}/g, "[REDACTED]"],
-  // Stripe 形态是 `sk_live_...` / `rk_test_...`:前缀分段,上一条的 `sk-` 匹配不到。
-  [/(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}/g, "[REDACTED]"],
-  // GitHub:传统 PAT 是 gh[pousr]_,细粒度 PAT 是 github_pat_ 前缀(长度不固定)。
-  // GitLab 的 PAT 是 glpat- 前缀,常挂在 `PRIVATE-TOKEN:` 或小写 token 字段上 ——
-  // 没有大写下划线键名可依,只能按前缀认。
-  [/(?<![A-Za-z0-9])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{22,}|glpat-[A-Za-z0-9_-]{20,}|xox[abps]-[A-Za-z0-9-]{10,})/g, "[REDACTED]"],
-  // npm 的 registry 令牌是 `npm_` + 随机串;`.npmrc` 的 `_authToken=` 由上面的键名规则覆盖。
-  [/(?<![A-Za-z0-9])npm_[A-Za-z0-9]{16,}/g, "[REDACTED]"],
-  // 厂商固定前缀凭证:AWS AK/ASIA、Google AIza、Stripe 的 live 前缀。
-  [/(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}/g, "[REDACTED]"],
-  // 厂商前缀表(按 gitleaks / secrets-patterns 的公开前缀补齐)。前缀是确定字符串,
-  // 与熵检测的区别就在这里:不靠「看着像随机串」判断,不会误伤 sha256 / base64 / 内容 ID,
-  // 也不会误伤本来就是公开值的东西(ssh 公钥 `ssh-ed25519 AAAA…`、Mapbox `pk.` 公钥)。
-  // 漏掉的都是具体厂商:靠一篇一篇 review 补一个前缀永远追不上,所以按表一次补齐。
-  [/(?<![A-Za-z0-9])gl(?:pat|rt|dt|soat|cbt|ptt|ft|imt|agent)-[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])hf_[A-Za-z0-9]{30,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])dckr_pat_[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])pypi-AgEIcHlwa[A-Za-z0-9_-]{10,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])(?:sbp|vercel|ddapi|ddapp|lin_api)_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])(?:shpat|shpca|shppa|shpss)_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])do[or]_v1_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{30,}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])atlasv1\.[A-Za-z0-9_-]{20,}/g, "[REDACTED]"],
-  // Mailgun 的 `key-<32 位十六进制>`:限定长度,不误伤 `key-value` 这类普通标识。
-  [/(?<![A-Za-z0-9])key-[0-9a-f]{32}(?![0-9a-f])/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])NRAK-[A-Z0-9]{27}/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])xapp-[0-9]+-[A-Z0-9]+-[0-9]+-[a-z0-9]+/g, "[REDACTED]"],
-  [/(?<![A-Za-z0-9])whsec_[A-Za-z0-9]{20,}/g, "[REDACTED]"],
-  // JWT:三段都带固定头部形状,宽松的 base64 不会命中。
-  // 起始边界必须与正文字符类一致(`-`/`_` 也要排除):类里包含 `-` 时,`eyJabcdefghijk-`
-  // 这种重复前缀以前会让每个 `eyJ` 都把剩余全文吃完再回溯找 `.`(240K 实测 5.7 秒,
-  // 卡在同步的 settle 钩子里)。段长**不设上界** —— 上界会让长载荷 JWT 整条漏掉打码;
-  // 载荷下限也不能高:`{}` 的紧凑形式是 `e30`,只有 3 个字符。
-  [/(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]+/g, "[REDACTED]"],
-  // 连接串里内嵌的密码:postgres://user:pass@host → 只打码密码段。
-  // 起始边界同样是性能红线:没有它,/i 下连续 [a-z0-9+.-] 类字符段(含大写)会从每个
-  // 起点贪吃再逐位回溯,128K 要 17 秒(实测);有它每个 scheme 起点只试一次。
-  [/((?<![A-Za-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/[^:/\s@]+:)([^@\s/]{4,})(@)/gi, "$1[REDACTED]$3"],
-];
-export function redactSecrets(text: string): string {
-  let out = text;
-  for (const [pattern, replacement] of REDACT_RULES) out = out.replace(pattern, replacement);
-  return out;
-}
 
 // shadow 是本地恢复用的完整副本,调用参数(命令、路径、写入内容)必须留下。
 function messageShadowText(message: any): string {
@@ -2362,7 +2301,7 @@ interface RawRecord {
   toolCallId: string;
   label?: string;
   reason?: string;
-  /** 已规划但还没落盘的正文(已脱敏);切割被接受后才写。 */
+  /** 已规划但还没落盘的正文;切割被接受后才写。 */
   body?: string;
   pending?: boolean;
 }
@@ -2442,7 +2381,7 @@ export function captureToolResult(options: {
 
 /**
  * 只算「要不要写、写什么」,不碰磁盘:卡片构期就能拿到指针,被拒的切割不留文件。
- * 写盘前统一脉敏(与卡片、汇总备份同一套规则),哈希算在真正落盘的字节上。
+ * 写的是工具结果原文(不做打码,理由见文件头),哈希算在真正落盘的字节上。
  */
 export function planRawEntry(options: {
   dir: string;
@@ -2458,7 +2397,7 @@ export function planRawEntry(options: {
   const file = join(dir, rawName(toolCallId));
   if (existsSync(file)) return readExistingRaw(file, toolCallId);
   if (surfaceText.includes(PRUNE_MARKER)) return { ok: false, reason: "already-pruned", toolCallId };
-  const body = redactSecrets(surfaceText);
+  const body = surfaceText;
   const bytes = Buffer.from(body, "utf8");
   return {
     ok: true,
@@ -2677,6 +2616,10 @@ export function selectNewestChunk(
     }
     if (floorCard >= 0 && end <= floorCard) return warn(`cut end ${end} below checkpoint floor=${floorCard}`);
   }
+  // 长 read 轮只在自己这一轮里切一刀,且必须在卡片右侧(`newestLong.start > floorCard` 是硬条件)。
+  // 切点落到卡片上时直接返回是有意为之,不是 bug:宁可少切一刀也不跨卡片(跨卡片等于在摘要与
+  // 新内容之间插刀,前缀缓存直接报废)。卡片右边那一轮长 read 这一轮切不到也不要紧 —— 保留区窗口
+  // 跟着尾巴走,下一轮这个长 read 落到窗口左侧,它就成了卡片右侧的可切候选:延后一轮,不是丢失。
   const longSpan = newestLong && newestLong.start > floorCard ? { start: newestLong.start, end: newestLong.end } : null;
   if (!longSpan && (end < first || isCheckpoint(entries[end]))) {
     return warn(`end<first or checkpoint (tail all shortTail/checkpoint)`);
@@ -3026,17 +2969,15 @@ function attemptCut(options: {
     const spanEntries = entries.slice(chunk.start, chunk.end + 1);
     const shadow = shadowDirectory(state.key);
     // 备份带角色标记与思考原文(1.0.3),工具调用参数也留着供本地恢复。
-    const body = redactSecrets(spanEntries.map((entry) => shadowSections(entry)).join("\n\n"));
+    const body = spanEntries.map((entry) => shadowSections(entry)).join("\n\n");
     const file = join(shadow, shadowName(state.key));
 
-    // 卡片正文会一直留在上下文里(小工具结果是整段原样进卡片),脱敏必须在这一侧也做。
     // 卡片只写调用名与命令(callCommand 拿不到 command 时退化成工具名),write/edit 这类
     // 带路径与正文的调用切走后参数就没了下文 —— 让这类 span 也给出备份指针,否则后续轮次
     // 看不到写入目标/内容,可能重复执行副作用。
     const hiddenCallArgs = spanHidesCallArgs(spanEntries);
-    const redacted = { ...chunk.card, needsBackup: chunk.card.needsBackup || hiddenCallArgs, text: redactSecrets(chunk.card.text) };
     // 1.0.6: 切范围内存在被修剪过的工具结果时,不宣称「有完整备份」。
-    const card = withBackupHint(redacted, file, backupClaimOk(spanEntries));
+    const card = withBackupHint({ ...chunk.card, needsBackup: chunk.card.needsBackup || hiddenCallArgs }, file, backupClaimOk(spanEntries));
     // 1.0.8: 卡片不再用官方摘要标记,改成自己的正文开头(原仓 SPINE_SOURCE_KIND 的对应物)。
     const content = [{ type: "text", text: `${CHECKPOINT_PREAMBLE}\n\n${MARK}` }, { type: "text", text: card.text }];
     const framedTokens = estimateTokens({ role: "user", content, timestamp: Date.now() });
