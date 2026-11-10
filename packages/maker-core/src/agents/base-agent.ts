@@ -1439,6 +1439,12 @@ export interface AgentDeps {
       catalogModel: string;
       reasoningEffort?: ReasoningEffort | null;
     }>;
+    /**
+     * 本任务当前的思维深度。只在带了智能子代理路由时附上。
+     * 冷恢复登记路由时，session effort store 往往还没从数据库 hydrate；
+     * 空字符串是「这个模型不用推理」的哨兵，不得改成目录默认。
+     */
+    reasoningEffort?: Effort | '';
   }) => void;
 
   /** Desktop proxy observation of the model actually sent for one Codex child thread. */
@@ -2305,7 +2311,7 @@ export type TurnPermissionOrigin =
   | { kind: 'desktop' }
   | {
       kind: 'im';
-      channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom';
+      channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom' | 'imessage';
       taskId?: string;
     }
   | { kind: 'scheduler' }
