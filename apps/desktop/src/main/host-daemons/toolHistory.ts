@@ -13,14 +13,26 @@ import { getDbClient } from '../localDb/client/current';
 import { messages, sessions } from '../localDb/schema';
 import type { ToolMessageRow } from './attribution.js';
 
-/** 单个窗口最多取多少行。超出时按时间先后截断（命令通常在窗口前段）。 */
+/** 单个窗口最多取多少行（超出时按时间先后截断，并回报 `truncated`）。 */
 export const TOOL_MESSAGE_WINDOW_LIMIT = 300;
+
+export interface ToolMessageWindow {
+  rows: ToolMessageRow[];
+  /**
+   * 窗口内消息超过上限，只读到其中一部分。
+   *
+   * 匹配放在 JS 里做（`toLowerCase()` 才是完整的大小写折叠，SQLite 的 `lower()`
+   * 只处理 ASCII，任务名里非 ASCII 大写字母会被错杀），所以必须把「没读全」和
+   * 「读全了确实没有」分开报给调用方：前者不能当作「查无此人」写进长期负缓存。
+   */
+  truncated: boolean;
+}
 
 export async function readToolMessages(
   fromMs: number,
   toMs: number,
   limit = TOOL_MESSAGE_WINDOW_LIMIT,
-): Promise<ToolMessageRow[]> {
+): Promise<ToolMessageWindow> {
   const db = getDbClient().drizzle;
   const rows = await db
     .select({
@@ -41,10 +53,14 @@ export async function readToolMessages(
       ),
     )
     .orderBy(asc(messages.createdAt))
-    .limit(limit);
-  return rows.map((row) => ({
-    sessionId: row.sessionId,
-    title: row.title ?? null,
-    content: row.content,
-  }));
+    // 多取一行只为判断是否被截断，不把它当证据。
+    .limit(limit + 1);
+  return {
+    rows: rows.slice(0, limit).map((row) => ({
+      sessionId: row.sessionId,
+      title: row.title ?? null,
+      content: row.content,
+    })),
+    truncated: rows.length > limit,
+  };
 }
