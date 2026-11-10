@@ -12640,7 +12640,10 @@
       "holdTip": "暫停這一則及其之後的排隊訊息",
       "heldRowAria": "停點：這一則及之後的排隊訊息不會自動送出；目前工作照常執行完",
       "releaseHoldTip": "已停在這裡，恢復後繼續送出",
-      "releaseHoldAria": "恢復此則的自動送出"
+      "releaseHoldAria": "恢復此則的自動送出",
+      "holdAction": "停在這裡",
+      "releaseHoldAction": "恢復自動送出",
+      "heldRowLabel": "佇列停在這裡"
     },
     "newChatView": {
       "missing": {

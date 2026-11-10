@@ -12640,7 +12640,10 @@
       "holdTip": "暂停这一条及其之后的排队消息",
       "heldRowAria": "停点：这一条及之后的排队消息不会自动发送；当前任务照常执行完",
       "releaseHoldTip": "已停在这里，恢复后继续发送",
-      "releaseHoldAria": "恢复此条的自动发送"
+      "releaseHoldAria": "恢复此条的自动发送",
+      "holdAction": "停在这里",
+      "releaseHoldAction": "恢复自动发送",
+      "heldRowLabel": "队列停在这里"
     },
     "newChatView": {
       "missing": {

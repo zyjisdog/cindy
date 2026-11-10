@@ -12787,7 +12787,10 @@
       "holdTip": "Suspender esta mensagem e as seguintes",
       "heldRowAria": "Ponto de parada: esta mensagem e as seguintes não serão enviadas automaticamente. A tarefa atual termina normalmente.",
       "releaseHoldTip": "Em pausa aqui — retome para continuar enviando",
-      "releaseHoldAria": "Retomar o envio automático a partir desta mensagem"
+      "releaseHoldAria": "Retomar o envio automático a partir desta mensagem",
+      "holdAction": "Parar aqui",
+      "releaseHoldAction": "Retomar o envio",
+      "heldRowLabel": "A fila para aqui"
     },
     "newChatView": {
       "missing": {
