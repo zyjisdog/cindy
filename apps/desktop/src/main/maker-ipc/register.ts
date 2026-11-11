@@ -16269,6 +16269,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 : ('user' as const),
           content: entry.content,
           consuming: entry.consuming,
+          held: entry.held,
         })),
         isWorking: isSessionTurnDispatchBoundaryBusy(
           sessionTurnActivityTracker,
@@ -16278,8 +16279,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         willQueue:
           inputCoordinator.shouldQueueNewTurn(sessionId) || sendToSessionLocks.has(sessionId),
         queuePaused: inputCoordinator.getProjection(sessionId).queuePaused,
+        queueHeld: inputCoordinator
+          .getProjection(sessionId)
+          .pendingQueue.some((item) => item.held === true),
       };
     },
+    getWorkerQueueHeld: (sessionId: string) =>
+      inputCoordinator.getProjection(sessionId).pendingQueue.some((item) => item.held === true),
     ensureWorkerQueueRestored: async (sessionId: string) => {
       await inputCoordinator.ensureQueueRestored(sessionId).catch(() => undefined);
       return inputCoordinator.isQueueRestored(sessionId);
