@@ -1,5 +1,9 @@
 import { isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId } from '@cindy/maker-shared/interaction';
-import { forwardedRequestDisplayText, isBackgroundCommandSchedulerOrigin, isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
+import {
+  forwardedRequestDisplayText,
+  isBackgroundCommandSchedulerOrigin,
+  isHookSchedulerOrigin,
+} from '@cindy/maker-shared/message-source';
 import { queueItemVisibleSource, queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
@@ -117,7 +121,7 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
             ? queueItemVisibleText(entry)
             : entry.text,
     rangedSourceText:
-      isScheduler || isSession || isPlugin
+      usesMachineVisibleText
         ? (() => {
             const source = queueItemVisibleSource(entry);
             return source.replaceRanges ? source.text : null;

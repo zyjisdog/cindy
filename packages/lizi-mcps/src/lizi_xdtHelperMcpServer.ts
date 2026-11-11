@@ -178,6 +178,7 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
  * PR 都会冲突。新增内容单独起一行,放在语义相关的句子旁边,不要接在已有句子后面。
  */
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
+
   cindy: [
     `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息；`,
     `get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；`,
@@ -201,6 +202,7 @@ export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number]
     '管理任务与项目：当前任务的原生共享邀请/状态（create_shared_task_invitation / get_shared_task_state）在任务宿主执行，支持手机或同账号另一台电脑控制当前任务，不接受其他任务目标；',
     '归档/取消归档支持本机与跨电脑（deviceId::sessionId）；',
     '改名、移动、标签、排队消息、插话、停止、运行设置、给当前任务新建托管 worktree（create_task_worktree，可指定基线分支）、项目增删改、从其他 AI 编程工具导入任务（scan_importable_sessions / import_sessions）仅本机。',
+    '长命令可后台运行（run_command_background：完成时宿主自动回注本任务，免 sleep 轮询），仅本机。',
   ].join(''),
   github: [
     '读取 PR、CI、评审变化与详情，明确管理任务关联。',
