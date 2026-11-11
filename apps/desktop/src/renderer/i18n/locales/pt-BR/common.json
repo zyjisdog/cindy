@@ -4707,17 +4707,7 @@
         "clearConfirmDescription": "Apenas os arquivos do diretório de sombra do Live Compact serão excluídos; as conversas e os resumos não são afetados. Resumos que já apontam para esses arquivos não poderão mais mostrar o texto original. Isso não pode ser desfeito.",
         "clearConfirmButton": "Limpar sombra",
         "cleared": "Sombra do Live Compact limpa",
-        "clearFailed": "Não foi possível limpar a sombra do Live Compact. Tente novamente.",
-    "toolFold": {
-      "cell": {
-        "title": "Dobramento de payload de ferramentas (experimental)",
-        "description": "Em sessões longas do Agent, cada ida e volta de ferramenta (comando mais saída) é reenviada a cada passo. Quando ativado, as novas sessões do Agent Pi dobram as idas e voltas antigas em uma única linha e truncam resultados grandes demais antes de entrarem no histórico; o modelo pode recuperar o original com toolfold_read. Medido em duas sessões longas: cerca de 23% a 27% menos tokens de entrada. Afeta apenas as sessões do Agent Pi iniciadas depois; com a opção desligada, o comportamento é exatamente o de antes."
-      },
-      "toggleAria": "Ativar/desativar dobra de payload de ferramentas",
-      "toast": {
-        "enabled": "Dobramento de payload de ferramentas ativado — terá efeito em novas sessões do Agent Pi",
-        "disabled": "Dobramento de payload de ferramentas desativado — terá efeito em novas sessões do Agent Pi",
-        "toggleFailed": "Falha ao ativar/desativar o dobra de payload de ferramentas"
+        "clearFailed": "Não foi possível limpar a sombra do Live Compact. Tente novamente."
       }
     },
     "betaChannel": {
@@ -20300,5 +20290,17 @@
     "detail": "Solicitação de {{device}}\nFinalidade: {{purpose}}\n\nOs dispositivos da sua conta poderão controlar este computador, executar tarefas e acessar arquivos. A opção permanece ativa até você desativá-la nas configurações.",
     "decline": "Agora não",
     "enable": "Ativar controle remoto"
+  },
+  "toolFold": {
+    "cell": {
+      "title": "Dobramento de payload de ferramentas (experimental)",
+      "description": "Em sessões longas do Agent, cada ida e volta de ferramenta (comando mais saída) é reenviada a cada passo. Quando ativado, as novas sessões do Agent Pi dobram as idas e voltas antigas em uma única linha e truncam resultados grandes demais antes de entrarem no histórico; o modelo pode recuperar o original com toolfold_read. Medido em duas sessões longas: cerca de 23% a 27% menos tokens de entrada. Afeta apenas as sessões do Agent Pi iniciadas depois; com a opção desligada, o comportamento é exatamente o de antes."
+    },
+    "toggleAria": "Ativar/desativar dobra de payload de ferramentas",
+    "toast": {
+      "enabled": "Dobramento de payload de ferramentas ativado — terá efeito em novas sessões do Agent Pi",
+      "disabled": "Dobramento de payload de ferramentas desativado — terá efeito em novas sessões do Agent Pi",
+      "toggleFailed": "Falha ao ativar/desativar o dobra de payload de ferramentas"
+    }
   }
 }

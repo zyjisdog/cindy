@@ -4607,17 +4607,7 @@
         "clearConfirmDescription": "只会删除影子原文目录里的文件，对话和摘要本身不受影响。已经指向这些文件的摘要将无法再展开原文，且无法撤销。",
         "clearConfirmButton": "清理影子原文",
         "cleared": "边做边压的影子原文已清理",
-        "clearFailed": "清理边做边压的影子原文失败，请重试。",
-    "toolFold": {
-      "cell": {
-        "title": "工具载荷折叠（实验）",
-        "description": "长 Agent 会话里，每一步都会重发全部工具往返（命令与输出）。打开后，新启动的 Pi Agent 会话把较老的工具往返折成一行，超大的输出在写入记录前先截断，模型可用 toolfold_read 取回原文。两段长会话实测：输入 token 约少 23% 到 27%。只对之后启动的 Pi Agent 会话生效；关闭时行为与现在完全一致。"
-      },
-      "toggleAria": "工具载荷折叠开关",
-      "toast": {
-        "enabled": "工具载荷折叠已开启，新建 Pi Agent 会话后生效",
-        "disabled": "工具载荷折叠已关闭，新建 Pi Agent 会话后生效",
-        "toggleFailed": "切换工具载荷折叠开关失败"
+        "clearFailed": "清理边做边压的影子原文失败，请重试。"
       }
     },
     "betaChannel": {
@@ -20039,5 +20029,17 @@
     "detail": "请求来自「{{device}}」\n用途：{{purpose}}\n\n开启后，同账号设备可以远程控制这台电脑，包括运行任务和访问文件。此设置持续有效，可随时在设置中关闭。",
     "decline": "暂不开启",
     "enable": "开启远程控制"
+  },
+  "toolFold": {
+    "cell": {
+      "title": "工具载荷折叠（实验）",
+      "description": "长 Agent 会话里，每一步都会重发全部工具往返（命令与输出）。打开后，新启动的 Pi Agent 会话把较老的工具往返折成一行，超大的输出在写入记录前先截断，模型可用 toolfold_read 取回原文。两段长会话实测：输入 token 约少 23% 到 27%。只对之后启动的 Pi Agent 会话生效；关闭时行为与现在完全一致。"
+    },
+    "toggleAria": "工具载荷折叠开关",
+    "toast": {
+      "enabled": "工具载荷折叠已开启，新建 Pi Agent 会话后生效",
+      "disabled": "工具载荷折叠已关闭，新建 Pi Agent 会话后生效",
+      "toggleFailed": "切换工具载荷折叠开关失败"
+    }
   }
 }

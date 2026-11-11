@@ -4608,17 +4608,7 @@
         "clearConfirmDescription": "唯刪影子原文所中之文，對語與摘要不損。已指此諸文之摘要不復能展其原文，且不可復。",
         "clearConfirmButton": "清其影子原文",
         "cleared": "邊做邊壓之影子原文已清",
-        "clearFailed": "清邊做邊壓之影子原文不成，請復試。",
-    "toolFold": {
-      "cell": {
-        "title": "工具載荷折疊（實驗）",
-        "description": "長 Agent 差事之中，每一步皆重發全部工具往返（命令與輸出）。啟之，則新起之 Pi Agent 差事將較舊之工具往返折為一行，超大之輸出寫入記錄之前先截，模型得以 toolfold_read 取回原文。兩段長差事實測：輸入 token 約少 23% 到 27%。唯於之後起之 Pi Agent 差事生效；閉之，行為與今無異。"
-      },
-      "toggleAria": "工具載荷折疊啟閉",
-      "toast": {
-        "enabled": "已啟，新開 Pi Agent 差事後生效",
-        "disabled": "已闔，新開 Pi Agent 差事後生效",
-        "toggleFailed": "開關切換未成"
+        "clearFailed": "清邊做邊壓之影子原文不成，請復試。"
       }
     },
     "betaChannel": {
@@ -20039,5 +20029,17 @@
     "detail": "請求來自「{{device}}」\n所為：{{purpose}}\n\n啟用後，同帳號裝置可遠控此機，執行任務、存取檔案。此設長效，可隨時於設定中關閉。",
     "decline": "暫不開啟",
     "enable": "開啟遠端控制"
+  },
+  "toolFold": {
+    "cell": {
+      "title": "工具載荷折疊（實驗）",
+      "description": "長 Agent 差事之中，每一步皆重發全部工具往返（命令與輸出）。啟之，則新起之 Pi Agent 差事將較舊之工具往返折為一行，超大之輸出寫入記錄之前先截，模型得以 toolfold_read 取回原文。兩段長差事實測：輸入 token 約少 23% 到 27%。唯於之後起之 Pi Agent 差事生效；閉之，行為與今無異。"
+    },
+    "toggleAria": "工具載荷折疊啟閉",
+    "toast": {
+      "enabled": "已啟，新開 Pi Agent 差事後生效",
+      "disabled": "已闔，新開 Pi Agent 差事後生效",
+      "toggleFailed": "開關切換未成"
+    }
   }
 }
