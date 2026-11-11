@@ -109,7 +109,6 @@ import hostSystemPrompt from './host-system-prompt.md?raw';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
 import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import piSystemPrompt from './pi-system-prompt.md?raw';
-import userFacingPlansPrompt from './user-facing-plans-prompt.md?raw';
 import { createLogger } from '../logger.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { DEFAULT_MODEL_COMPACTION_PCT } from '../../shared/modelContextLimit.js';
@@ -716,8 +715,8 @@ export const desktopPiAuthAdapter: AuthAdapter = createPiAuthAdapter({ subscript
 
 // ── RuntimeConfig ────────────────────────────────────────────────────────────
 
-export function composePiSystemPrompt(hostPrompt: string, agentPrompt: string, appendixPrompt = ''): string {
-  return [hostPrompt, agentPrompt, appendixPrompt]
+export function composePiSystemPrompt(hostPrompt: string, agentPrompt: string): string {
+  return [hostPrompt, agentPrompt]
     .map((section) => section.trim())
     .filter(Boolean)
     .join('\n\n');
@@ -726,7 +725,7 @@ export function composePiSystemPrompt(hostPrompt: string, agentPrompt: string, a
 // Desktop Pi 会话的真实 system prompt（共享身份/归属段 + Pi 行为段 + 追加在末尾的计划书写规范）。
 // 独立导出供测试走生产入口断言，不必复制 ?raw 源文本。
 export function desktopPiSystemPrompt(): string {
-  return composePiSystemPrompt(`${hostSystemPrompt.trim()}\n\n${businessOwnershipPrompt.trim()}`, piSystemPrompt, userFacingPlansPrompt);
+  return composePiSystemPrompt(`${hostSystemPrompt.trim()}\n\n${businessOwnershipPrompt.trim()}`, piSystemPrompt);
 }
 
 function buildDesktopPiRuntimeConfig(): AgentRuntimeConfig {

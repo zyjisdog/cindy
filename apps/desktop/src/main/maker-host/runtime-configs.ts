@@ -29,7 +29,6 @@ import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
 import businessOwnershipPrompt from './business-ownership-prompt.md?raw';
 import skillSourcePrecedencePrompt from './skill-source-precedence-prompt.md?raw';
-import userFacingPlansPrompt from './user-facing-plans-prompt.md?raw';
 import { DEFAULT_MODEL_COMPACTION_PCT } from '../../shared/modelContextLimit.js';
 import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
@@ -46,7 +45,7 @@ import {
 // 计划书写规范是 vendor-neutral 段（Pi 也用），但必须追加在拼接末尾：既有会话的缓存前缀
 // 是「到上一段为止的字节」，插进中间会把它们全部作废（§3.1），追加则原前缀照常命中。
 function composeHostPrompt(agentSpecific: string): string {
-  return [hostSystemPrompt, businessOwnershipPrompt, skillSourcePrecedencePrompt, agentSpecific, userFacingPlansPrompt]
+  return [hostSystemPrompt, businessOwnershipPrompt, skillSourcePrecedencePrompt, agentSpecific]
     .map(s => s.trim())
     .filter(s => s.length > 0)
     .join('\n\n');
