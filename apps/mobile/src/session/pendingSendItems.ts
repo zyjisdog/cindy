@@ -45,6 +45,7 @@ import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
 import {
   automationOriginLabel,
   orcaMessageTitle,
+  orcaAutoBridgeBatchCount,
   sessionOriginLabel,
   sourceIdText,
   sourcePluginLabel,
@@ -293,7 +294,7 @@ export function pendingSendSource(
     const senderLabel = readNonEmptyString(origin.senderLabel);
     const direction = readOrcaPersistedSource(item.persistedContent)
       ?? (senderLabel?.toLowerCase() === 'lead' ? 'lead' : 'worker');
-    return { kind: 'orca', label: orcaMessageTitle(direction, senderLabel) };
+    return { kind: 'orca', label: orcaMessageTitle(direction, senderLabel, orcaAutoBridgeBatchCount(origin)) };
   }
   return null;
 }
