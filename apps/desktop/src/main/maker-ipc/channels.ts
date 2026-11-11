@@ -494,6 +494,7 @@ export const MAKER_INVOKE = {
    */
   LIVE_COMPACT_GET: 'maker:live-compact:get',
   LIVE_COMPACT_SET: 'maker:live-compact:set',
+  /**
    * 工具载荷折叠 (cindy-tool-fold) 实验开关 ——
    *  - GET: renderer 启动期同步 localStorage 镜像
    *  - SET: 用户 toggle 时落 <userData>/tool-fold-settings.json, 仅对**新 session** 生效

@@ -834,6 +834,8 @@ export interface AgentDeps {
    * 切账号后既读不到也清不掉上一个账号的备份。缺省回落到 agentHome/compaction-spine。
    */
   resolvePiLiveCompactShadowDir?: () => string;
+
+  /**
    * Pi-only: 实验开关「工具载荷折叠」(cindy-tool-fold 扩展)。
    *
    * 打开时 maker-core 把内置的折叠扩展写进本会话 internal-extensions 并显式

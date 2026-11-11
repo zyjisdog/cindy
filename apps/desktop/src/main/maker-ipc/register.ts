@@ -8518,14 +8518,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const result = await measureTraceOperation('maker:list-agent-skills:scan',
           () => maker.listAgentSkills(kind, skillParams, readActivation));
         if (!descriptors) await readActivation();
-        return {
-          success: true,
+        const listing = {
           ...result,
           skills: await markCindyOfficialSkills(activeCindyBuiltInAgentSkills(
             result.skills,
             descriptors!,
             (source) => !disabled!.has(skillActivationKey(source)),
           ), skillParams.remoteHostId),
+          success: true as const,
         };
         // `write` also drops a scan that started before a `forceReload` cleared the
         // snapshot, so a stale scan cannot repopulate it.
