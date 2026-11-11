@@ -106,7 +106,7 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
 
 同步提问继续使用 `ask_user_question`；异步提问直接展示 `ask_user_question_async`，
 从宿主 `cindy_helper` 已注册的定义获取说明与参数，执行仍走同一 MCP 通道及真实权限身份。
-宿主未提供时不注册，不另建卡片或答案队列。`ask_owner` 仅处理 fill／scan／connect，
+宿主未提供时不注册，不另建卡片或答案队列。独立的 `request_input_handoff` 直接注册并复用宿主 schema，处理窗口与截图二维码；
 不承接普通提问。异步问题随本轮结束或被替换而失效，用户答案经同轮 steer 交回。
 
 ## 2. 配置面:Cindy 显式设置 vs 放任 pi 默认
@@ -282,6 +282,8 @@ Skill 停用适配同时保存物理身份与管理页已扫描的词法发现�
 本机尊重启动 Cindy 时的 `PI_CODING_AGENT_DIR`
 覆写（支持 `~`）。SSH 使用远端 `$HOME/.pi/agent`，不读取控制端个人文件；手机／设备互联
 控制本机任务复用桌面链路。Bot 保持 `--no-context-files`，不读取或复制这些全局约定。
+例外（2026-11-08，伙伴 V2）：主人私聊在伙伴自己项目里运行时（`botRuntimeProfile.projectContext`），
+按同目录普通任务加载说明文件与项目资源；IM、群专线等其它伙伴会话仍按 Bot 隔离（`isolatedBotProfile`）。
 
 每次启动读取软链目标并复制内容到独立 `configHome`，不建立指向用户文件的可写链接。
 用户更新约定后，新启动的任务读取新版；运行中的任务保留启动快照。SSH 的配置目录身份
@@ -363,7 +365,7 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    存在明确安装且未停用的用户包根时，为保留 Pi 原生 package discovery 可以只省略
    `--no-extensions`：包根只能来自 Main 生成的 runtime `settings.json`，`--no-approve` 仍禁止
    读取项目 `.pi/settings.json` 与自动安装项目 packages，不得因此传 `--approve`。
-   本地非 Review、非 Bot、非 SSH 的 root 任务用重复 `--skill` / `--prompt-template` /
+   本地非 Review、非隔离 Bot（V2 伙伴项目里的主人私聊按普通任务）、非 SSH 的 root 任务用重复 `--skill` / `--prompt-template` /
    `--extension` 把仓库原路径交给 Pi：`.pi/skills` 与 cwd→git root 内 `.agents/skills`
    的目录型 Skill、`.pi/prompts/*.md`、`.pi/extensions/*.ts` 与 `*/index.ts`。越界 symlink
    不传入。root 仍回装 Cindy 自有 bridge/subagent 与 pinned plan-mode。Review、Bot、子代理、

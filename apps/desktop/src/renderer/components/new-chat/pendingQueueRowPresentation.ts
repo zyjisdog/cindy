@@ -1,8 +1,5 @@
-import {
-  forwardedRequestDisplayText,
-  isBackgroundCommandSchedulerOrigin,
-  isHookSchedulerOrigin,
-} from '@cindy/maker-shared/message-source';
+import { isAnsweredAsyncQuestionClientId, isAsyncQuestionReplyClientId } from '@cindy/maker-shared/interaction';
+import { forwardedRequestDisplayText, isBackgroundCommandSchedulerOrigin, isHookSchedulerOrigin } from '@cindy/maker-shared/message-source';
 import { queueItemVisibleSource, queueItemVisibleText } from '@cindy/maker-shared/queue';
 import { UI_ACTION_TRIGGER_PREFIX, type QueuedMessage } from '@/lib/makerChatStore';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
@@ -82,6 +79,7 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
   const isMachineGenerated =
     isOrca || isScheduler || isSession || isPlugin || isHookOrigin || isBgcmdOrigin;
   const isSyntheticTrigger = entry.text.startsWith(UI_ACTION_TRIGGER_PREFIX);
+  const isAnswered = isAnsweredAsyncQuestionClientId(entry.clientId);
   const isContinueTrigger =
     entry.text === CONTINUE_AFTER_APP_EXIT_PROMPT || entry.text === CONTINUE_AFTER_ERROR_PROMPT;
   // 正文选择与来源标签分开:后台命令回注与自动化心跳一样,text 是发给 Agent 的
@@ -114,7 +112,10 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
           : queueItemVisibleText(entry)
         : entry.chatMessage.quotesEncoded === true
           ? stripChatQuoteMarkerLines(entry.text)
-          : entry.text,
+          // An answer to a question shows as the question and the answer, never the reply format sent to the model.
+          : isAsyncQuestionReplyClientId(entry.clientId)
+            ? queueItemVisibleText(entry)
+            : entry.text,
     rangedSourceText:
       isScheduler || isSession || isPlugin
         ? (() => {
@@ -122,9 +123,10 @@ export function getPendingQueueRowPresentation(entry: QueuedMessage): PendingQue
             return source.replaceRanges ? source.text : null;
           })()
         : null,
-    canEdit: !isPendingEnqueue && !isMachineGenerated && !isSyntheticTrigger,
+    canEdit: !isPendingEnqueue && !isMachineGenerated && !isSyntheticTrigger && !isAnswered,
     // 协同消息可以转为插话:插话不改正文与来源,主进程在接受后结清协同回报。
-    canSteer: !isPendingEnqueue && (isOrca || !isMachineGenerated) && !isSyntheticTrigger,
+    // An answer already shown on its question card has no row, so no shortcut may act on it either.
+    canSteer: !isPendingEnqueue && (isOrca || !isMachineGenerated) && !isSyntheticTrigger && !isAnswered,
     isSyntheticTrigger,
     syntheticKind: isSyntheticTrigger ? (isContinueTrigger ? 'continue' : 'generic') : null,
   };

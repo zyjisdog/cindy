@@ -85,7 +85,7 @@ import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.j
 import { summarizeOpenPlan, buildPlanReconcileNote } from '../maker-ipc/planReconcile.js';
 import { peekGoalInactiveNote } from '../goal-host/inactiveNote.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
-import { enqueueDurableWrite } from '../messagePersistBroadcaster.js';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster.desktop.js';
 import { toDesktopSessionDispatchOutcome } from '../maker-host/send-outcome.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import {
@@ -101,8 +101,8 @@ import {
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
 
-import { resolveSafe as resolveXdtImage } from '../imageCacheStore.js';
-import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.js';
+import { resolveSafe as resolveXdtImage } from '../imageCacheStore.desktop.js';
+import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.desktop.js';
 import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/ingest.js';
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
@@ -153,7 +153,7 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
-import { getResolvedMainLocale, t } from '../i18n.js';
+import { getResolvedMainLocale, t } from '../i18n.desktop.js';
 import { modernLocaleOf } from '../../shared/locale.js';
 import { buildUiLanguageErrorNote } from '../maker-ipc/uiLanguageErrorNote.js';
 
@@ -982,7 +982,9 @@ export function createMakerHookSessionRunner(deps: {
       try {
         driftedRecycled = await maker.recyclePiRuntimeIfResourcesDrifted(session);
       } catch {
-        // 保持原样投递
+        // 回收抛出时 Session 已停在 error(close 失败不回退),旧实例不可用 ——
+        // 继续投递只会被 ensureActive 拒,必须走重建(Codex P2,2026-11-10)。
+        driftedRecycled = session.getStatus() !== 'active';
       }
       if (driftedRecycled) {
         try {
@@ -1730,6 +1732,7 @@ export function createMakerHookSessionRunner(deps: {
           `item${inboundAttachmentFailures === 1 ? '' : 's'} could not be prepared.`;
         finalText = `${finalText.trimEnd()}${finalText.trim().length > 0 ? '\n\n' : ''}${warning}`;
       }
+      const process = observer.processRecord();
       return {
         status: 'ok',
         finalText,
@@ -1737,6 +1740,7 @@ export function createMakerHookSessionRunner(deps: {
         durationMs: Date.now() - startedAt,
         ...(outAttachments !== undefined ? { attachments: outAttachments } : {}),
         ...(xMediaIds !== undefined ? { xMediaIds } : {}),
+        ...(process ? { process } : {}),
       };
     },
 

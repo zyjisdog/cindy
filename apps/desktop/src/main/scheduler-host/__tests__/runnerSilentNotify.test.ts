@@ -53,7 +53,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 import { projectQuietScheduledOutput, revealScheduledOutput, hasVisibleScheduledOutput } from '../silent-output.js';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
@@ -425,6 +425,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
         expect.objectContaining({
           clientId: 'schedule-result:run-1',
           content: 'Final answer',
+          agentMeta: expect.objectContaining({ turnCompleted: true }),
         }),
         expect.anything(),
       );

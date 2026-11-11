@@ -181,7 +181,7 @@ vi.mock('../../turn-change-set/store.js', () => ({
 vi.mock('../../maker-host/send-outcome.js', () => ({
   toDesktopSessionDispatchOutcome: () => ({ dispatched: true as const }),
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   enqueueDurableWrite: vi.fn(async (_label: string, fn: () => unknown) => fn()),
 }));
 vi.mock('../../localDb/ipc/messages.js', () => ({
@@ -231,7 +231,7 @@ vi.mock('../../maker-ipc/agentHandoffPendingSingleton.js', () => ({
 vi.mock('../../goal-host/inactiveNote.js', () => ({
   peekGoalInactiveNote: h.peekGoalInactiveNote,
 }));
-vi.mock('../../imageCacheStore.js', () => ({
+vi.mock('../../imageCacheStore.desktop.js', () => ({
   resolveSafe: vi.fn(),
 }));
 // cindy-media:入站图片写入媒体总仓,mock 记调用。
@@ -261,7 +261,7 @@ vi.mock('../../cindy-media/ingest.js', () => ({
   ingestMedia: cindyMock.ingestMedia,
   supportedMime: cindyMock.supportedMime,
 }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ resolveSafe: cindyMock.resolveSafe }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ resolveSafe: cindyMock.resolveSafe }));
 vi.mock('../../worktree/index.js', () => ({
   worktreeStore: { get: () => undefined },
   WorktreeManager: { removeWorktreeForSession: vi.fn(async () => undefined) },
@@ -343,10 +343,16 @@ function makePermissionModeFake() {
 }
 
 /** fake maker: createSession 返回"send 即接受、随后立刻 done"的会话。 */
-function makeFakeSession(id: string) {
+function makeFakeSession(
+  id: string,
+  status: 'active' | 'aborting' | 'closed' | 'error' = 'active',
+) {
   const permission = makePermissionModeFake();
   return {
     id,
+    // close 失败会让真实 Session 停在 error;测试用初始状态复刻这一后果。
+    getStatus: () => status,
+
     ...({ instanceId: `instance-${id}` } as { instanceId?: string }),
     workDir: 'D:/repo',
     get permissionModeState() {
@@ -431,9 +437,9 @@ import { createMakerHookSessionRunner, extractToolResultMediaUrls } from '../ses
 import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
-import { getResolvedMainLocale } from '../../i18n.js';
+import { getResolvedMainLocale } from '../../i18n.desktop.js';
 import { buildUiLanguageErrorNote } from '../../maker-ipc/uiLanguageErrorNote.js';
-import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
+import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.desktop.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
 import { createModelRoutingTransform, setClaudeProxySessionIdResolver } from '../../maker-host/anthropic-compat-proxy-host.js';
 import { clearAllSessionRuntimeAxes, setSessionEffort, setSessionFastMode } from '../../maker-host/session-effort-store.js';
@@ -835,7 +841,7 @@ describe('hook task model selection on next send', () => {
   });
 
   it('keeps delivering on the live instance when the recycle itself fails', async () => {
-    // 回收本身失败 → 旧实例仍可用:原样投递(hook 轮次不因回收故障中断)。
+    // 回收本身失败但实例仍 active → 原样投递(hook 轮次不因回收故障中断)。
     const session = makeFakeSession('sess-new');
     session.send.mockResolvedValue({ accepted: true });
     fakeMaker.createSession.mockResolvedValueOnce(session);
@@ -847,6 +853,23 @@ describe('hook task model selection on next send', () => {
     expect(result.status).toBe('ok');
     expect(fakeMaker.createSession).toHaveBeenCalledTimes(1);
     expect(session.send).toHaveBeenCalledOnce();
+  });
+
+  it('rebuilds when the recycle fails and the session is no longer active', async () => {
+    // Codex P2:close 抛出时 Session 已停在 error,旧实例不可用 —— 必须重建,
+    // 否则 send 被 ensureActive 拒、runner 永远绑在坏实例上。
+    const broken = makeFakeSession('sess-new', 'error');
+    const rebuilt = makeFakeSession('sess-new');
+    rebuilt.send.mockResolvedValue({ accepted: true });
+    fakeMaker.createSession.mockResolvedValueOnce(broken).mockResolvedValueOnce(rebuilt);
+    fakeMaker.recyclePiRuntimeIfResourcesDrifted.mockRejectedValueOnce(new Error('close boom'));
+    const run = createMakerHookSessionRunner({ log }).run(baseReq({ isNew: false }));
+    await vi.waitFor(() => expect(rebuilt.send).toHaveBeenCalledOnce());
+    h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+    const result = await run;
+    expect(result.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledTimes(2);
+    expect(broken.send).not.toHaveBeenCalled();
   });
 
   it('does not send with the old model when applying the choice fails', async () => {
@@ -1773,6 +1796,8 @@ describe('进度快照(turn.progress 链路)', () => {
         return permission.permissionModeState;
       },
       id,
+      // 与 makeFakeSession 同形状:生产代码按 getStatus 判定实例是否仍可用。
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(
         cb: (ev: {
@@ -2770,6 +2795,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     return {
       ...makePermissionModeFake(),
       id,
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
@@ -3090,6 +3116,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     return {
       ...makePermissionModeFake(),
       id,
+      getStatus: () => 'active' as const,
       workDir: 'D:/repo',
       onEvent(
         cb: (ev: {
