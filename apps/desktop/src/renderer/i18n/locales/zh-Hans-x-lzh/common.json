@@ -4611,6 +4611,18 @@
         "clearFailed": "清边做边压之影子原文不成，请复试。"
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "工具载荷折叠（实验）",
+        "description": "长 Agent 差事之中，每一步皆重发全部工具往返（命令与输出）。启之，则新起之 Pi Agent 差事将较旧之工具往返折为一行，超大之输出写入记录之前先截，模型得以 toolfold_read 取回原文。两段长差事实测：输入 token 约少 23% 到 27%。唯于之后起之 Pi Agent 差事生效；闭之，行为与今无异。"
+      },
+      "toggleAria": "工具载荷折叠启闭",
+      "toast": {
+        "enabled": "已启，新开 Pi Agent 差事后生效",
+        "disabled": "已阖，新开 Pi Agent 差事后生效",
+        "toggleFailed": "开关切换未成"
+      }
+    },
     "betaChannel": {
       "title": "Beta 试行之道",
       "badge": "Beta",
@@ -20029,17 +20041,5 @@
     "detail": "请求来自「{{device}}」\n所为：{{purpose}}\n\n启用后，同账号设备可远控此机，执行任务、访问文件。此设长效，可随时于设置中关闭。",
     "decline": "暂不开启",
     "enable": "开启远程控制"
-  },
-  "toolFold": {
-    "cell": {
-      "title": "工具载荷折叠（实验）",
-      "description": "长 Agent 差事之中，每一步皆重发全部工具往返（命令与输出）。启之，则新起之 Pi Agent 差事将较旧之工具往返折为一行，超大之输出写入记录之前先截，模型得以 toolfold_read 取回原文。两段长差事实测：输入 token 约少 23% 到 27%。唯于之后起之 Pi Agent 差事生效；闭之，行为与今无异。"
-    },
-    "toggleAria": "工具载荷折叠启闭",
-    "toast": {
-      "enabled": "已启，新开 Pi Agent 差事后生效",
-      "disabled": "已阖，新开 Pi Agent 差事后生效",
-      "toggleFailed": "开关切换未成"
-    }
   }
 }

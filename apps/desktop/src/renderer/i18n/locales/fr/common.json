@@ -4710,6 +4710,18 @@
         "clearFailed": "Impossible de nettoyer l’ombre de Live Compact. Réessayez."
       }
     },
+    "toolFold": {
+      "cell": {
+        "title": "Repli des charges utiles d'outils (expérimental)",
+        "description": "Dans les longues sessions d'Agent, chaque aller-retour d'outil (commande et sortie) est renvoyé à chaque étape. Activé, les nouvelles sessions d'Agent Pi replient les anciens allers-retours sur une ligne et tronquent les résultats trop volumineux avant leur entrée dans l'historique ; le modèle peut récupérer l'original avec toolfold_read. Mesuré sur deux longues sessions : environ 23 % à 27 % de jetons d'entrée en moins. Seules les sessions d'Agent Pi démarrées ensuite sont concernées ; désactivé, le comportement est exactement celui d'avant."
+      },
+      "toggleAria": "Activer/désactiver le repli des charges utiles d'outils",
+      "toast": {
+        "enabled": "Repli des charges utiles d'outils activé : prend effet dans les nouvelles sessions d'Agent Pi",
+        "disabled": "Repli des charges utiles d'outils désactivé : prend effet dans les nouvelles sessions d'Agent Pi",
+        "toggleFailed": "Impossible de basculer le repli des charges utiles d'outils"
+      }
+    },
     "betaChannel": {
       "title": "Canal bêta",
       "badge": "Bêta",
@@ -20290,17 +20302,5 @@
     "detail": "Demande de {{device}}\nMotif : {{purpose}}\n\nLes appareils de votre compte pourront contrôler cet ordinateur, exécuter des tâches et accéder aux fichiers. Ce réglage reste actif jusqu’à sa désactivation dans les paramètres.",
     "decline": "Pas maintenant",
     "enable": "Activer le contrôle à distance"
-  },
-  "toolFold": {
-    "cell": {
-      "title": "Repli des charges utiles d'outils (expérimental)",
-      "description": "Dans les longues sessions d'Agent, chaque aller-retour d'outil (commande et sortie) est renvoyé à chaque étape. Activé, les nouvelles sessions d'Agent Pi replient les anciens allers-retours sur une ligne et tronquent les résultats trop volumineux avant leur entrée dans l'historique ; le modèle peut récupérer l'original avec toolfold_read. Mesuré sur deux longues sessions : environ 23 % à 27 % de jetons d'entrée en moins. Seules les sessions d'Agent Pi démarrées ensuite sont concernées ; désactivé, le comportement est exactement celui d'avant."
-    },
-    "toggleAria": "Activer/désactiver le repli des charges utiles d'outils",
-    "toast": {
-      "enabled": "Repli des charges utiles d'outils activé : prend effet dans les nouvelles sessions d'Agent Pi",
-      "disabled": "Repli des charges utiles d'outils désactivé : prend effet dans les nouvelles sessions d'Agent Pi",
-      "toggleFailed": "Impossible de basculer le repli des charges utiles d'outils"
-    }
   }
 }
