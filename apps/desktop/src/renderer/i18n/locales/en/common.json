@@ -4650,7 +4650,7 @@
         "clearConfirmDescription": "Only files in the Live Compact shadow directory will be deleted; conversations and summaries are untouched. Summaries that already point to these files will no longer be able to show the original text. This cannot be undone.",
         "clearConfirmButton": "Clear shadow",
         "cleared": "Live Compact shadow cleaned up",
-        "clearFailed": "Could not clean up the Live Compact shadow. Try again."
+        "clearFailed": "Could not clean up the Live Compact shadow. Try again.",
     "toolFold": {
       "cell": {
         "title": "Tool payload folding (experimental)",

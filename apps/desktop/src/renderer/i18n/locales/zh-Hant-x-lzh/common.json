@@ -4608,7 +4608,7 @@
         "clearConfirmDescription": "唯刪影子原文所中之文，對語與摘要不損。已指此諸文之摘要不復能展其原文，且不可復。",
         "clearConfirmButton": "清其影子原文",
         "cleared": "邊做邊壓之影子原文已清",
-        "clearFailed": "清邊做邊壓之影子原文不成，請復試。"
+        "clearFailed": "清邊做邊壓之影子原文不成，請復試。",
     "toolFold": {
       "cell": {
         "title": "工具載荷折疊（實驗）",

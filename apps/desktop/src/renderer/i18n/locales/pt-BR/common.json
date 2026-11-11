@@ -4707,7 +4707,7 @@
         "clearConfirmDescription": "Apenas os arquivos do diretório de sombra do Live Compact serão excluídos; as conversas e os resumos não são afetados. Resumos que já apontam para esses arquivos não poderão mais mostrar o texto original. Isso não pode ser desfeito.",
         "clearConfirmButton": "Limpar sombra",
         "cleared": "Sombra do Live Compact limpa",
-        "clearFailed": "Não foi possível limpar a sombra do Live Compact. Tente novamente."
+        "clearFailed": "Não foi possível limpar a sombra do Live Compact. Tente novamente.",
     "toolFold": {
       "cell": {
         "title": "Dobramento de payload de ferramentas (experimental)",

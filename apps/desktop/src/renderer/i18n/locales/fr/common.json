@@ -4707,7 +4707,7 @@
         "clearConfirmDescription": "Seuls les fichiers du répertoire d’ombre de Live Compact seront supprimés ; les conversations et les résumés restent intacts. Les résumés qui pointent déjà vers ces fichiers ne pourront plus afficher le texte original. Action irréversible.",
         "clearConfirmButton": "Nettoyer l’ombre",
         "cleared": "Ombre de Live Compact nettoyée",
-        "clearFailed": "Impossible de nettoyer l’ombre de Live Compact. Réessayez."
+        "clearFailed": "Impossible de nettoyer l’ombre de Live Compact. Réessayez.",
     "toolFold": {
       "cell": {
         "title": "Repli des charges utiles d'outils (expérimental)",

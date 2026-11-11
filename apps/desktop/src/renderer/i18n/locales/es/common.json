@@ -4707,7 +4707,7 @@
         "clearConfirmDescription": "Solo se eliminarán los archivos del directorio de sombra de Live Compact; las conversaciones y los resúmenes no se tocan. Los resúmenes que ya apuntan a esos archivos dejarán de poder mostrar el texto original. No se puede deshacer.",
         "clearConfirmButton": "Borrar sombra",
         "cleared": "Sombra de Live Compact borrada",
-        "clearFailed": "No se pudo borrar la sombra de Live Compact. Inténtalo de nuevo."
+        "clearFailed": "No se pudo borrar la sombra de Live Compact. Inténtalo de nuevo.",
     "toolFold": {
       "cell": {
         "title": "Plegado de cargas útiles de herramientas (experimental)",

@@ -4651,7 +4651,7 @@
         "clearConfirmDescription": "Gelöscht werden nur Dateien im Live-Compact-Schattenverzeichnis; Gespräche und Zusammenfassungen bleiben unberührt. Zusammenfassungen, die auf diese Dateien verweisen, können den Originaltext nicht mehr anzeigen. Das lässt sich nicht rückgängig machen.",
         "clearConfirmButton": "Schatten leeren",
         "cleared": "Live-Compact-Schatten geleert",
-        "clearFailed": "Der Live-Compact-Schatten konnte nicht geleert werden. Bitte erneut versuchen."
+        "clearFailed": "Der Live-Compact-Schatten konnte nicht geleert werden. Bitte erneut versuchen.",
     "toolFold": {
       "cell": {
         "title": "Tool-Nutzlasten falten (experimentell)",

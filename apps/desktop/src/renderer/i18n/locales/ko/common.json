@@ -4607,7 +4607,7 @@
         "clearConfirmDescription": "섀도 원문 디렉터리의 파일만 삭제되며 대화와 요약은 그대로 남습니다. 이 파일을 가리키던 요약은 원문을 펼칠 수 없게 됩니다. 되돌릴 수 없습니다.",
         "clearConfirmButton": "섀도 정리",
         "cleared": "Live Compact 섀도 원문을 정리했습니다",
-        "clearFailed": "Live Compact 섀도 원문을 정리하지 못했습니다. 다시 시도해 주세요."
+        "clearFailed": "Live Compact 섀도 원문을 정리하지 못했습니다. 다시 시도해 주세요.",
     "toolFold": {
       "cell": {
         "title": "툴 페이로드 접기(실험)",

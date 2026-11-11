@@ -4607,7 +4607,7 @@
         "clearConfirmDescription": "只會刪除影子原文目錄裡的檔案，對話和摘要本身不受影響。已經指向這些檔案的摘要將無法再展開原文，且無法復原。",
         "clearConfirmButton": "清理影子原文",
         "cleared": "邊做邊壓的影子原文已清理",
-        "clearFailed": "清理邊做邊壓的影子原文失敗，請重試。"
+        "clearFailed": "清理邊做邊壓的影子原文失敗，請重試。",
     "toolFold": {
       "cell": {
         "title": "工具載荷折疊（實驗）",

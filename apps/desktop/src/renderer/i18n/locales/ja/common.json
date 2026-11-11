@@ -4607,7 +4607,7 @@
         "clearConfirmDescription": "削除されるのはシャドー原文ディレクトリ内のファイルだけです。会話と要約はそのまま残ります。これらのファイルを参照している要約は原文を展開できなくなります。元に戻せません。",
         "clearConfirmButton": "シャドーを消去",
         "cleared": "Live Compact のシャドー原文を消去しました",
-        "clearFailed": "Live Compact のシャドー原文を消去できませんでした。もう一度お試しください。"
+        "clearFailed": "Live Compact のシャドー原文を消去できませんでした。もう一度お試しください。",
     "toolFold": {
       "cell": {
         "title": "ツールペイロード折り畳み（実験）",
