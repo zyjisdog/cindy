@@ -125,6 +125,7 @@ import {
 } from '@/lib/sessionAttentionStore';
 import {
   findOrcaLeadSessionIdForWorker,
+  findOrcaWorkerReportQuestion,
   formatOrcaWorkerNotificationTitle,
   mergeOrcaLeadNotifications,
   shouldNotifyOrcaWorkerEvent,
@@ -1263,10 +1264,11 @@ function ExpandedView({
               allSessionsForNotificationRef.current,
             ])
           : null;
+        const question = findOrcaWorkerReportQuestion(sessionId);
         const title = formatOrcaWorkerNotificationTitle(
           projectDraftSessionTitle(session.title, unnamedLabelRef.current),
           leadSession ? projectDraftSessionTitle(leadSession.title, unnamedLabelRef.current) : null,
-        );
+        ) + (question ? ` · ${question}` : '');
         if (options) sendSessionEventNotification(sessionId, title, kind, options);
         else sendSessionEventNotification(sessionId, title, kind);
         return;
