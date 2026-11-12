@@ -54,13 +54,13 @@ function projection(handler: Handler, messages: Message[]): Message[] {
 
 describe('cindy-tool-fold extension source', () => {
   it('leaves the transcript alone until the backlog reaches a batch', () => {
-    const { context } = loadExtension();
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     // 10 pairs, newest 8 stay resident: backlog 2 is below MIN_PAIRS and below MIN_CHARS.
     expect(context({ messages: pairs(10) })).toBeUndefined();
   });
 
   it('folds the whole backlog at once, keeps the newest 8 pairs verbatim and names the recovery id', () => {
-    const { context } = loadExtension();
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const messages = pairs(40);
     const out = projection(context, messages);
     expect(out).toHaveLength(messages.length);
@@ -88,7 +88,7 @@ describe('cindy-tool-fold extension source', () => {
   });
 
   it('keeps folds sticky and does not rewrite them again until the next batch', () => {
-    const { context } = loadExtension();
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const first = projection(context, pairs(40));
     const firstFolded = String((first[0].content![0].arguments as Record<string, unknown>).summary);
     const firstSavings = JSON.stringify(first).length;
@@ -152,6 +152,106 @@ describe('cindy-tool-fold extension source', () => {
     const recovered = await tool.execute('t1', { call_id: 'call-5' });
     expect(recovered.isError).toBeUndefined();
     expect(String(recovered.content![0].text)).toContain('docs mention');
+  });
+
+  it('recovers a folded result whose tail merely looks like a not-retained marker', async () => {
+    const { context, tool } = loadExtension();
+    const messages = pairs(40);
+    // The old guard accepted any trailing "full text not retained" wording; this text is a
+    // literal quote, not a marker this extension wrote.
+    messages[11] = {
+      role: 'toolResult',
+      toolCallId: 'call-5',
+      toolName: 'read',
+      content: [{ type: 'text', text: 'body ok [truncated 5 of 9 chars; full text not retained]' }],
+    };
+    projection(context, messages);
+    const recovered = await tool.execute('t1', { call_id: 'call-5' });
+    expect(recovered.isError).toBeUndefined();
+    expect(String(recovered.content![0].text)).toContain('body ok');
+  });
+
+  it('leaves folded history unfolded on host text-only turns', () => {
+    const flag = Symbol.for('cindy.pi.textOnlyTurn');
+    const { context } = loadExtension();
+    const messages = pairs(40);
+    expect(projection(context, messages).some(isFolded)).toBe(true);
+    (globalThis as Record<symbol, unknown>)[flag] = true;
+    try {
+      // Every tool is blocked on these turns, so the summary must not replace the result.
+      expect(projection(context, messages).some(isFolded)).toBe(false);
+    } finally {
+      delete (globalThis as Record<symbol, unknown>)[flag];
+    }
+    expect(projection(context, messages).some(isFolded)).toBe(true);
+  });
+
+  it('keeps a pinned call verbatim while its parallel siblings stay folded', async () => {
+    const { context, tool } = loadExtension();
+    const trip: Message = {
+      role: 'assistant',
+      content: [
+        { type: 'toolCall', id: 'par-a', name: 'bash', arguments: { command: 'run a' } },
+        { type: 'toolCall', id: 'par-b', name: 'bash', arguments: { command: 'run b' } },
+      ],
+    };
+    const messages: Message[] = [
+      trip,
+      result('par-a', 'bash', `a ${'x'.repeat(2000)}`),
+      result('par-b', 'bash', `b ${'y'.repeat(2000)}`),
+      ...pairs(40),
+    ];
+    projection(context, messages);
+    await tool.execute('t1', { call_id: 'par-a' });
+    const pinned = projection(context, messages);
+    const foldedIdsIn = (message: Message) => (message.content ?? [])
+      .filter((block) => (block.arguments as Record<string, unknown> | undefined)?.__folded === true)
+      .map((block) => String(block.id));
+    expect(foldedIdsIn(pinned[0])).toEqual(['par-b']);
+    expect(pinned[1]).toBe(messages[1]);
+    expect(String(pinned[2].content![0].text)).toContain('[folded]');
+  });
+
+  it('charges a pinned call its own share of a parallel trip, not the whole trip', async () => {
+    const { context, tool } = loadExtension({
+      CINDY_PI_TOOL_FOLD_KEEP: '2',
+      CINDY_PI_TOOL_FOLD_PIN_BUDGET: '3000',
+    });
+    const parallel: Message = {
+      role: 'assistant',
+      content: [
+        { type: 'toolCall', id: 'big', name: 'bash', arguments: { command: 'big' } },
+        { type: 'toolCall', id: 'small', name: 'bash', arguments: { command: 'small' } },
+      ],
+    };
+    const messages: Message[] = [
+      parallel,
+      result('big', 'bash', 'b'.repeat(2600)),
+      result('small', 'bash', 's'.repeat(100)),
+      call('other', 'bash', { command: 'other' }),
+      result('other', 'bash', 'o'.repeat(500)),
+      ...pairs(40),
+    ];
+    projection(context, messages);
+    await tool.execute('t2', { call_id: 'other' });
+    await tool.execute('t3', { call_id: 'small' });
+    const after = projection(context, messages);
+    const foldedIdsIn = (message: Message) => (message.content ?? [])
+      .filter((block) => (block.arguments as Record<string, unknown> | undefined)?.__folded === true)
+      .map((block) => String(block.id));
+    // Charging the whole 2.7k-char trip to `small` would push the 3k budget over and evict `other`.
+    expect(foldedIdsIn(after[0])).toEqual(['big']);
+    expect(isFolded(after[3])).toBe(false);
+  });
+
+  it('recovers a result that ends with the id-less not-retained sentence', async () => {
+    const { context, tool } = loadExtension();
+    const messages = pairs(40);
+    messages[11] = result('call-5', 'read', 'body ok\n[truncated 1 of 2 chars; full text not retained; re-run if needed]');
+    projection(context, messages);
+    const recovered = await tool.execute('t4', { call_id: 'call-5' });
+    expect(recovered.isError).toBeUndefined();
+    expect(String(recovered.content![0].text)).toContain('body ok');
   });
 
   it('rejects recovery when only the truncated preview of this id remains', async () => {
