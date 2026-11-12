@@ -1483,7 +1483,7 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
-          "default": "'🤖'"
+          "default": "'\ud83e\udd16'"
         },
         "avatar_color": {
           "name": "avatar_color",
