@@ -1795,6 +1795,8 @@ export function buildPiSettingsJsonContent(
     ? undefined
     : Math.max(1, Math.ceil(effectiveContextWindow - budget * ((piCompactionPct ?? 90) / 100)));
   return JSON.stringify({
+    // Native codemode is opt-in upstream; `+name` keeps the inherited tool set and only adds it.
+    defaultTools: ['+codemode'],
     transport: 'sse',
     retry: {
       enabled: true,
@@ -4205,7 +4207,10 @@ export class PiAgent extends BaseAgent {
         // --prompt-template / --extension pass original in-repo paths without
         // trusting `.pi/settings.json` or auto-installing project packages.
         '--no-approve',
-        ...(nativePackagePaths.length === 0 ? ['--no-extensions'] : []),
+        // codemode 是 pi 的内置扩展：--no-extensions 会连它一起关掉，须显式补回。
+        ...(nativePackagePaths.length === 0
+          ? ['--no-extensions', '-e', 'builtin:codemode']
+          : []),
         '--session-dir',
         sessionDir,
         '--provider',
