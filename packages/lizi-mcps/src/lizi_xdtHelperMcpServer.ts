@@ -43,11 +43,11 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { registerGrokLoginTools, type GrokLoginCallbacks } from './xdt-helper/grok_login.js';
+import { INPUT_HANDOFF_TOOL_NAME, registerInputHandoffTool, type InputHandoffCallbacks } from './xdt-helper/input_handoff.js';
 import {
   registerBackgroundCommandTool,
   type BackgroundCommandToolDeps,
 } from './xdt-helper/backgroundCommand.js';
-import { INPUT_HANDOFF_TOOL_NAME, registerInputHandoffTool, type InputHandoffCallbacks } from './xdt-helper/input_handoff.js';
 import { jsonObjectArg } from './json-object-arg.js';
 import {
   registerAsyncQuestionTool,
@@ -179,7 +179,6 @@ const CATEGORY_ENUM = ['cindy', 'auth', 'control', 'history', 'feedback', 'hando
  * PR 都会冲突。新增内容单独起一行,放在语义相关的句子旁边,不要接在已有句子后面。
  */
 export const HELPER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
-
   cindy: [
     `${BRAND_NAME} 能力说明、界面操作帮助（get_capabilities scope=help）与当前任务信息；`,
     `get_capabilities({key:"self-management"}) 是管理自己的任务、定时任务、项目、伙伴的工具索引；`,
@@ -471,10 +470,9 @@ export interface XdtHelperMcpDeps {
   logger?: LiziMcpLogger;
   appUpdate?: AppUpdateCallbacks;
   grokLogin?: GrokLoginCallbacks;
-  /** 后台命令 + 完成回注(maker-host/background-commands);注入后注册 run_command_background。 */
-  backgroundCommands?: BackgroundCommandToolDeps['start'];
   /** 代输入: hand an on-screen step to the owner; values stay on the host. */
   inputHandoff?: InputHandoffCallbacks;
+  backgroundCommands?: BackgroundCommandToolDeps['start'];
   /**
    * Host-owned runtime classification. `bot-main` is a local Bot's main task: it sees
    * the ordinary task surface plus Bot tools, and every call is judged by `authorizeCall`.
@@ -652,14 +650,14 @@ export function createXdtHelperMcpServer(
   }
   if (deps.grokLogin)
     registerGrokLoginTools(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.grokLogin);
+  if (deps.inputHandoff)
+    registerInputHandoffTool(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.inputHandoff);
   if (deps.backgroundCommands) {
     registerBackgroundCommandTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       start: deps.backgroundCommands,
     });
   }
-  if (deps.inputHandoff)
-    registerInputHandoffTool(registry, () => resolveLiziMcpSessionContext(sessionCtx), deps.inputHandoff);
   registerGetCurrentSessionIdTool(registry, {
     getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
     getSessionProject: deps.getSessionProject,
