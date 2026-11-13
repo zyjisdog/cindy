@@ -74,7 +74,7 @@ it('skips computer approval reconciliation when no plugin has a live computer ru
   r.callbacks.broadcastGhostsChanged(r.ghosts);
   expect(r.installation.computer).not.toHaveBeenCalled();
   expect(r.installation.apps).toHaveBeenCalledOnce();
-  expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts });
+  expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts, rosterChanged: true });
 });
 
 it('publishes only the changed directory policy and retains setup and remote invalidation', () => {
