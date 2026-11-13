@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "37b05c44-2de8-4e4e-aa5f-21d3ed8bfc4c",
-  "prevId": "dfd14ed1-f75b-4e11-89f9-6fdd0815161f",
+  "id": "dfd14ed1-f75b-4e11-89f9-6fdd0815161f",
+  "prevId": "37b05c44-2de8-4e4e-aa5f-21d3ed8bfc4c",
   "tables": {
     "account_usage_snapshots": {
       "name": "account_usage_snapshots",
@@ -3870,6 +3870,13 @@
         "remote_stop_confirmed_at": {
           "name": "remote_stop_confirmed_at",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "latest_report": {
+          "name": "latest_report",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
