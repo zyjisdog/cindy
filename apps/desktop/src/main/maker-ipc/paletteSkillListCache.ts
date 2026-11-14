@@ -25,13 +25,18 @@ export type PaletteSkillListing = { success: true; skills: AgentSkillCommand[] }
  * a fork or a `switch_session` replaces that catalog without changing the session id,
  * so without it a reopened palette would keep serving the pre-fork command — and a
  * still-`loaded` status also stops the dispatch retry from correcting it.
+ * It carries the session's runtime instance id as a prefix, because the generation
+ * counter only lives inside one runtime instance: the host can rebuild the runtime
+ * in place (project resource drift recycles it with the same session id), and the
+ * rebuilt instance restarts at generation 1 — without the instance id it would hit
+ * the previous instance's entry within the reuse window.
  */
 export function paletteSkillListReuseKey(fields: {
   agentKind: string;
   workingDir?: string;
   sessionId?: string;
   remoteHostId?: string;
-  runtimeGeneration?: number;
+  runtimeGeneration?: string;
 }): string {
   return JSON.stringify([
     fields.agentKind,

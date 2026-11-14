@@ -115,6 +115,14 @@ export const PALETTE_INSPECTION_REUSE_MS = 60_000;
  * probe) lives in one instance; the desktop builds exactly one at load, and the change-token watcher
  * starts only when the first listener subscribes, not when the instance is built.
  */
+/**
+ * Command-palette reads may reuse a finished inspection for longer. They only list
+ * package Skills/prompts, and every local mutation or package-change token edge
+ * invalidates the cache, so the only stale window is an install made outside Cindy
+ * (`pi install` in a terminal). Settings keeps the blocking one-second path.
+ */
+export const PALETTE_INSPECTION_REUSE_MS = 60_000;
+
 export function createPiPackageStore(ports: PiPackageStorePorts) {
 const { getUserDataDir, getReadyBinaryPath, updateReadyPiBinary, piBinaryUpdateFailureStage } = ports;
 
