@@ -76,6 +76,7 @@ export function useModelCatalogThinking(target: ModelCatalogThinkingTarget | nul
           ...EMPTY,
           key,
           loading: false,
+          loaded: false,
           saving: false,
           error: false,
           errorReason: undefined,
