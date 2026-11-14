@@ -152,6 +152,12 @@ export function composePiSystemPrompt(hostPrompt: string, agentPrompt: string): 
     .join('\n\n');
 }
 
+// Desktop Pi 会话的真实 system prompt（共享身份/归属段 + Pi 行为段 + 追加在末尾的计划书写规范）。
+// 独立导出供测试走生产入口断言，不必复制 ?raw 源文本。
+export function desktopPiSystemPrompt(): string {
+  return composePiSystemPrompt(`${hostSystemPrompt.trim()}\n\n${businessOwnershipPrompt.trim()}`, piSystemPrompt);
+}
+
 /** What the Pi runtime config reads from its host (Desktop: pi-host.ts). */
 export interface PiRuntimeConfigHost {
   /** Absolute path of the bundled ripgrep, resolved once when the config is built. */
@@ -171,7 +177,7 @@ export function buildPiRuntimeConfig(host: PiRuntimeConfigHost): AgentRuntimeCon
     // 代输入: sudo / ssh / git password prompts of this task go to the owner.
     taskShellEnv: inputHandoffTaskShellEnv,
     // 保留 host 共用身份段,再追加 Pi 专属行为段；maker-core 会整体追加到 Pi 原生 prompt。
-    systemPrompt: composePiSystemPrompt(`${hostSystemPrompt.trim()}\n\n${businessOwnershipPrompt.trim()}`, piSystemPrompt),
+    systemPrompt: desktopPiSystemPrompt(),
     answerDeliveryPrompt: PI_ANSWER_DELIVERY_PROMPT,
     // Pi 的 grep 以及 Cindy 覆盖的 find 都固定复用随 Desktop 校验、打包的 rg。
     // 下发绝对路径而非 PATH，避免 Windows 从不受信工作目录优先命中同名 rg.exe。
