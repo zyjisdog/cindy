@@ -907,8 +907,9 @@ describe('OrcaTeamService', () => {
     expect(reserveWorkerMessage).toHaveBeenCalledTimes(1);
     expect(order).toEqual(['reserve-head', 'request-stop', 'after-stop-request']);
     expect(deps.updateWorkerStatus).toHaveBeenCalledTimes(2);
-    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(1, 'worker-1', 'running', null);
-    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(2, 'worker-1', 'running', null);
+    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(1, 'worker-1', 'running');
+    expect(deps.updateWorkerStatus).toHaveBeenNthCalledWith(2, 'worker-1', 'running');
+    expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', null);
     expect(deps.broadcastOrcaWorkerChanged).toHaveBeenCalledTimes(2);
   });
 
@@ -1882,6 +1883,68 @@ describe('OrcaTeamService', () => {
     expect(getWorker().latestReport).toMatchObject({ state: 'blocked', question: '另一个问题' });
   });
 
+  // 直发/插话回报（无 queued id）写入后，上一轮排队来源作废；改写旧排队消息不再误清新回报。
+  it('ignores rewrite of a stale queued report once a direct report replaced it', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第一轮' });
+    // 第一轮回报 A 进队列。
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: false,
+      queuedMessageId: 'queued-1',
+      report: { state: 'blocked', question: '旧问题' },
+    });
+
+    // 第二轮回报 B 直发送达（无 queuedMessageId），取代第一轮成为当前投影。
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: true,
+      report: { state: 'blocked', question: '当前问题' },
+    });
+    expect(getWorker().latestReport).toMatchObject({ question: '当前问题' });
+
+    // 改写第一轮的排队消息 A：不得误清第二轮的当前回报。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
+    expect(getWorker().latestReport).toMatchObject({ question: '当前问题' });
+  });
+
+  // 终态已清 autoBridge 条目后，改写排队回报仍须把面板上挂着的旧问题清掉。
+  it('invalidates the projected report via source tracking after runtime state was cleared', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '干活' });
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: false,
+      queuedMessageId: 'queued-1',
+      report: { state: 'blocked', question: '选 A 还是 B' },
+    });
+    expect(getWorker().latestReport).toMatchObject({ state: 'blocked' });
+
+    // 终态结算会清掉 autoBridge 条目；来源追踪独立于它存活。
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '结果' });
+    service.clearAutoBridgeState('worker-session-1');
+
+    // 改写仍命中：面板不再挂着已失效的旧「等回复」。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
+    expect(getWorker().latestReport).toBeNull();
+  });
+
+  // 迟到的旧派活回执只在旧 state 上记账，不得覆盖新一轮派活的面板。
+  it('does not let a late old-dispatch receipt overwrite the new round panel', async () => {
+    const { deps, getWorker, service } = createDeps();
+    // 第一轮派活，回报回执悬而未决。
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第一轮' });
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    // 新一轮派活已开始（清回报、置 running）。
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第二轮' });
+    // 旧回执迟到落地。
+    await finish(true, {
+      delivered: false,
+      queuedMessageId: 'queued-old',
+      report: { state: 'blocked', question: '第一轮的旧问题' },
+    });
+
+    // 面板保持新一轮的空标记，不被旧回报洗回旧结论。
+    expect(getWorker().latestReport).toBeNull();
+  });
+
   // progress 只是进度，不是本轮结论：终态不得拿它做映射，否则后续报的结论会被跳过。
   it('never maps a progress report into the worker status at the terminal', async () => {
     const { deps, getWorker, service } = createDeps();
@@ -1898,6 +1961,25 @@ describe('OrcaTeamService', () => {
         return report?.state === 'progress';
       });
     expect(progressWrites).toEqual([]);
+  });
+
+  // 结论已入档（send_to_lead 被接受）后，迟到的 progress 不得覆盖结论：
+  // 否则终端回合按 progress 跳过结算，已判定的结论语义退化回 raw 状态。
+  it('ignores a late progress report after a settling report was accepted', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '长任务' });
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: true,
+      report: { state: 'ready', summary: '已完成' },
+    });
+    expect(getWorker().latestReport).toMatchObject({ state: 'ready' });
+
+    await service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '迟到进度' });
+
+    expect(getWorker().latestReport).toMatchObject({ state: 'ready' });
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith(
+      'worker-1', expect.objectContaining({ summary: '迟到进度' }),
+    );
   });
 
   // 直连 Worker 轮的 progress：捕获时无派活（captured=undefined），await 期间新派活装上
@@ -1973,6 +2055,61 @@ describe('OrcaTeamService', () => {
     expect(getWorker().latestReport).toMatchObject({ state: 'blocked', question: '选 A 还是 B' });
   });
 
+  // 派活回滚时，排队回报的来源也要还回去：否则改写那条排队消息会跳过清理，面板继续显示失效的「等回复」。
+  it('restores the queued report source when a dispatch fails after acceptance', async () => {
+    let calls = 0;
+    const { deps, getWorker, service } = createDeps({
+      dispatchWorkerMessage: vi.fn(async (params) => {
+        calls += 1;
+        await params.onAccepted?.();
+        if (calls === 1) {
+          return {
+            ok: true,
+            mode: 'dispatched',
+            clientId: 'first',
+            dispatchOutcome: {
+              kind: 'session-dispatch',
+              source: 'test-source',
+              dispatched: true,
+            },
+            targetTitle: 'Worker',
+            targetLastUserSendAt: null,
+          } satisfies DispatchWorkerMessageResult;
+        }
+        return {
+          ok: false,
+          dispatchOutcome: {
+            kind: 'session-dispatch',
+            source: 'test-source',
+            dispatched: false,
+            reason: 'cancelled-before-dispatch',
+            context: 'rollback-source',
+            message: 'cancelled',
+          },
+        } satisfies DispatchWorkerMessageResult;
+      }),
+    });
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第一轮' });
+    // 第一轮回报进队列，来源即这条排队消息。
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: false,
+      queuedMessageId: 'queued-1',
+      report: { state: 'blocked', question: '选 A 还是 B' },
+    });
+    expect(getWorker().latestReport).toMatchObject({ state: 'blocked' });
+
+    // 结束第一轮：终态结算会清掉 autoBridge 条目，来源只能靠独立保存的映射找回。
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '结果' });
+
+    // 第二轮派活被接受后发送失败：回滚恢复上一轮状态与来源。
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '第二轮' });
+    expect(getWorker().latestReport).toMatchObject({ state: 'blocked', question: '选 A 还是 B' });
+
+    // 改写那条排队消息：回滚后来源仍在，投影必须失效。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
+    expect(getWorker().latestReport).toBeNull();
+  });
+
   // progress 在 await 期间被新派活替换时，不能把旧进度写进新一轮。
   it('drops a progress report whose assignment was replaced mid-await', async () => {
     const { deps, service } = createDeps();
@@ -2029,8 +2166,13 @@ describe('OrcaTeamService', () => {
     });
     expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'dropped' }));
 
-    await service.handleWorkerTurnStarted('worker-session-1');
-    expect(deps.updateWorkerStatus).toHaveBeenCalledWith('worker-1', 'running', null);
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '第二轮',
+    });
+    // 新派活（新一轮的开始）清回报走 setWorkerLatestReport(null)：旧 dropped 不再挡住新轮的完成判定。
+    expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', null);
   });
 
   it('persists the latest report so the panel never shows a stale question', async () => {

@@ -702,6 +702,10 @@ export function findFocusTargetWorker<
 }
 
 export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamService {
+  // 回报投影的来源追踪：排队消息在 Worker 结束后仍可被改写，而终态处理会清掉
+  // autoBridge 条目；这里独立记录「面板上的 latest_report 来自哪条排队消息」，
+  // 保证改写检测覆盖整个可编辑期间（命中后删除）。
+  const pendingReportSourceBySession = new Map<string, string>();
   const autoBridge = new Map<string, AutoBridgeState>();
   const queueControl = createSessionQueueControlService({
     getSnapshot: async (sessionId) => {
@@ -1124,6 +1128,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     worker: OrcaWorkerRecordSnapshot;
     previousStatus: OrcaWorkerStatus;
     previousLatestReport: OrcaStructuredWorkerReport | null;
+    previousPendingReportSource: string | undefined;
     currentPending: AutoBridgeState | undefined;
     previousPending: AutoBridgeState | undefined;
     previousManualInterrupt: OrcaManualInterruptSnapshot | null;
@@ -1147,7 +1152,12 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     if (currentWorker?.status !== 'running') return true;
 
     // 恢复状态时一并把派活清掉的旧回报还回去，否则标记与问题会从面板上消失。
-    await deps.updateWorkerStatus(params.worker.id, params.previousStatus, params.previousLatestReport);
+    await deps.updateWorkerStatus(params.worker.id, params.previousStatus);
+    await deps.setWorkerLatestReport(params.worker.id, params.previousLatestReport);
+    // 排队回报的来源同样要还回去：否则改写那条排队消息会跳过清理，面板继续显示失效的「等回复」。
+    if (params.previousPendingReportSource) {
+      pendingReportSourceBySession.set(params.sessionId, params.previousPendingReportSource);
+    }
     deps.broadcastOrcaWorkerChanged(params.worker.leadSessionId);
     return true;
   }
@@ -1317,6 +1327,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             previousManualInterrupt: OrcaManualInterruptSnapshot | null;
             /** 派活会清空上一轮的回报标记；发送失败回滚时必须把用户看过的结论还回去。 */
             previousLatestReport: OrcaStructuredWorkerReport | null;
+            /** 派活会作废上一轮排队回报的来源；回滚必须一起还回去，否则改写旧消息会跳过清理。 */
+            previousPendingReportSource: string | undefined;
           }
         | undefined;
       let currentPending: AutoBridgeState | undefined;
@@ -1340,6 +1352,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
                 worker: target,
                 previousStatus: snapshot.previousStatus,
                 previousLatestReport: snapshot.previousLatestReport,
+                previousPendingReportSource: snapshot.previousPendingReportSource,
                 currentPending,
                 previousPending: snapshot.previousPending,
                 previousManualInterrupt: snapshot.previousManualInterrupt,
@@ -1394,6 +1407,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               previousPending: autoBridge.get(target.sessionId),
               previousManualInterrupt: deps.getManualInterrupt(target.sessionId),
               previousLatestReport: currentWorker.latestReport ?? null,
+              previousPendingReportSource: pendingReportSourceBySession.get(target.sessionId),
             };
             deps.clearManualInterrupt(target.sessionId);
             currentPending = setPending(target.sessionId, {
@@ -1412,7 +1426,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
               resolveSettlement,
             };
             provisionalDispatches.set(target.sessionId, currentProvisional);
-            await deps.updateWorkerStatus(target.id, 'running', null);
+            await deps.updateWorkerStatus(target.id, 'running');
+            await deps.setWorkerLatestReport(target.id, null);
+            // 新轮接管面板：上一轮排队回报的来源作废，改写旧消息不再误清新轮投影。
+            pendingReportSourceBySession.delete(target.sessionId);
             deps.broadcastOrcaWorkerChanged(link.leadSessionId);
           });
           if (currentPending) await markPendingReady(target.sessionId, currentPending);
@@ -2318,16 +2335,19 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     },
     async workerReportQueuedContentMutated(sessionId, queuedMessageIds) {
       const state = autoBridge.get(sessionId);
-      const sourceId = state?.latestReportQueuedId;
-      if (!state || !sourceId || !queuedMessageIds.includes(sourceId)) return;
+      const sourceId = state?.latestReportQueuedId ?? pendingReportSourceBySession.get(sessionId);
+      if (!sourceId || !queuedMessageIds.includes(sourceId)) return;
       const link = await deps.getWorkerLinkBySessionId(sessionId);
       if (!link) return;
-      await withWorkerTransition(state.workerId, async () => {
+      await withWorkerTransition(link.workerId, async () => {
         const current = autoBridge.get(sessionId);
-        // 复核：过渡期间可能已有更新的回执改写投影。
-        if (!current || current.latestReportQueuedId !== sourceId) return;
-        current.structuredReport = undefined;
-        current.latestReportQueuedId = undefined;
+        // 复核：过渡期间可能已有更新的回执改写投影（autoBridge 条目仍在时）。
+        if (current && current.latestReportQueuedId !== sourceId) return;
+        if (current) {
+          current.structuredReport = undefined;
+          current.latestReportQueuedId = undefined;
+        }
+        pendingReportSourceBySession.delete(sessionId);
         // 消息内容已变，投影不再声称任何状态；面板回到无标记，通知不再复用旧问题。
         await deps.setWorkerLatestReport(link.workerId, null);
       });
@@ -2344,12 +2364,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
         // 若新派活恰好装上了新的 identity，旧进度同样不得写进它。
         const current = autoBridge.get(sessionId);
         if (current !== captured) return;
+        // 终段回报已被 send_to_lead 接受入档后，迟到的 progress 是遥测：不得覆盖结论，
+        // 否则终端回合会按 progress 跳过结算，把已判定的结论语义退化回 raw 状态。
+        if (current?.structuredReport && current.structuredReport.state !== 'progress') return;
         if (current) {
           current.structuredReport = report;
           // progress 不入队，没有可被队列编辑触碰的来源。
           current.latestReportQueuedId = undefined;
         }
         // 只记最新进度：不结算欠回报、不改 worker 状态，面板与通知读得到即可。
+        // 新进度覆盖 latest_report 后，残留的旧排队来源会让改写误清这份进度。
+        pendingReportSourceBySession.delete(sessionId);
         await deps.setWorkerLatestReport(link.workerId, report);
       });
       deps.broadcastOrcaWorkerChanged(link.leadSessionId);
@@ -2385,18 +2410,30 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
             const provisional = provisionalDispatches.get(sessionId);
             const ownsState = autoBridge.get(sessionId) === state
               || provisional?.previousPendingIdentity === state;
+            // 新一轮派活已认领该行时，旧回执只在旧 state 上记账结算，不再写 worker 行——
+            // 否则迟到的旧回报会把新派活的 running 面板与 structuredReport 洗回旧结论。
+            const supersedesRow = autoBridge.get(sessionId) !== state;
             if (report && ownsState) {
               const isProgress = report.state === 'progress';
               state.structuredReport = report;
               // 投影随这份回执更新：入队的记下来源 id，直发的清空（队列改写不再能影响它）。
               state.latestReportQueuedId = receipt?.queuedMessageId;
               // 终态先到、回报后到：由回报侧补做映射，否则晚到的 waiting / blocked 会永久停在 done。
-              if (state.terminalObserved && !state.reportApplied && !isProgress) {
+            if (supersedesRow) {
+              // 新轮已接管面板：旧回报只留档，不落盘，也不反向改状态。
+            } else if (state.terminalObserved && !state.reportApplied && !isProgress) {
                 // 用真实终态：晚到的 ready 不能把已判 error 的轮次洗成成功。
                 await applyWorkerReportState(state, report, state.terminalStatus ?? 'done');
               } else if (!state.terminalObserved) {
                 // 终态还没到：至少把最新回报落盘，面板与通知不读旧问题。
                 await deps.setWorkerLatestReport(state.workerId, report);
+                // 记录来源以便终态后改写仍能命中；直发/插话回报无 queued id，
+                // 同时清掉上一轮残留来源，避免改写旧消息误清这份新回报。
+                if (receipt?.queuedMessageId) {
+                  pendingReportSourceBySession.set(sessionId, receipt.queuedMessageId);
+                } else {
+                  pendingReportSourceBySession.delete(sessionId);
+                }
               }
             }
             if (accepted && settlesReport && ownsState) settlePendingReport(state);
