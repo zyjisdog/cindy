@@ -58,9 +58,6 @@ import type {
   ProviderWireProtocol,
 } from '@cindy/model-providers';
 
-import { readLiveCompactSettings } from './live-compact-store.js';
-import { ownerScopedUserDataPath } from '../appSessionState.js';
-import { readToolFoldSettings } from './tool-fold-store.js';
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { t } from '../i18n.desktop.js';
 import { spawnPiSubagentRunner } from '../cindy-brain/piSubagentRunnerHost.js';
