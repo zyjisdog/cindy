@@ -9222,8 +9222,8 @@ export class PiAgent extends BaseAgent {
           level: effortToPiThinkingLevel(effort),
         }));
         if (!resp.success) throw new Error(`pi set_thinking_level failed: ${resp.error ?? 'unknown'}`);
-        // 应用具体档位同时意味着思考开着：覆盖可能的关闭记录，否则后续 reload 恢复会把
-        // 刚应用的档位用 off 关掉。
+        // mutableEffort 只跟随已确认生效的档位。应用具体档位同时意味着思考开着：覆盖可能的
+        // 关闭记录，否则后续 reload 恢复会把刚应用的档位用 off 关掉。
         mutableEffort = effort;
         mutableThinkingEnabled = true;
       },

@@ -542,6 +542,9 @@ export interface ProviderHandlerDeps {
   writeModelCompaction?(targets: readonly ModelPriceOverrideTarget[], pct: number | null): Promise<void>;
   stageClearProviderModelCompaction?(providerId: string): () => boolean;
   syncLocalCatalogOverrides?(): void;
+  readModelCompaction?(target: ModelPriceOverrideTarget): { pct: number; isCustomized: boolean };
+  writeModelCompaction?(targets: readonly ModelPriceOverrideTarget[], pct: number | null): Promise<void>;
+  stageClearProviderModelCompaction?(providerId: string): () => boolean;
 }
 
 /** 图片输入能力的读回视图。 */
