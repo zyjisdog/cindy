@@ -1,1 +1,1 @@
-SELECT 1;
+ALTER TABLE `orca_workers` ADD `latest_report` text;
