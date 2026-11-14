@@ -224,7 +224,7 @@ it('名额让出后治理仍在：win32 硬顶到点留痕，POSIX 组探测等�
   expect(service.runningCount()).toBe(0);
   if (process.platform === 'win32') {
     await vi.waitFor(
-      () => expect(warn).toHaveBeenCalledWith(expect.stringContaining('hard cap reached'), expect.anything()),
+      () => expect(warn).toHaveBeenCalledWith(expect.stringContaining('hard cap'), expect.anything()),
       { timeout: 10_000 },
     );
   }

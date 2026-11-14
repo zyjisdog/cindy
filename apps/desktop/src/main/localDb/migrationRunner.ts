@@ -478,6 +478,16 @@ const FROZEN_REPLAY_DEFECT_GUARDS: Record<string, (db: Database.Database) => boo
     if (columns.length === 0) return true;
     return columns.some((column) => column.name === 'notify_wecom_group');
   },
+  '0150_classy_the_renegades.sql': (db) => {
+    const tables = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'orca_workers'`)
+      .all() as Array<{ name: string }>;
+    // 表不存在(仅合成/残缺库;真实库自 orca_workers 建表起必有)时裸 ALTER 必然报错,
+    // 与其中断整条迁移链不如按 no-op 跳过;列已存在则为重放,同样跳过。
+    if (tables.length === 0) return true;
+    const columns = db.prepare(`PRAGMA table_info('orca_workers')`).all() as Array<{ name: string }>;
+    return columns.some((column) => column.name === 'latest_report');
+  },
 };
 
 export function runMigrationReplay(
