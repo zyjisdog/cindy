@@ -127,6 +127,7 @@ interface DeviceLinkDeviceView {
   selfName?: string | null;
   deviceInfo?: DeviceLinkDeviceInfo | null;
   platform: string | null;
+  app?: string;
   appVersion: string | null;
   lastSeenAt: string | null;
   online: boolean;
@@ -153,6 +154,7 @@ interface DeviceLinkPresenceSnapshot {
   selfName?: string | null;
   deviceInfo?: DeviceLinkDeviceInfo | null;
   platform: string;
+  app?: string;
   appVersion: string;
   lastSeenAt: number;
   remoteControlEnabled: boolean;
@@ -1360,6 +1362,7 @@ interface ElectronAPI {
   /** 意识仓库 —— 数据模型与校验见 shared/ghost.ts,main 端见 main/cindy-brain/。 */
   /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
   modelGroups: {
+    commit: (decisionId: string) => Promise<boolean>;
     get: () => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     set: (config: import('../shared/modelGroups').ModelGroupsConfig) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest) => Promise<import('../shared/modelGroups').ModelGroupResolveResult>;
@@ -1860,8 +1863,8 @@ interface ElectronAPI {
      * status 与 getSystemPermissions 的各项同为 string 形状（granted / denied / …）。
      */
     requestInputMonitoringPermission: () => Promise<{ ok: true; status: string }>;
-    muteSystemAudio: () => Promise<{ ok: true } | { ok: false; error: string }>;
-    restoreSystemAudio: () => Promise<{ ok: true } | { ok: false; error: string }>;
+    muteSystemAudio: (payload?: { recordingId?: string }) => Promise<{ ok: true } | { ok: false; error: string }>;
+    restoreSystemAudio: (payload?: { recordingId?: string }) => Promise<{ ok: true } | { ok: false; error: string }>;
     testConnection: () => Promise<VoiceInputConnectionTestResult>;
     getReadiness: () => Promise<{
       ok: boolean;
@@ -1919,6 +1922,7 @@ interface ElectronAPI {
     reloadModelSelection: () => Promise<VoiceInputModelSelectionResultData>;
     openSettings: (tab: 'voice-input' | 'providers') => Promise<{ ok: true }>;
     start: (params?: {
+      recordingId?: string;
       sourceLanguage?: string;
       refinementEnabled?: boolean;
       refinementCacheScope?: string;
@@ -3197,6 +3201,8 @@ interface ElectronAPI {
       surfaceId: string;
       bounds: import('../shared/rsbNativePopup').RsbNativePopupBounds;
       visible: boolean;
+      /** One-shot restoration after the native view has been shown. */
+      focus?: boolean;
     }) => Promise<{ ok: true }>;
     command: (
       input: { surfaceId: string } & import('../shared/rsbNativePopup').RsbNativePopupCommand,
@@ -4685,8 +4691,9 @@ interface ElectronAPI {
       provider: 'telegram' | 'x' | 'feishu',
       enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
-    setWorkspaces: (
-      workspaces: Record<string, string>,
+    /** 把一个本机目录加进项目列表(侧栏与 IM 机器人共用)。 */
+    addProject: (
+      directory: string,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     /** Official X assignment, compared with the caller's last observed value. */
     setXCompanion: (botId: string | null, expectedBotId: string | null) =>
@@ -4730,22 +4737,16 @@ interface ElectronAPI {
       action: import('../shared/hookControlIpc').ProviderOpenAction,
       scopeId?: string,
     ) => Promise<{ ok: true }>;
-    getWorkspacePrefs: () => Promise<{
-      prefs: import('../shared/hookControlIpc').HookPrefsView;
+    getSharedProjectPrefs: () => Promise<{
+      prefs: import('../shared/hookControlIpc').SharedProjectPrefsView;
     }>;
-    setWorkspacePrefs: (
+    setSharedProjectPrefs: (
       workspace: string,
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
-      teamId?: string | null,
-    ) => Promise<{ prefs: import('../shared/hookControlIpc').HookPrefsView }>;
-    getProviderWorkspacePrefs: (provider: 'telegram' | 'x' | 'feishu') => Promise<{
-      prefs: import('../shared/hookControlIpc').ProviderPrefsView;
-    }>;
-    setProviderWorkspacePrefs: (
-      provider: 'telegram' | 'x' | 'feishu',
-      workspace: string,
-      patch: import('../shared/hookControlIpc').HookPrefsPatch,
-    ) => Promise<{ prefs: import('../shared/hookControlIpc').ProviderPrefsView }>;
+    ) => Promise<{ prefs: import('../shared/hookControlIpc').SharedProjectPrefsView }>;
+    onSharedProjectPrefsChanged: (
+      cb: (view: import('../shared/hookControlIpc').SharedProjectPrefsView) => void,
+    ) => () => void;
     getTelegramBehavior: (bindingId: string) => Promise<{
       behavior: import('../shared/hookControlIpc').TelegramHookBehaviorState;
     }>;
@@ -4770,7 +4771,7 @@ interface ElectronAPI {
     }>;
     setWorkspaceProviderSource: (payload: {
       agentDeviceId?: string | null;
-      channel: 'slack' | 'telegram' | 'x' | 'feishu';
+      channel: 'slack' | 'telegram' | 'x' | 'feishu' | 'shared';
       teamId: string | null;
       workspace: string;
       providerId: string | null;
@@ -4781,12 +4782,6 @@ interface ElectronAPI {
       listener: (
         entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[],
       ) => void,
-    ) => () => void;
-    onPrefsChanged: (
-      cb: (view: import('../shared/hookControlIpc').HookPrefsView) => void,
-    ) => () => void;
-    onProviderPrefsChanged: (
-      cb: (view: import('../shared/hookControlIpc').ProviderPrefsView) => void,
     ) => () => void;
     onTelegramBehaviorChanged: (
       cb: (view: import('../shared/hookControlIpc').TelegramHookBehaviorState) => void,

@@ -486,6 +486,7 @@ import {
   startHostEventBridge,
   type HostDelegationConfig,
 } from './host-delegation';
+import { createHostIpcProxy, registerHostIpcProxies } from './host-ipc-proxy';
 import { createIpcChannelUsage, registeredIpcChannels, tapIpcChannelUsage } from './ipcChannelUsage';
 import { hasRecentWorkdir, listRecentWorkdirs } from './localDb/ipc/recentWorkdirs';
 import { getActiveCatalog } from './maker-host/active-catalog';
@@ -614,7 +615,8 @@ import { createHostDaemonsService, type HostDaemonsService } from './host-daemon
 import { readToolMessages } from './host-daemons/toolHistory.js';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { readMainHeapSamplingFlag, startMainHeapSampling } from './process-monitor/heap-sampling.js';
-import { startMemoryLog } from './process-monitor/memory-log.js';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { createEventLoopDelayCounters, startMemoryLog } from './process-monitor/memory-log.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
 import {
   initAppBadgeService,
@@ -679,7 +681,8 @@ import { createOpenLogsMenuItem, openLogsDirectory } from './logSupport';
 import { sidebarWindowExpansion } from './sidebarWindowExpansion';
 import { registerSidebarWindowExpansionIpc } from './sidebarWindowExpansionIpc';
 import { WindowManualDragController } from './windowManualDrag';
-import { loadWindowsTaskbarNative } from './windowsTaskbarNative';
+import { loadPackagedWindowsShellNative, loadWindowsTaskbarNative } from './windowsTaskbarNative';
+import { createWindowsDeepLinkHandoff, deepLinkRequestData } from './windowsDeepLinkHandoff';
 import { setWindowsWindowDarkMode } from './windowsWindowDarkMode';
 import {
   issueWritableDirectoryPickerGrant,
@@ -695,6 +698,7 @@ import {
   waitForSharedTaskRelay,
   releaseDeviceLinkOwnershipBeforeLogout,
   handleDeviceLinkSystemResume,
+  handleDeviceLinkSystemSuspend,
   getControllerName,
   revokeController,
 } from './device-link';
@@ -884,6 +888,7 @@ import {
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
+  registerComputerUseIpc,
   restoreOrcaRemoteWorkersForCurrentOwner,
   stopOrcaRemoteWorkersForOwnerBoundary,
   isSessionTurnPendingCompletion,
@@ -1370,11 +1375,30 @@ function installHostClientMode(): boolean {
         && pending.channel === (channel === 'ghosts:confirm:resolve' ? 'ghosts:confirm-request' : 'ghosts:install-consent:request');
     },
   });
+  // Registered channels (host-ipc-registry) use the Host's generic route, pinned
+  // to the Host instance and to the account the windows show.
+  const hostIpcLog = createLogger('host-ipc');
+  const ipcProxy = createHostIpcProxy({
+    baseUrl: delegation.baseUrl,
+    token: delegation.token,
+    instanceId: delegation.instanceId,
+    readOwner: () => {
+      const state = authManager.getAuthState();
+      return { dataOwnerId: state.dataOwnerId, ownerGeneration: state.ownerGeneration, canEnterApp: state.canEnterApp };
+    },
+    applyAuthState: (state) => authManager.receiveHostAuthState(state as authManager.AuthState),
+    log: (message, meta) => hostIpcLog.warn(message, meta ?? {}),
+  });
+  const routed = registerHostIpcProxies({
+    ipcMain,
+    proxy: ipcProxy,
+    admit: { 'trusted-app-renderer': assertTrustedAppRendererEvent },
+  });
   // Registered outside the runtime block by other modules; drop those so the
   // host stays authoritative instead of throwing on a duplicate handler.
   claimProxiedChannels(ipcMain, (channel) => {
     console.log(`[bootstrap-electron] client mode keeps the host handler for ${channel}`);
-  });
+  }, routed);
   const channelUsage = createIpcChannelUsage({
     mode: 'client',
     file: ipcUsageReportFile,
@@ -1392,6 +1416,7 @@ function installHostClientMode(): boolean {
   });
   console.log(`[bootstrap-electron] client mode: delegating to ${delegation.baseUrl}`);
   console.log(`[bootstrap-electron] client mode proxies: ${installed.join(', ')}`);
+  console.log(`[bootstrap-electron] client mode routed channels: ${routed.join(', ')}`);
   void registerHostDelegatedSync({
     channel: 'ghosts:list',
     path: '/api/ghosts',
@@ -1436,6 +1461,8 @@ function installHostClientMode(): boolean {
     token: delegation.token,
     instanceId: delegation.instanceId,
     beforeEvents: async (signal) => {
+      // A (re)connected stream may face another Host build: negotiate again on next use.
+      ipcProxy.invalidate();
       const auth = await hostClient.request('/api/auth/state', null, signal) as authManager.AuthState;
       if (!signal.aborted) {
         authManager.receiveHostAuthState(auth);
@@ -4311,7 +4338,8 @@ app.on('open-file', (event, filePath) => {
 // ── Single instance lock ─────────────────────────────────────────────────
 // 正常 dev 与 packaged 一律启用。这是把 OS 因深链(cindy://focus 授权返回 /
 // cindy://session 等)/ 右键 "通过 Cindy 打开" 而拉起的第二个进程 redirect 成
-// "聚焦已运行窗口" 的唯一机制——两个独立 Electron 进程之间没有别的通道能交接焦点。
+// "聚焦已运行窗口" 的机制。Windows 普通浏览器不能经 WM_COPYDATA 通知提权实例，
+// 这种权限组合补走同用户、同锁域的有界深链管道，沿用同一解析与 pending 入口。
 //
 // 锁按 flavor 分域(resolveSingleInstanceLockUserDataDir):packaged 锁真实
 // userData(release 之间单实例);dev 锁 `<userData>/dev-single-instance-lock`
@@ -4328,6 +4356,8 @@ app.on('open-file', (event, filePath) => {
 // pending / 超前 / drift 都拒绝启动。passive 自己不迁移/repair schema,并用多
 // reader lease 阻止之后的 primary 抢跑 migration。
 // 隔离数据实例走 `--isolated[=<名字>]`(独立 userData → 独立锁域,见 docs/dev-rules/desktop-development.md)。
+let singleInstanceRejected = false;
+const deepLinkHandoffLog = createLogger('deepLink:handoff');
 if (
   getCindyVersionLockScope() !== null ||
   shouldRequestSingleInstanceLock({
@@ -4345,9 +4375,34 @@ if (
             isPackaged: app.isPackaged,
             userDataDir: realUserDataDir,
           });
+  const startupUrl = process.platform === 'win32' ? findDeepLinkInArgv(process.argv) : null;
+  const startupRequest = startupUrl ? deepLinkRequestData() : undefined;
+  let windowsHandoff: ReturnType<typeof createWindowsDeepLinkHandoff> | undefined;
+  if (process.platform === 'win32' && app.isPackaged) {
+    try {
+      const native = loadPackagedWindowsShellNative();
+      if (native) {
+        windowsHandoff = createWindowsDeepLinkHandoff({
+          lockScopeDir,
+          native,
+          isDeepLink: (url) => findDeepLinkInArgv([url]) !== null,
+          dispatch: (url, source) => {
+            handleIncomingDeepLink(url, source);
+            if (source === 'windows-handoff' && startupWindowCreationAllowed && !focusMainWindow()) {
+              createWindow();
+            }
+          },
+          // Do not log native exceptions or incoming URLs: they may hold secrets.
+          onFailure: (stage) => deepLinkHandoffLog.warn('Windows handoff failed', { stage }),
+        });
+      }
+    } catch {
+      deepLinkHandoffLog.warn('Windows handoff unavailable');
+    }
+  }
   let gotTheLock: boolean;
   if (lockScopeDir === realUserDataDir) {
-    gotTheLock = app.requestSingleInstanceLock();
+    gotTheLock = app.requestSingleInstanceLock(startupRequest);
   } else {
     // Electron 没有自定义锁作用域的 API:锁文件 / socket 按调用时刻的 userData
     // 路径生成。这里在同步窗口内临时切换 userData 再还原——主进程单线程,中间
@@ -4355,12 +4410,20 @@ if (
     fs.mkdirSync(lockScopeDir, { recursive: true });
     app.setPath('userData', lockScopeDir);
     try {
-      gotTheLock = app.requestSingleInstanceLock();
+      gotTheLock = app.requestSingleInstanceLock(startupRequest);
     } finally {
       app.setPath('userData', realUserDataDir);
     }
   }
   if (!gotTheLock) {
+    singleInstanceRejected = true;
+    // Synchronous, bounded send in the losing process, before app.quit(). The
+    // owning process coalesces this with second-instance by the launch ID.
+    if (startupUrl && windowsHandoff) {
+      const queued = windowsHandoff.forward(startupUrl, startupRequest);
+      if (queued) deepLinkHandoffLog.info('queued Windows handoff');
+    }
+    if (startupUrl) redactConsumedDeepLinkInArgv(process.argv, startupUrl);
     markDesktopDevStartupFailed(
       'SINGLE_INSTANCE_OWNED',
       'Another Cindy instance already owns this single-instance lock scope.',
@@ -4368,8 +4431,10 @@ if (
     );
     app.quit();
   } else {
+    windowsHandoff?.start();
+    app.once('will-quit', () => windowsHandoff?.close());
     finishCindyVersionStartup();
-    app.on('second-instance', (_event, argv) => {
+    app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
       // Windows: 用户点 cindy://(或历史 xdt-maker://)链接 / 右键 "通过 Cindy 打开" 时,
       // OS 会再起一个本 app 实例; 单例锁把它 redirect 成 second-instance 事件,
       // URL 或 --open-folder 参数都在 argv 里。macOS 不走这个路径(走 open-url),
@@ -4382,7 +4447,8 @@ if (
       const url = findDeepLinkInArgv(argv);
       if (url) {
         redactConsumedDeepLinkInArgv(argv, url);
-        handleIncomingDeepLink(url, 'second-instance');
+        if (windowsHandoff) windowsHandoff.dispatch(url, additionalData, 'second-instance');
+        else handleIncomingDeepLink(url, 'second-instance');
       } else {
         const openFolder = findOpenFolderInArgv(argv);
         if (openFolder) {
@@ -4425,7 +4491,7 @@ if (
 // 入口 (mac 走 LSItemContentTypes / open-file 事件), 也不会在 mac argv 出现。
 //
 // 同 second-instance:两类入口互斥, 优先 deep link URL。
-if (process.platform !== 'darwin') {
+if (!singleInstanceRejected && process.platform !== 'darwin') {
   const coldStartUrl = findDeepLinkInArgv(process.argv);
   if (coldStartUrl) {
     redactConsumedDeepLinkInArgv(process.argv, coldStartUrl);
@@ -7044,6 +7110,13 @@ const registerIpcHandlers = () => {
     // never register competing handlers.
     if (hostClientMode) {
       makerIpcsRegistered = true;
+      // Computer Use settings manage this machine's CuaDriver, which keeps serving
+      // Host-run agents through the window, so they stay window-local.
+      try {
+        registerComputerUseIpc();
+      } catch (err) {
+        console.error('[bootstrap-electron] failed to register computer-use IPC', err);
+      }
       return;
     }
     // Compose here: IM runtime and hook IPC depend on maker-host, so the host
@@ -10795,6 +10868,8 @@ app.on('ready', async () => {
   // 「上次意外退出」(issue #10071)。
   powerMonitor.on('suspend', noteSystemSuspend);
   powerMonitor.on('resume', noteSystemResume);
+  // device-link:睡前主动断开 relay,对端立即看到离线(唤醒重建见下方 resume)。
+  powerMonitor.on('suspend', handleDeviceLinkSystemSuspend);
 
   // 挂起/锁屏时通知 renderer 释放语音输入的保活麦克风(用户已离开,再占着采集
   // 设备只剩隐私指示灯常亮和 idle-sleep assertion 的代价)。
@@ -10835,14 +10910,18 @@ app.on('ready', async () => {
   authCredentialRecovery.request();
 
   // 各进程内存采样进 main 日志(scope memory-usage):正式版 10 分钟一次,dev 保持 30s。
+  // 事件循环延迟按采样窗口清零:每行给出这一窗口内主线程最长被占了多久。
+  const eventLoopDelayHistogram = monitorEventLoopDelay({ resolution: 20 });
+  eventLoopDelayHistogram.enable();
+  const eventLoopDelay = createEventLoopDelayCounters(eventLoopDelayHistogram);
   const stopMemoryLog = startMemoryLog({
     getMetrics: () => app.getAppMetrics(),
     memoryUsage: () => process.memoryUsage(),
-    counters: () => ({ mcpBridgeSessions: countLiveBridgeMcpSessions() }),
+    counters: () => ({ mcpBridgeSessions: countLiveBridgeMcpSessions(), ...eventLoopDelay.counters() }),
     log: createLogger('memory-usage'),
     intervalMs: app.isPackaged ? 10 * 60_000 : 30_000,
   });
-  onQuit('memory-usage-log', stopMemoryLog, 'sync');
+  onQuit('memory-usage-log', () => { stopMemoryLog(); eventLoopDelay.stop(); }, 'sync');
   // 主进程堆采样:只在开发版、日志目录 log-config.json 写了 mainHeapSampling 时运行。
   if (!app.isPackaged && readMainHeapSamplingFlag(getLogDir())) {
     const stopHeapSampling = startMainHeapSampling({
