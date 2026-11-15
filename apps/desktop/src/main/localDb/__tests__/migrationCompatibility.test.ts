@@ -383,6 +383,27 @@ describe('alignRenumberedAppliedMigrationIdentities', () => {
     }
   });
 
+  it('keeps failing closed when a recorded companion script identity differs', () => {
+    const drizzleDir = createDrizzleDir();
+    const dbFilePath = path.join(drizzleDir, 'owner.db');
+    const db = createDb(1);
+    try {
+      seedSwappedHistory(db, drizzleDir);
+      writeSwappedManifest(dbFilePath, drizzleDir);
+      const manifestPath = `${dbFilePath}.migration-runtime.json`;
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+        migrations: Array<{ scriptHash: string | null }>;
+      };
+      manifest.migrations[0].scriptHash = 'a'.repeat(64);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, 'utf8');
+
+      const result = alignRenumberedAppliedMigrationIdentities(db, dbFilePath, drizzleDir, 1);
+      expect(result.aligned).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
   it('keeps failing closed when the applied content hash differs', () => {
     const drizzleDir = createDrizzleDir();
     const dbFilePath = path.join(drizzleDir, 'owner.db');

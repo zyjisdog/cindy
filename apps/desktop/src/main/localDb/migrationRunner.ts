@@ -250,9 +250,10 @@ export interface AppliedMigrationRenumberingResult {
  * checkout 的编号，避免升级被身份门拦死。
  *
  * 判定口径（全部满足才动手，任何一项不符都保持失败关闭）：
- * - 已应用集合（seq ≤ schema_version）的 fileName 集合与当前 checkout 完全相同；
- * - 每个 fileName 的 SQL 内容哈希与 companion 脚本哈希逐项相同；
- * - migration_history 的 (file_name → content_hash) 映射逐项相同。
+ * - 已应用集合（seq ≤ schema_version）与当前 checkout 的已应用集合逐条按 SQL 内容哈希配对；
+ * - 配对成功的条目视为同一批迁移（可能连文件名里的编号一起换过）；
+ * - 记录过 companion 脚本身份的条目必须一致；旧包未记录（null）按未知放行；
+ * - migration_history 的 content_hash 必须都落在当前 checkout 的哈希集合里。
  *
  * 两条迁移若只是顺序互换，库里两条都已生效，schema 与执行顺序无关，
  * 因此重编号不改变实际库状态。
@@ -272,35 +273,53 @@ export function alignRenumberedAppliedMigrationIdentities(
   if (applied.length === 0) return none;
 
   const expectedApplied = expected.migrations.filter((identity) => identity.seq <= databaseVersion);
-  const appliedByFile = new Map(applied.map((identity) => [identity.fileName, identity] as const));
-  const expectedByFile = new Map(expectedApplied.map((identity) => [identity.fileName, identity] as const));
-  if (appliedByFile.size === 0 || appliedByFile.size !== expectedByFile.size) return none;
-  for (const [fileName, identity] of appliedByFile) {
-    const canonical = expectedByFile.get(fileName);
+  if (expectedApplied.length !== applied.length) return none;
+
+  // 内容身份配对：同一批迁移可能连文件名里的编号一起换（如 0149_classy ↔ 0150_damp），
+  // 所以按 SQL 内容哈希配对，而不是按文件名。
+  const canonicalBySqlHash = new Map<string, MigrationRuntimeIdentity[]>();
+  for (const identity of expectedApplied) {
+    const bucket = canonicalBySqlHash.get(identity.sqlHash);
+    if (bucket) bucket.push(identity);
+    else canonicalBySqlHash.set(identity.sqlHash, [identity]);
+  }
+  const pairs: Array<{ applied: MigrationRuntimeIdentity; canonical: MigrationRuntimeIdentity }> = [];
+  const usedCanonicalSeqs = new Set<number>();
+  for (const identity of applied) {
+    const bucket = canonicalBySqlHash.get(identity.sqlHash);
+    if (!bucket) return none;
+    const canonical = bucket.find((candidate) => !usedCanonicalSeqs.has(candidate.seq));
     if (!canonical) return none;
-    if (canonical.sqlHash !== identity.sqlHash || canonical.scriptHash !== identity.scriptHash) return none;
+    // 旧包可能没记录 companion 脚本身份（null），未知就不否决；已知且不同才拦。
+    if (identity.scriptHash && identity.scriptHash !== canonical.scriptHash) return none;
+    usedCanonicalSeqs.add(canonical.seq);
+    pairs.push({ applied: identity, canonical });
   }
 
-  let historyRows: Array<{ file_name: string; content_hash: string }>;
+  let historyRows: Array<{ file_name: string; content_hash: string | null }>;
   try {
     historyRows = db
       .prepare(`SELECT file_name, content_hash FROM migration_history WHERE seq <= ?`)
-      .all(databaseVersion) as Array<{ file_name: string; content_hash: string }>;
+      .all(databaseVersion) as Array<{ file_name: string; content_hash: string | null }>;
   } catch {
     return none;
   }
-  const historyByFile = new Map(historyRows.map((row) => [row.file_name, row.content_hash] as const));
-  if (historyByFile.size !== expectedByFile.size) return none;
-  for (const [fileName, canonical] of expectedByFile) {
-    if (historyByFile.get(fileName) !== canonical.sqlHash) return none;
+  if (historyRows.length !== pairs.length) return none;
+  const expectedSqlHashes = new Set(expectedApplied.map((identity) => identity.sqlHash));
+  for (const row of historyRows) {
+    if (row.content_hash && !expectedSqlHashes.has(row.content_hash)) return none;
   }
 
-  const renumbered: AppliedMigrationRenumbering[] = [];
-  for (const [fileName, identity] of appliedByFile) {
-    const canonical = expectedByFile.get(fileName)!;
-    if (canonical.seq === identity.seq) continue;
-    renumbered.push({ from: identity.seq, to: canonical.seq, fileName });
-  }
+  const renumbered: AppliedMigrationRenumbering[] = pairs
+    .filter(
+      (pair) =>
+        pair.applied.seq !== pair.canonical.seq || pair.applied.fileName !== pair.canonical.fileName,
+    )
+    .map((pair) => ({
+      from: pair.applied.seq,
+      to: pair.canonical.seq,
+      fileName: pair.canonical.fileName,
+    }));
   if (renumbered.length === 0) return none;
 
   const manifestPath = migrationRuntimeManifestPath(dbFilePath);
@@ -316,10 +335,27 @@ export function alignRenumberedAppliedMigrationIdentities(
     const settle = db.prepare(
       `UPDATE migration_history SET seq = ?, file_name = ?, content_hash = ? WHERE seq = ?`,
     );
-    for (const item of renumbered) stage.run(-(1000 + item.from), item.from);
-    for (const item of renumbered) {
-      const canonical = expectedByFile.get(item.fileName)!;
-      settle.run(item.to, item.fileName, canonical.sqlHash, -(1000 + item.from));
+    for (const pair of pairs) {
+      if (pair.applied.seq === pair.canonical.seq) {
+        // 编号没变但文件名被换过时，就地校正文件身份。
+        settle.run(
+          pair.canonical.seq,
+          pair.canonical.fileName,
+          pair.canonical.sqlHash,
+          pair.applied.seq,
+        );
+        continue;
+      }
+      stage.run(-(1000 + pair.applied.seq), pair.applied.seq);
+    }
+    for (const pair of pairs) {
+      if (pair.applied.seq === pair.canonical.seq) continue;
+      settle.run(
+        pair.canonical.seq,
+        pair.canonical.fileName,
+        pair.canonical.sqlHash,
+        -(1000 + pair.applied.seq),
+      );
     }
   });
   realign();
