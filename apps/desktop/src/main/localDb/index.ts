@@ -51,6 +51,7 @@ import { repairManagedDialogueWorkspaceSessions } from './managedDialogueWorkspa
 import * as schema from './schema';
 import { loadSqliteVec, resetSqliteVecState } from './sqliteVecLoader';
 import {
+  alignRenumberedAppliedMigrationIdentities,
   checkMigrationCompatibility,
   prepareMigrationRuntimeManifest,
   readSchemaVersion,
@@ -340,10 +341,23 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
       checkCompatibility: () => checkMigrationCompatibility(db, getDrizzleDir(), filePath),
       checkReadOnlyInvariants: () => ({ compatible: !hasStaleOrcaLeadIndex(db) }),
       prepareRuntimeManifest: () => {
+        const databaseVersion = readSchemaVersion(db);
+        const alignment = alignRenumberedAppliedMigrationIdentities(
+          db,
+          filePath,
+          getDrizzleDir(),
+          databaseVersion,
+        );
+        if (alignment.aligned) {
+          log.warn(
+            `[localDb] 当前安装包给已应用迁移重新编号，已把旁路元数据对齐：`
+            + alignment.renumbered.map((item) => `${item.from}→${item.to}(${item.fileName})`).join(', '),
+          );
+        }
         const prepared = prepareMigrationRuntimeManifest(
           filePath,
           getDrizzleDir(),
-          readSchemaVersion(db),
+          databaseVersion,
         );
         if (prepared.bootstrappedLegacyBaseline) {
           log.warn(

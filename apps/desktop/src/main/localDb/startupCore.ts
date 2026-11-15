@@ -18,6 +18,7 @@ import { createBetterSqliteDatabase } from './betterSqliteFactory';
 import { runMigrations } from './migrate';
 import { configureMigrationRuntime } from './migrationRuntime';
 import {
+  alignRenumberedAppliedMigrationIdentities,
   checkMigrationCompatibility,
   prepareMigrationRuntimeManifest,
   readSchemaVersion,
@@ -104,7 +105,20 @@ export async function openOwnerDatabase(
       sharedPassive: false,
       checkCompatibility: () => checkMigrationCompatibility(db!, drizzleDir, dbPath),
       prepareRuntimeManifest: () => {
-        prepareMigrationRuntimeManifest(dbPath, drizzleDir, readSchemaVersion(db!));
+        const databaseVersion = readSchemaVersion(db!);
+        const alignment = alignRenumberedAppliedMigrationIdentities(
+          db!,
+          dbPath,
+          drizzleDir,
+          databaseVersion,
+        );
+        if (alignment.aligned) {
+          console.warn(
+            `[localDb] 当前安装包给已应用迁移重新编号，已把旁路元数据对齐：`
+            + alignment.renumbered.map((item) => `${item.from}→${item.to}(${item.fileName})`).join(', '),
+          );
+        }
+        prepareMigrationRuntimeManifest(dbPath, drizzleDir, databaseVersion);
       },
       runMigrations: () => runMigrations(db!, dbPath),
       // Electron's dev-only reflective drift repair and nuke flow stays with the

@@ -232,6 +232,106 @@ function readMigrationRuntimeManifest(dbFilePath: string): MigrationRuntimeManif
   }
 }
 
+export interface AppliedMigrationRenumbering {
+  /** 已应用时记录的老编号。 */
+  from: number;
+  /** 当前 checkout 里的新编号。 */
+  to: number;
+  fileName: string;
+}
+
+export interface AppliedMigrationRenumberingResult {
+  aligned: boolean;
+  renumbered: AppliedMigrationRenumbering[];
+}
+
+/**
+ * 已应用迁移被重新编号时（同一批迁移、只是 seq 分配不同），把旁路元数据对齐到当前
+ * checkout 的编号，避免升级被身份门拦死。
+ *
+ * 判定口径（全部满足才动手，任何一项不符都保持失败关闭）：
+ * - 已应用集合（seq ≤ schema_version）的 fileName 集合与当前 checkout 完全相同；
+ * - 每个 fileName 的 SQL 内容哈希与 companion 脚本哈希逐项相同；
+ * - migration_history 的 (file_name → content_hash) 映射逐项相同。
+ *
+ * 两条迁移若只是顺序互换，库里两条都已生效，schema 与执行顺序无关，
+ * 因此重编号不改变实际库状态。
+ */
+export function alignRenumberedAppliedMigrationIdentities(
+  db: Database.Database,
+  dbFilePath: string,
+  drizzleDir: string,
+  databaseVersion: number,
+): AppliedMigrationRenumberingResult {
+  const none: AppliedMigrationRenumberingResult = { aligned: false, renumbered: [] };
+  if (!Number.isSafeInteger(databaseVersion) || databaseVersion < 0) return none;
+  const existing = readMigrationRuntimeManifest(dbFilePath);
+  if (!existing) return none;
+  const expected = createMigrationRuntimeManifest(drizzleDir);
+  const applied = existing.migrations.filter((identity) => identity.seq <= databaseVersion);
+  if (applied.length === 0) return none;
+
+  const expectedApplied = expected.migrations.filter((identity) => identity.seq <= databaseVersion);
+  const appliedByFile = new Map(applied.map((identity) => [identity.fileName, identity] as const));
+  const expectedByFile = new Map(expectedApplied.map((identity) => [identity.fileName, identity] as const));
+  if (appliedByFile.size === 0 || appliedByFile.size !== expectedByFile.size) return none;
+  for (const [fileName, identity] of appliedByFile) {
+    const canonical = expectedByFile.get(fileName);
+    if (!canonical) return none;
+    if (canonical.sqlHash !== identity.sqlHash || canonical.scriptHash !== identity.scriptHash) return none;
+  }
+
+  let historyRows: Array<{ file_name: string; content_hash: string }>;
+  try {
+    historyRows = db
+      .prepare(`SELECT file_name, content_hash FROM migration_history WHERE seq <= ?`)
+      .all(databaseVersion) as Array<{ file_name: string; content_hash: string }>;
+  } catch {
+    return none;
+  }
+  const historyByFile = new Map(historyRows.map((row) => [row.file_name, row.content_hash] as const));
+  if (historyByFile.size !== expectedByFile.size) return none;
+  for (const [fileName, canonical] of expectedByFile) {
+    if (historyByFile.get(fileName) !== canonical.sqlHash) return none;
+  }
+
+  const renumbered: AppliedMigrationRenumbering[] = [];
+  for (const [fileName, identity] of appliedByFile) {
+    const canonical = expectedByFile.get(fileName)!;
+    if (canonical.seq === identity.seq) continue;
+    renumbered.push({ from: identity.seq, to: canonical.seq, fileName });
+  }
+  if (renumbered.length === 0) return none;
+
+  const manifestPath = migrationRuntimeManifestPath(dbFilePath);
+  try {
+    fs.copyFileSync(manifestPath, `${manifestPath}.bak-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  } catch {
+    /* 备份失败不阻断对齐：sidecar 本身可由当前 checkout 重建。 */
+  }
+
+  const realign = db.transaction(() => {
+    // seq 是主键：先挪到临时负数位，避免互换时撞唯一约束。
+    const stage = db.prepare(`UPDATE migration_history SET seq = ? WHERE seq = ?`);
+    const settle = db.prepare(
+      `UPDATE migration_history SET seq = ?, file_name = ?, content_hash = ? WHERE seq = ?`,
+    );
+    for (const item of renumbered) stage.run(-(1000 + item.from), item.from);
+    for (const item of renumbered) {
+      const canonical = expectedByFile.get(item.fileName)!;
+      settle.run(item.to, item.fileName, canonical.sqlHash, -(1000 + item.from));
+    }
+  });
+  realign();
+
+  writeMigrationRuntimeManifestFile(dbFilePath, {
+    version: 1,
+    legacyBaselineVersion: existing.legacyBaselineVersion,
+    migrations: expected.migrations,
+  });
+  return { aligned: true, renumbered };
+}
+
 /**
  * primary 在执行 migration 前准备 runtime identity intent。
  *

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  alignRenumberedAppliedMigrationIdentities,
   checkMigrationCompatibility,
   hashMigrationFile,
   MigrationRuntimeManifestError,
@@ -297,6 +298,123 @@ describe('checkMigrationCompatibility', () => {
       );
       expect(report.compatible).toBe(false);
       expect(report.issues.map((issue) => issue.kind)).toContain('runtime-manifest-unavailable');
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('alignRenumberedAppliedMigrationIdentities', () => {
+  function seedSwappedHistory(
+    db: Database.Database,
+    drizzleDir: string,
+  ): void {
+    const insert = db.prepare(
+      `INSERT INTO migration_history (seq, file_name, content_hash, applied_at)
+       VALUES (?, ?, ?, ?)`,
+    );
+    // 旧口径把两个迁移的编号记反了：0001 记在 seq 0，0000 记在 seq 1。
+    insert.run(
+      0,
+      '0001_second.sql',
+      hashMigrationFile(path.join(drizzleDir, '0001_second.sql')),
+      123,
+    );
+    insert.run(
+      1,
+      '0000_init.sql',
+      hashMigrationFile(path.join(drizzleDir, '0000_init.sql')),
+      123,
+    );
+  }
+
+  function writeSwappedManifest(dbFilePath: string, drizzleDir: string): void {
+    const manifest = {
+      version: 1,
+      legacyBaselineVersion: -1,
+      migrations: [
+        {
+          seq: 0,
+          fileName: '0001_second.sql',
+          sqlHash: hashMigrationFile(path.join(drizzleDir, '0001_second.sql')),
+          scriptHash: null,
+        },
+        {
+          seq: 1,
+          fileName: '0000_init.sql',
+          sqlHash: hashMigrationFile(path.join(drizzleDir, '0000_init.sql')),
+          scriptHash: null,
+        },
+      ],
+    };
+    writeFileSync(
+      `${dbFilePath}.migration-runtime.json`,
+      `${JSON.stringify(manifest)}\n`,
+      'utf8',
+    );
+  }
+
+  it('realigns a renumbered history so the identity gate lets the upgrade through', () => {
+    const drizzleDir = createDrizzleDir();
+    const dbFilePath = path.join(drizzleDir, 'owner.db');
+    const db = createDb(1);
+    try {
+      seedSwappedHistory(db, drizzleDir);
+      writeSwappedManifest(dbFilePath, drizzleDir);
+
+      const result = alignRenumberedAppliedMigrationIdentities(db, dbFilePath, drizzleDir, 1);
+      expect(result.aligned).toBe(true);
+      expect(result.renumbered).toEqual([
+        { from: 0, to: 1, fileName: '0001_second.sql' },
+        { from: 1, to: 0, fileName: '0000_init.sql' },
+      ]);
+
+      const history = db
+        .prepare(`SELECT seq, file_name FROM migration_history ORDER BY seq`)
+        .all() as Array<{ seq: number; file_name: string }>;
+      expect(history).toEqual([
+        { seq: 0, file_name: '0000_init.sql' },
+        { seq: 1, file_name: '0001_second.sql' },
+      ]);
+
+      expect(() => prepareMigrationRuntimeManifest(dbFilePath, drizzleDir, 1)).not.toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('keeps failing closed when the applied content hash differs', () => {
+    const drizzleDir = createDrizzleDir();
+    const dbFilePath = path.join(drizzleDir, 'owner.db');
+    const db = createDb(1);
+    try {
+      seedSwappedHistory(db, drizzleDir);
+      writeSwappedManifest(dbFilePath, drizzleDir);
+      const manifestPath = `${dbFilePath}.migration-runtime.json`;
+      const tampered = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+        migrations: Array<{ sqlHash: string }>;
+      };
+      tampered.migrations[0].sqlHash = 'f'.repeat(64);
+      writeFileSync(manifestPath, `${JSON.stringify(tampered)}\n`, 'utf8');
+
+      const result = alignRenumberedAppliedMigrationIdentities(db, dbFilePath, drizzleDir, 1);
+      expect(result.aligned).toBe(false);
+      expect(() => prepareMigrationRuntimeManifest(dbFilePath, drizzleDir, 1)).toThrow(
+        /runtime identity changed/,
+      );
+    } finally {
+      db.close();
+    }
+  });
+
+  it('leaves an already aligned history untouched', () => {
+    const drizzleDir = createDrizzleDir();
+    const dbFilePath = path.join(drizzleDir, 'owner.db');
+    const db = createDb(1);
+    try {
+      seedExactHistory(db, drizzleDir);
+      const result = alignRenumberedAppliedMigrationIdentities(db, dbFilePath, drizzleDir, 1);
+      expect(result).toEqual({ aligned: false, renumbered: [] });
     } finally {
       db.close();
     }
