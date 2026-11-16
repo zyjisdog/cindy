@@ -2595,6 +2595,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const delivered = await deps.sendAutoBridgeToLead(
         params.leadSessionId,
         lines("[Orca host] Your dispatch claim is not backed by this turn's dispatch records."),
+        // 上游给 auto-bridge 加了 worker 归属：这条纠正消息由本轮真实派单的 worker 背书，
+        // 没有派单记录时按主张指向的 worker 归属，都取不到就留空（仅影响 meta 归属标记）。
+        facts[0]?.workerId ?? reading.targets[0]?.id ?? '',
       );
       const accepted = delivered.accepted;
       deps.log.info('orca lead dispatch claim wake', {

@@ -6,7 +6,6 @@ import { saveAgentInputQueueSnapshot, awaitAgentInputQueueSnapshotPersistence, r
 import { createInputEnqueueHarness, createInputStopHarness, createSavedQuotaRestoreHarness } from './inputEnqueueHarness.js';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
 import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
-import { createInputEnqueueHarness } from './inputEnqueueHarness.js';
 import { applyQueueHold } from '../queueHoldHandler.js';
 import { FORWARDED_REQUEST_RECEIPT } from '../../../shared/forwardedRequest.js';
 import { BOT_GROUP_CLIENT_ID } from '../../../shared/botGroupChat.js';
