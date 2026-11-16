@@ -7962,7 +7962,6 @@
         "install": "Install",
         "details": "Details",
         "detailsAria": "View details for {{name}}",
-        "loadingDetails": "Loading details…",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
@@ -8289,16 +8288,11 @@
         "hostTools_storage": "Storage and Sharing Between Plugins",
         "hostTools_storageDetail": "Use this plugin’s storage, Library and authorized media. Sharing delivers a copy only between enabled plugins that declare storage under the same account and organization. Other plugins’ storage cannot be read.",
         "codeDetailStorage": "Storage operations stay within this plugin’s data. Sharing delivers copies between enabled plugins that declare storage under the same account and organization.",
-        "storageShareTitle": "Give a Copy to Another Plugin",
-        "storageShareMessage": "Copy “{{file}}” ({{size}}) from plugin “{{name}}” to plugin “{{target}}”. The recipient gets an independent copy; source updates are not synchronized. Content already read or saved by the recipient cannot be recalled.",
         "hostTools_files": "Files in Selected Directories",
         "hostTools_filesDetail": "Read, write, list, delete files and watch changes in directories you explicitly select. Previous selections do not grant access. Disabling the plugin stops access.",
         "filesPickMessage": "Plugin “{{name}}” will be able to read, write, list and delete files in the selected directory and watch changes. Select a directory you allow it to access.",
         "codeDetailTerminal": "Plugin pages run in an isolated sandbox. Approved commands run as your user and can access local files, apps and networks.",
         "hostTools_terminalDetail": "Start commands and interactive terminals as your user on this computer, read output, send input and stop this plugin’s processes. Commands can access your files and apps.",
-        "hostToolsRequest": "Review {{group}} Permission",
-        "hostToolCallTitle": "Allow Plugin Operation",
-        "hostToolCallMessage": "The plugin “{{name}}” wants to call {{server}} / {{tool}}. This approval applies only to the parameters below.",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -8900,20 +8894,7 @@
         "projectReadFailed": "Could not read project settings. Try again."
       },
       "usage": {
-        "title": "Your calls",
-        "explanationLabel": "How usage is counted",
-        "explanation": "Tool calls dispatched on this computer by the current account, including failures, timeouts and cancellations. The last 7 days is a rolling 168 hours. Panels, Skills and debugging are excluded. Records remain until cleared.",
-        "clear": "Clear records",
-        "loading": "Loading records…",
-        "unavailable": "Personal records unavailable",
-        "retry": "Retry",
-        "lastUsed": "Last call",
-        "last7Days": "Calls in last 7 days",
-        "never": "No calls yet",
-        "clearTitle": "Clear this Plugin’s usage records?",
-        "clearDescription": "Remove call records and Session links for this account on this computer. New calls start a fresh history. Shared totals already received by the server are not withdrawn.",
         "downloadExplanation": "Cumulative download URL requests. Each successfully issued package URL counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
-        "clearAction": "Clear",
         "downloadsValue": "{{value}} downloads",
         "usesValue": "{{value}} uses",
         "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience."
@@ -16330,8 +16311,7 @@
       "agentDeviceBanner": "Session and files stay on this computer — the Agent runs on {{device}}",
       "agentDeviceElsewhereBanner": "The Agent runs on {{device}}",
       "branchChanged": "The project is now on {{branch}}. Check it, then send again.",
-      "branchCheckFailed": "Could not verify the current branch. Enable worktree to use the selected branch, or check the project and try again.",
-      "branchRequiresWorktree": "The selected branch is not the current branch. Enable worktree or select the current branch."
+      "branchCheckFailed": "Could not verify the current branch. Enable worktree to use the selected branch, or check the project and try again."
     },
     "jumpSession": {
       "emptyId": "Enter a session ID to jump to",
@@ -17484,7 +17464,6 @@
         "session": "Session",
         "silentRun": "Silent run",
         "silentRunTooltip": "When enabled, successful runs do not notify by default. If the task prompt asks to notify under specific conditions, AI will report when those conditions are met. Failures and errors still notify.",
-        "silentRunInfoAria": "View silent run rules",
         "finishSendToFeishu": "Send result to Feishu bot",
         "finishSendToWecomGroup": "Send result to WeCom group",
         "configWecomGroup": "Configure WeCom group notifications",
@@ -17594,10 +17573,7 @@
       },
       "layout": {
         "content": "What to run",
-        "notifications": "Notifications & quiet runs",
-        "contentTab": "Content & Trigger",
-        "optionsTab": "Run options",
-        "sections": "Automation settings"
+        "notifications": "Notifications & quiet runs"
       },
       "webhook": {
         "quotaHint": "Webhook deliveries have a daily limit, and filtering here doesn't reduce the count. In the sender, such as GitHub, select only the events you need.",
@@ -18276,7 +18252,6 @@
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
       "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
-      "descriptionFsDelete": "This plugin requests to delete the files or folders below from the current task's working directory. Deleting a folder also deletes its contents. This approval applies to this deletion only.",
       "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
       "descriptionForgeSource": "The directory below is outside this session's working directory. If you allow, Forge will pack or scaffold the plugin there (it writes a .cindy artifact or skeleton files).",
       "descriptionForgeScaffold": "The directory below is outside this session's working directory. If you allow, Forge will create plugin source files there.",
@@ -21718,7 +21693,6 @@
     "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",
-      "detected": "Signed-in account found",
       "useAccount": "Use the {{cli}} account on this computer",
       "anotherAccount": "Sign in to another account",
       "keepExisting": "The new account becomes its own provider unless you choose one to join. Existing sign-ins stay unchanged.",
@@ -21729,7 +21703,6 @@
     "title": "Subscription accounts",
     "strategy": "Load balancing",
     "add": "Add account",
-    "default": "Default folder",
     "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",

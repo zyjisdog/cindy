@@ -7920,7 +7920,6 @@
         "install": "纳",
         "details": "详",
         "detailsAria": "观 {{name}} 之详情",
-        "loadingDetails": "方载详情…",
         "update": "自坊更新",
         "updateTo": "更新至 v{{version}}",
         "installed": "已纳",
@@ -8233,16 +8232,11 @@
         "hostTools_storage": "存储与法器互享",
         "hostTools_storageDetail": "得用本法器之存储、作品库与所许素材。互享须两器皆启用、皆声明 storage，且同账号、同组织，所交为副本；不得窥他法器存储。",
         "codeDetailStorage": "存储之行止于本法器资料；互享须两器皆启用、皆声明 storage，且同账号、同组织，所交为副本。",
-        "storageShareTitle": "交副本于他法器",
-        "storageShareMessage": "将法器“{{name}}”之“{{file}}”（{{size}}）复制于法器“{{target}}”。受者得独立副本，原件后改不随之更。既阅或另存者，不可追回。",
         "hostTools_files": "亲许目录之文件",
         "hostTools_filesDetail": "得于主人亲择之目录阅、写、列、删文件并察其变。旧择不自授权，停用法器即止其访问。",
         "filesPickMessage": "法器“{{name}}”将得阅、写、列、删所选目录之文件并察其变。请亲择所许访问之目录。",
         "codeDetailTerminal": "法器之页于独立沙箱中运行；获准之命令以主人身份行，可取此机文件、应用与网络。",
         "hostTools_terminalDetail": "得于此机以主人身份启命令及交互终端，阅其输出、输入及止本法器之进程。命令可取主人文件与应用。",
-        "hostToolsRequest": "确认{{group}}之权柄",
-        "hostToolCallTitle": "允法器行事",
-        "hostToolCallMessage": "法器“{{name}}”欲调 {{server}} / {{tool}}。此允仅施于下列参数。",
         "agentHiddenTasks": "可立不见于差事录之背后差事",
         "agentHiddenTasksDetail": "本法器所立之差事，可不现于差事录、搜索与告中。君可随时于法器详情之「背后差事」中观之、启之，或令显于差事录；卸除法器时，此等差事将复显示。",
         "agentErrand": "可立差事、行事并读结果",
@@ -8844,20 +8838,7 @@
         "projectReadFailed": "案之开关读取未成，请再试。"
       },
       "usage": {
-        "title": "个人调用",
-        "explanationLabel": "计法",
-        "explanation": "仅计此机目前名籍成功派发之工具调用，失败、逾时或取消亦计入。近 7 日为滚动 168 小时；面板、Skill 与调试操作不计。记录预设留存，清除后重计。",
-        "clear": "清其录",
-        "loading": "方读记录…",
-        "unavailable": "个人记录暂不可用",
-        "retry": "再试",
-        "lastUsed": "近次调用",
-        "last7Days": "近 7 日调用",
-        "never": "未尝调用",
-        "clearTitle": "清除此法器之使用记录乎？",
-        "clearDescription": "将清除此机目前名籍之调用记录及差事关联，此后调用重新记之。已共享之累计不撤回。",
         "downloadExplanation": "累计下载请求次数：每成功取得安装包下载地址，计一次，含更新、重新安装及重取地址之重试；非成功安装之数。",
-        "clearAction": "清",
         "downloadsValue": "取下 {{value}}",
         "usesValue": "用 {{value}}",
         "usesExplanation": "今共享范围内各版本累计之工具调用次数。"
@@ -16256,8 +16237,7 @@
       "agentDeviceBanner": "差事与卷留于此机，Agent 于 {{device}} 上行之",
       "agentDeviceElsewhereBanner": "Agent 于 {{device}} 上行之",
       "branchChanged": "项目分支已为 {{branch}}，请核实后再发",
-      "branchCheckFailed": "未能确认目前分支。请勾选 worktree 以用所选分支，或查验专案后重试。",
-      "branchRequiresWorktree": "所选分支与目前分支不同。请勾选 worktree，或选目前分支。"
+      "branchCheckFailed": "未能确认目前分支。请勾选 worktree 以用所选分支，或查验专案后重试。"
     },
     "jumpSession": {
       "emptyId": "请输欲往之差事 ID",
@@ -17410,7 +17390,6 @@
         "session": "差事",
         "silentRun": "默行",
         "silentRunTooltip": "启之，则事成默不告。若任务所述有当告之情，AI 遇之自报；败与异常仍告。",
-        "silentRunInfoAria": "观默行之规",
         "finishSendToFeishu": "毕则遣至飞书机器人",
         "finishSendToWecomGroup": "毕则遣至企业微信群",
         "configWecomGroup": "设企微群之告",
@@ -17520,10 +17499,7 @@
       },
       "layout": {
         "content": "所行之事",
-        "notifications": "告知与静行",
-        "contentTab": "内容与触发",
-        "optionsTab": "执行之设",
-        "sections": "自运之设"
+        "notifications": "告知与静行"
       },
       "webhook": {
         "quotaHint": "Webhook 受信之数日有其限，此处之筛不减其数。请于发信之方（如 GitHub）唯选所需之事。",
@@ -18201,7 +18177,6 @@
       "descriptionSaveDir": "下列目录在今差事之工作目录外。许之，此法器可将取下之卷存入其中(不覆既有之卷)。",
       "descriptionRevealPath": "此路径唯于君许之后返予今之 Agent，并入言谈录；配对之设备或同步此录。此举不授法器读卷之权柄。",
       "descriptionFsWrite": "此法器请于今差事之工作目录写入下列之卷。许之，则本差事内其写同一目录不复询问。",
-      "descriptionFsDelete": "此法器请求删除当前差事工作目录中的以下文件或文件夹。删除文件夹也会删除其中的内容。本次允许只对这一次删除生效。",
       "descriptionWorkspace": "此卷匣在今差事之工作目录外。许之，Cindy 将以之为工作目录，于侧栏立一空差事(已有差事则径复用)，不读其中之卷。",
       "descriptionForgeSource": "下列目录在今差事之工作目录外。许之，Forge 将于此目录打包或生法器源码(将写入 .cindy 产物或骨架之卷)。",
       "descriptionForgeScaffold": "下列目录在今差事之工作目录外。许之，Forge 将于此目录生法器源码骨架。",
@@ -21637,7 +21612,6 @@
     "providerManagedAuth": "Codex 目前供方未提供 ChatGPT 账号资讯。请于新增供方时选「$t(subscriptionAccounts.signIn.anotherAccount)」，另用独立目录",
     "signIn": {
       "checking": "正察本机账号…",
-      "detected": "已有账号登录",
       "useAccount": "用此机 {{cli}} 之账号",
       "anotherAccount": "另登一号",
       "keepExisting": "新号默自成一供方，亦可择而并之。原号登录如故。",
@@ -21648,7 +21622,6 @@
     "title": "订阅账号",
     "strategy": "负载均衡",
     "add": "添加账号",
-    "default": "默认目录",
     "defaultTag": "默认",
     "ready": "已连接",
     "signedOut": "须登录",

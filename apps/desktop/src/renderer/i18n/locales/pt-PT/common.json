@@ -8030,7 +8030,6 @@
         "install": "Instalar",
         "details": "Detalhes",
         "detailsAria": "Ver detalhes de {{name}}",
-        "loadingDetails": "A carregar detalhes…",
         "update": "Atualizar a partir do mercado",
         "updateTo": "Atualizar para v{{version}}",
         "installed": "Instalado",
@@ -8362,16 +8361,11 @@
         "hostTools_storage": "Armazenamento e partilha entre plugins",
         "hostTools_storageDetail": "Usar o armazenamento, a Library e os conteúdos multimédia autorizados deste plugin. A partilha entrega uma cópia apenas entre plugins ativados que declarem storage e pertençam à mesma conta e organização. Não permite ler o armazenamento de outros plugins.",
         "codeDetailStorage": "As operações limitam-se aos dados deste plugin. A partilha entrega cópias entre plugins ativados que declarem storage e pertençam à mesma conta e organização.",
-        "storageShareTitle": "Entregar uma cópia a outro plugin",
-        "storageShareMessage": "Copiar «{{file}}» ({{size}}) do plugin «{{name}}» para «{{target}}». O destinatário recebe uma cópia independente; as alterações da origem não são sincronizadas. Conteúdos já lidos ou guardados não podem ser recuperados.",
         "hostTools_files": "Ficheiros em diretórios autorizados",
         "hostTools_filesDetail": "Ler, escrever, listar e eliminar ficheiros e observar alterações nos diretórios que selecionares explicitamente. Seleções anteriores não dão acesso. Desativar o plugin termina o acesso.",
         "filesPickMessage": "O plugin «{{name}}» poderá ler, escrever, listar e eliminar ficheiros no diretório escolhido e observar alterações. Seleciona um diretório ao qual permites o acesso.",
         "codeDetailTerminal": "As páginas do plugin são executadas numa sandbox isolada. Os comandos autorizados são executados com as tuas permissões e podem aceder a ficheiros locais, aplicações e redes.",
         "hostTools_terminalDetail": "Iniciar comandos e terminais interativos com as tuas permissões neste computador, ler a saída, enviar entradas e parar os processos deste plugin. Os comandos podem aceder aos teus ficheiros e aplicações.",
-        "hostToolsRequest": "Rever permissão de {{group}}",
-        "hostToolCallTitle": "Permitir operação do plugin",
-        "hostToolCallMessage": "O plugin «{{name}}» pretende chamar {{server}} / {{tool}}. Esta autorização aplica-se apenas aos parâmetros abaixo.",
         "agentHiddenTasks": "Pode criar tarefas em segundo plano ocultas da lista de tarefas",
         "agentHiddenTasksDetail": "As tarefas criadas por este plugin podem ficar fora da lista de tarefas, da pesquisa e das notificações. Pode sempre vê-las, abri-las ou mostrá-las na lista de tarefas a partir de Tarefas em segundo plano na página deste plugin; desinstalar o plugin volta a mostrá-las.",
         "agentErrand": "Criar tarefas, realizar trabalho e ler resultados",
@@ -8973,20 +8967,7 @@
         "projectReadFailed": "Não foi possível ler as definições dos projetos. Tente novamente."
       },
       "usage": {
-        "title": "As suas chamadas",
-        "explanationLabel": "Como é contabilizada a utilização",
-        "explanation": "Chamadas de ferramentas enviadas neste computador pela conta atual, incluindo falhas, tempos limite excedidos e cancelamentos. Os últimos 7 dias correspondem a uma janela móvel de 168 horas. Excluem-se painéis, Skills e depuração. Os registos permanecem até serem limpos.",
-        "clear": "Limpar registos",
-        "loading": "A carregar os registos…",
-        "unavailable": "Registos pessoais indisponíveis",
-        "retry": "Tentar novamente",
-        "lastUsed": "Última chamada",
-        "last7Days": "Chamadas nos últimos 7 dias",
-        "never": "Ainda sem chamadas",
-        "clearTitle": "Limpar os registos de utilização deste plugin?",
-        "clearDescription": "Remover os registos de chamadas e as ligações a sessões desta conta neste computador. As novas chamadas iniciam um novo histórico. Os totais partilhados já recebidos pelo servidor não são retirados.",
         "downloadExplanation": "Pedidos acumulados de URL de transferência. Cada URL de pacote emitido com sucesso conta uma vez, incluindo atualizações, reinstalações e novas tentativas que solicitem um novo URL. Não é uma contagem de instalações concluídas.",
-        "clearAction": "Limpar",
         "downloadsValue": "{{value}} transferências",
         "usesValue": "{{value}} utilizações",
         "usesExplanation": "Chamadas de ferramentas partilhadas acumuladas em todas as versões para o público autorizado."
@@ -16487,8 +16468,7 @@
       "agentDeviceBanner": "A sessão e os ficheiros permanecem neste computador — o Agent é executado no dispositivo {{device}}",
       "agentDeviceElsewhereBanner": "O Agent é executado no dispositivo {{device}}",
       "branchChanged": "O projeto está agora em {{branch}}. Confirma e volta a enviar.",
-      "branchCheckFailed": "Não foi possível verificar o ramo atual. Ativa worktree para usar o ramo selecionado ou verifica o projeto e tenta novamente.",
-      "branchRequiresWorktree": "O ramo selecionado não é o ramo atual. Ativa worktree ou seleciona o ramo atual."
+      "branchCheckFailed": "Não foi possível verificar o ramo atual. Ativa worktree para usar o ramo selecionado ou verifica o projeto e tenta novamente."
     },
     "jumpSession": {
       "emptyId": "Introduza um sessionId para aceder à sessão",
@@ -17651,7 +17631,6 @@
         "session": "Sessão",
         "silentRun": "Execução silenciosa",
         "silentRunTooltip": "Quando ativada, as execuções bem-sucedidas não notificam por predefinição. Se o prompt da tarefa pedir aviso em condições específicas, a IA avisará quando forem cumpridas. As falhas e os erros continuam a ser notificados.",
-        "silentRunInfoAria": "Ver regras de execução silenciosa",
         "finishSendToFeishu": "Enviar para FeishuBot ao terminar",
         "finishSendToWecomGroup": "Enviar resultado para o grupo WeCom",
         "configWecomGroup": "Configurar notificações de grupo WeCom",
@@ -17761,10 +17740,7 @@
       },
       "layout": {
         "content": "O que executar",
-        "notifications": "Notificações e execução silenciosa",
-        "contentTab": "Conteúdo e ativação",
-        "optionsTab": "Opções de execução",
-        "sections": "Definições da automatização"
+        "notifications": "Notificações e execução silenciosa"
       },
       "webhook": {
         "quotaHint": "As receções de Webhook têm um limite diário e filtrar aqui não reduz a contagem. No remetente, como o GitHub, selecione apenas os eventos necessários.",
@@ -18444,7 +18420,6 @@
       "descriptionSaveDir": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se permitir, este plugin poderá guardar nele ficheiros transferidos (os ficheiros existentes nunca são substituídos).",
       "descriptionRevealPath": "O caminho só é devolvido ao Agent atual depois de dar permissão e passará a constar do registo da conversa; os dispositivos emparelhados poderão sincronizar esse registo. Isto não concede a nenhum plugin acesso ao ficheiro.",
       "descriptionFsWrite": "Este plugin solicita gravar os ficheiros abaixo no diretório de trabalho da sessão atual. Se permitir, as gravações posteriores no mesmo diretório nesta sessão não voltarão a pedir autorização.",
-      "descriptionFsDelete": "Este plugin solicita eliminar os ficheiros ou pastas abaixo do diretório de trabalho da tarefa atual. O conteúdo das pastas também será eliminado. Esta autorização aplica-se apenas a esta eliminação.",
       "descriptionWorkspace": "Esta pasta está fora do diretório de trabalho desta sessão. Se permitir, o Cindy cria uma sessão vazia para ela na barra lateral (uma sessão existente será reutilizada), sem ler quaisquer ficheiros no seu interior.",
       "descriptionForgeSource": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se permitir, o Forge irá empacotar ou criar a estrutura base do plugin nesse local (grava um artefacto .cindy ou ficheiros de estrutura base).",
       "descriptionForgeScaffold": "O diretório abaixo está fora do diretório de trabalho desta sessão. Se permitir, o Forge irá criar aí os ficheiros de código-fonte do plugin.",
@@ -21924,7 +21899,6 @@
     "providerManagedAuth": "O fornecedor atual do Codex não disponibiliza informações da conta ChatGPT. Ao adicionar o fornecedor, selecione «$t(subscriptionAccounts.signIn.anotherAccount)» para usar uma pasta separada.",
     "signIn": {
       "checking": "A verificar a conta local…",
-      "detected": "Conta com sessão iniciada encontrada",
       "useAccount": "Usar a conta do {{cli}} neste computador",
       "anotherAccount": "Iniciar sessão noutra conta",
       "keepExisting": "A nova conta passa a ser um fornecedor separado, a menos que escolha um para a juntar. As sessões existentes serão mantidas.",
@@ -21935,7 +21909,6 @@
     "title": "Contas de subscrição",
     "strategy": "Distribuição de carga",
     "add": "Adicionar conta",
-    "default": "Pasta predefinida",
     "defaultTag": "Predefinida",
     "ready": "Ligada",
     "signedOut": "É necessário iniciar sessão",
