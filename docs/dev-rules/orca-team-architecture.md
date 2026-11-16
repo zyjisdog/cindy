@@ -461,7 +461,7 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
 
 #### Worker 结构化回报（六态）
 
-`send_to_lead` 可选携带 `report`：`state`（`progress` / `waiting` / `ready` / `blocked` / `failed` / `dropped`）+ 单条 `question`、`summary`、`verification`、`risk`。不带 `report` 时行为与旧自由文本回报完全一致。
+`send_to_lead` **必须**携带 `report`：`state`（`waiting` / `ready` / `blocked` / `failed` / `dropped`，五态定义只写在 `state` 字段描述里）+ 单条 `question`、`summary`、`verification`、`risk`。必填约束落在工具 schema 上：能发但字段可选的结果就是没人填（#9818 上线后 184 次调用 0 次使用），所以不靠提示词反复说服。旧运行时（schema 缓存里没有该字段）仍按自由文本降级，宿主留一行 `send_to_lead without report` 日志供统计。
 
 **回报内容是 Lead 要读的东西，不是宿主私货回执**：`report` 与 `message` 一起组成派发正文（`[Orca Worker report: <state>]` + Question / Summary / Verification / Risk），同时进
 Lead 的消息流与历史记录。只放进回执等于没送——Worker 可以写一句 `Done`，但证据与问题必须随正文到达 Lead。
