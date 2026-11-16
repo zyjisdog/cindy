@@ -2557,6 +2557,7 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
    * Lead 收口对账：只在 lead 文本声称已派、而本轮凭据不支撑时动手；
    * 首次唤醒补派一次（队列消息，开一轮），补派轮仍不一致则升级为会话内纠正卡 + 提醒。
    */
+
   async handleLeadTurnSettled(params: {
     leadSessionId: string;
     turnGeneration: number;
@@ -2605,12 +2606,17 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       return;
     }
 
+    // 升级只在主张与凭据不一致时发生（settle 的契约）；这里显式收窄，卡片才有原因可写。
+    if (verdict.consistent) return;
+
     // 升级不再开新 turn：只会在会话里落一张宿主纠正卡并提醒主人。
     deps.escalateDispatchClaim?.(params.leadSessionId, {
       state: 'unverified',
       version: 1,
-      summary: lines('Dispatch claim is still unverified after one correction.'),
-      reason,
+      // 正文不在这里拼：同一行记录会在手机、其他语言界面上重读。
+      targets: reading.targets.map(entry => entry.label),
+      reason: verdict.reason,
+      detail: verdict.detail,
       quote: reading.quote,
       at: Date.now(),
     });

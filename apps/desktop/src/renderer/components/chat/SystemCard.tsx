@@ -1,6 +1,7 @@
 import { formatCompactionDuration, formatSessionDuration, formatShellDuration } from '@/lib/sessionDurationFormat';
 import { IMPORT_SOURCE_NAMES, ImportSourceMark } from '@/components/icons/ImportSourceMark';
 import { isImportSourceId } from '../../../shared/sessionImport';
+import { ORCA_DISPATCH_CLAIM_QUOTE_MAX } from '../../../shared/orcaDispatchReceipt';
 import { InputHandoffRecordRow, readInputHandoffRecordData } from '@/features/input-handoff/InputHandoffRecordRow';
 import { Button } from '@/components/ui/button';
 import { BotSessionTaskResultCard } from '@/features/bots/BotSessionTaskResultCard';
@@ -40,6 +41,13 @@ import {
 } from '@/lib/autoResumePresentation';
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
+import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
+import {
+  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+  ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+  ACTIVITY_ROW_RADIUS_CLASS,
+} from './activityRowChrome';
 import { Spinner } from '@/components/ui/spinner';
 import { LearnStatusCard } from '@/features/learn/LearnStatusCard';
 import {
@@ -55,12 +63,6 @@ import {
 import { BotDirectMessageCard } from '@/features/bots/BotDirectMessageCard';
 import { VoiceCallCard, VoiceCallTaskEntry } from '@/features/bots/voice/VoiceCallTranscript';
 import { readVoiceCallRecord } from '@/../shared/voiceConversation';
-import {
-  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
-  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
-  ACTIVITY_ROW_HOVER_SURFACE_CLASS,
-  ACTIVITY_ROW_RADIUS_CLASS,
-} from './activityRowChrome';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { builtInSkillDescriptionKey } from '@/features/skillhub/lib/builtInSkillPresentation';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
@@ -1393,7 +1395,7 @@ function SessionImportCard({ data }: { data?: Record<string, unknown> }) {
 }
 
 function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const unverified = data?.state === 'unverified';
   const worker =
     typeof data?.workerLabel === 'string' && data.workerLabel
@@ -1403,38 +1405,112 @@ function OrcaDispatchCard({ data }: { data?: Record<string, unknown> }) {
         : '';
   const queued = data?.delivery === 'queued';
   const summary = typeof data?.summary === 'string' ? data.summary : '';
+  // 展开态与工具行一致：按块记忆，重渲不丢；回执没有 dispatchId 时退化为
+  // 内容锚，避免所有老回执共用同一个 key。
+  const blockKey =
+    typeof data?.dispatchId === 'string' && data.dispatchId
+      ? `orca-dispatch:${data.dispatchId}`
+      : `orca-dispatch:${String(data?.at ?? '')}:${queued ? 'queued' : 'sent'}:${labelFallback(data)}`;
+  const { expanded, setExpanded } = useExpandedBlockMemory(blockKey);
   const label = unverified
     ? t('chat.systemCard.orcaDispatch.unverified')
     : queued
       ? t('chat.systemCard.orcaDispatch.queued', { worker })
       : t('chat.systemCard.orcaDispatch.sent', { worker });
-  return (
-    <div
-      className="flex w-full select-none flex-col gap-1 py-2 text-center"
-      role="note"
-      aria-label={label}
-    >
-      <span
-        className={cn(
-          'inline-flex items-center justify-center gap-2 text-12 leading-[1.33]',
-          unverified ? 'text-[var(--error-fg)]' : 'text-[var(--text-tertiary)]',
-        )}
+  // 升级卡是要人行动的结论，保持常显；普通回执是一行事实，点开看全文。
+  if (unverified) {
+    // 正文按查看者当前语言拼：同一行记录会在手机、英文桌面上重读。
+    const labels = Array.isArray(data?.targets)
+      ? data.targets.filter((target): target is string => typeof target === 'string' && target !== '')
+      : [];
+    const detail = typeof data?.detail === 'string' ? data.detail : '';
+    const rawQuote = typeof data?.quote === 'string' ? data.quote : '';
+    const target = labels.length
+      ? new Intl.ListFormat(i18n.language || 'en', { style: 'long', type: 'conjunction' }).format(labels)
+      : '';
+    const claim = target
+      ? t('chat.systemCard.orcaDispatch.notice.claimTarget', { target })
+      : t('chat.systemCard.orcaDispatch.notice.claim');
+    const reason =
+      data?.reason === 'target-not-dispatched'
+        ? t('chat.systemCard.orcaDispatch.notice.notDispatched', { target: detail })
+        : data?.reason === 'unknown-message-id'
+          ? t('chat.systemCard.orcaDispatch.notice.unknownId', { id: detail })
+          : t('chat.systemCard.orcaDispatch.notice.noDispatch');
+    const quote =
+      rawQuote.length > ORCA_DISPATCH_CLAIM_QUOTE_MAX
+        ? `${rawQuote.slice(0, ORCA_DISPATCH_CLAIM_QUOTE_MAX - 1)}…`
+        : rawQuote;
+    const body = t('chat.systemCard.orcaDispatch.notice.body', { claim, reason, quote });
+    return (
+      <div
+        className="flex w-full items-start gap-1.5 px-2 py-[3px]"
+        role="note"
+        aria-label={label}
       >
-        {label}
-      </span>
-      {summary && (
+        <span className="shrink-0 text-12 leading-[1.5] text-[var(--error-fg)]">{label}</span>
+        <span aria-hidden className="shrink-0 text-12 leading-[1.5] text-[var(--text-tertiary)]">
+          ·
+        </span>
         <span
-          className={cn(
-            'mx-auto max-w-[86%] text-11 leading-[1.33] whitespace-pre-line text-[var(--text-tertiary)]',
-            unverified ? 'text-left' : 'truncate',
-          )}
-          title={summary}
+          className="min-w-0 whitespace-normal text-left text-12 leading-[1.5] text-[var(--text-secondary)]"
+          title={body}
         >
-          {summary}
+          {body}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex w-full flex-col" role="note" aria-label={label}>
+      {summary ? (
+        <button
+          type="button"
+          onClick={() => setExpanded(prev => !prev)}
+          aria-expanded={expanded}
+          title={expanded ? undefined : summary}
+          className={cn(
+            'group flex w-full items-center gap-1.5 text-left',
+            ACTIVITY_ROW_RADIUS_CLASS,
+            'px-2 py-[3px]',
+            ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+            ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+            'cursor-pointer select-none outline-none',
+            'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          )}
+        >
+          <span className="shrink-0 text-12 leading-[1.5] text-[var(--text-secondary)]">{label}</span>
+          {!expanded && (
+            <>
+              <span aria-hidden className="shrink-0 text-12 text-[var(--text-tertiary)]">
+                ·
+              </span>
+              <span className="min-w-0 truncate text-12 leading-[1.5] text-[var(--text-tertiary)]">
+                {summary}
+              </span>
+            </>
+          )}
+          <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
+            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </span>
+        </button>
+      ) : (
+        <span className="px-2 py-[3px] text-12 leading-[1.5] text-[var(--text-secondary)]">
+          {label}
         </span>
       )}
+      <Collapse open={expanded}>
+        <p className="whitespace-pre-line px-2 pb-1 text-12 leading-[1.5] text-[var(--text-secondary)]">
+          {summary}
+        </p>
+      </Collapse>
     </div>
   );
+}
+
+function labelFallback(data?: Record<string, unknown>): string {
+  const summary = typeof data?.summary === 'string' ? data.summary : '';
+  return summary.slice(0, 24);
 }
 
 const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {

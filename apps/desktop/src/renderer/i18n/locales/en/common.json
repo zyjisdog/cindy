@@ -264,15 +264,15 @@
     "transferProgress": "Transferred {{sent}} / {{total}} · Average {{speed}}/s",
     "thisComputer": "this computer",
     "selectedComputer": "selected computer",
-    "sourceComputer": "the source computer",
-    "waitingForSource": "Waiting for {{name}} to come back online. Copying will continue then.",
     "estimating": "Counting files and calculating size…",
     "fileSummary": "Project files: {{count}}, totaling {{size}}",
     "estimateNote": "Pre-copy estimate including hidden files. Git history, conversation and attachments are copied separately and excluded from this size. Files may change before copying.",
     "estimateFailed": "Could not count files. Check the source computer’s connection and version, then close and try again.",
     "estimateFailedWithCode": "Could not count files. Check the source computer’s connection and version, then close and try again. ({{code}})",
     "estimateTimeout": "Counting timed out: the project has too many files for the source computer to finish in time. Try copying a project with fewer files.",
-    "estimateTooManyFiles": "The project has more than {{limit, number}} files and cannot be copied. Copy a project with fewer files instead."
+    "estimateTooManyFiles": "The project has more than {{limit, number}} files and cannot be copied. Copy a project with fewer files instead.",
+    "sourceComputer": "the source computer",
+    "waitingForSource": "Waiting for {{name}} to come back online. Copying will continue then."
   },
   "sharedTask": {
     "officialRelayNote": "Agent-Net shares use the relay specified in the invitation; legacy shares still use the Cindy relay.",
@@ -1476,10 +1476,6 @@
   },
   "agentIsland": {
     "native": {
-      "summaryAttention": "To review",
-      "summaryInProgress": "In progress",
-      "summaryPending": "Needs your action",
-      "summaryUnread": "Unread results",
       "markRead": "Mark as read",
       "archive": "Archive",
       "actionFailed": "Could not complete the action. The notification has been kept. Try again.",
@@ -1512,7 +1508,11 @@
       "permissionPromptTitleWithTool": "Allow {{toolName}}?",
       "allowOnce": "Allow once",
       "alwaysAllowForSession": "Always allow for this session",
-      "deny": "Deny"
+      "deny": "Deny",
+      "summaryAttention": "To review",
+      "summaryInProgress": "In progress",
+      "summaryPending": "Needs your action",
+      "summaryUnread": "Unread results"
     }
   },
   "menubar": {
@@ -1934,12 +1934,6 @@
       "footnote": "Only SSH connection management is available for now. Running agents on remote machines is coming in a later update.",
       "viaAuth": "via {{label}}",
       "readOnlyFromSshConfig": "Connection details come from SSH configuration",
-      "importedAgentHint": "Authenticates through the local SSH key agent (ssh-agent). A successful terminal ssh connection does not mean the agent is ready.",
-      "agentError": {
-        "environmentUnset": "The environment variable referenced by IdentityAgent is not set for Cindy. Set it or correct IdentityAgent in your SSH config.",
-        "endpointEmpty": "IdentityAgent resolves to an empty endpoint. Correct IdentityAgent in your SSH config.",
-        "endpointUnavailable": "The SSH key agent endpoint configured by IdentityAgent is unavailable. Check that endpoint and its agent; the default ssh-agent may use a different endpoint."
-      },
       "configWarning": "Cindy cannot evaluate some SSH configuration rules. The host list or connection details may differ from terminal SSH.",
       "configDiagnostic": {
         "io": "Cindy could not read your SSH configuration. The last successfully loaded hosts are still shown. Check file permissions and reload.",
@@ -2195,6 +2189,12 @@
         "cancel": "Keep Existing Key",
         "trust": "Trust New Key and Reconnect",
         "updateFailed": "Could not update host trust. The connection details or saved key may have changed, or the trust file could not be written. Reconnect to refresh the fingerprints and check the file permissions."
+      },
+      "importedAgentHint": "Authenticates through the local SSH key agent (ssh-agent). A successful terminal ssh connection does not mean the agent is ready.",
+      "agentError": {
+        "environmentUnset": "The environment variable referenced by IdentityAgent is not set for Cindy. Set it or correct IdentityAgent in your SSH config.",
+        "endpointEmpty": "IdentityAgent resolves to an empty endpoint. Correct IdentityAgent in your SSH config.",
+        "endpointUnavailable": "The SSH key agent endpoint configured by IdentityAgent is unavailable. Check that endpoint and its agent; the default ssh-agent may use a different endpoint."
       }
     },
     "appearance": {
@@ -5401,13 +5401,6 @@
       }
     },
     "compaction": {
-      "codex": {
-        "label": "Codex server compaction",
-        "description": "Prefer server compaction when enabled. When disabled, Codex uses native local summarization, which still calls the current model.",
-        "hint": "Applies when Codex next starts or resumes a session on this computer. Providers without server compaction keep their existing behavior.",
-        "loadFailed": "Could not load Codex compaction settings",
-        "saveFailed": "Could not save Codex compaction settings"
-      },
       "title": "Context compaction",
       "description": "Adjust Claude Code and Pi compaction ratios here. Codex derives its threshold from the model context setting. If remote compaction fails, it automatically switches to summary compaction and keeps using it for the current task.",
       "card": {
@@ -5423,6 +5416,13 @@
         "description": "Pi's native auto-compaction starts when context usage reaches this percentage. The setting is applied the next time a Pi task starts.",
         "hint": "Lower values compact earlier and leave more room for the response; higher values compact later. Changes apply the next time a Pi task starts.",
         "sliderAria": "Adjust Pi auto-compaction trigger threshold"
+      },
+      "codex": {
+        "label": "Codex server compaction",
+        "description": "Prefer server compaction when enabled. When disabled, Codex uses native local summarization, which still calls the current model.",
+        "hint": "Applies when Codex next starts or resumes a session on this computer. Providers without server compaction keep their existing behavior.",
+        "loadFailed": "Could not load Codex compaction settings",
+        "saveFailed": "Could not save Codex compaction settings"
       }
     },
     "personalization": {
@@ -7962,6 +7962,7 @@
         "install": "Install",
         "details": "Details",
         "detailsAria": "View details for {{name}}",
+        "loadingDetails": "Loading details…",
         "update": "Update from market",
         "updateTo": "Update to v{{version}}",
         "installed": "Installed",
@@ -8064,8 +8065,7 @@
         },
         "conflict": "Unavailable",
         "conflictAria": "{{name}} has a plugin identifier conflict",
-        "conflictDescription": "This plugin identifier is already in use and cannot be installed right now",
-        "loadingDetails": "Loading details…"
+        "conflictDescription": "This plugin identifier is already in use and cannot be installed right now"
       },
       "reapproval": {
         "badge": "Installation recovery needed",
@@ -8242,8 +8242,6 @@
         "cindyTextOneshot": "Can ask Cindy's fast lane a question and receive a text answer",
         "cindyTextOneshotDetail": "Uses the system's lightweight utility model chain (the same lane as auto titles). No Agent involved and no file access. Model charges may apply.",
         "cindyEmbedText": "Can send text to be turned into vectors (for semantic search)",
-        "cindyModelsDecisions": "Can call decision models (uses your model quota)",
-        "cindyModelsRerank": "Can call reranking models (uses your model quota)",
         "cindyEmbedTextDetail": "Text is sent to the system embedding model and turned into numbers, up to {{max}} items per call. Model charges may apply. The vectors go only to the plugin — nothing is written to your own library.",
         "cindySearchWeb": "Can search the public web with Cindy AI",
         "cindySearchWebDetail": "Search requests access the public web and may consume Cindy AI quota.",
@@ -8271,8 +8269,6 @@
         "hostTools_controlDetail": "Use Cindy’s task tools to edit, archive, restore and control existing tasks and projects, and import native task files on this computer.",
         "hostTools_handoff": "Task Messaging",
         "hostTools_handoffDetail": "Use Cindy’s task tools to send messages to existing tasks. Operations needing a current task require an explicit task target.",
-        "hostTools_usage": "Read subscription usage",
-        "hostTools_usageDetail": "Read account identifiers, plans, quota windows and update times for Claude and Codex subscriptions connected to your current Cindy account on this computer. Cannot read emails, credentials, files or other computers, or change accounts.",
         "hostTools_settings": "App Settings",
         "hostTools_settingsDetail": "Use Cindy’s settings tools to read and change app configuration. Secrets are not returned, and private input remains yours to provide.",
         "hostTools_scheduler": "Automation Management",
@@ -8293,11 +8289,16 @@
         "hostTools_storage": "Storage and Sharing Between Plugins",
         "hostTools_storageDetail": "Use this plugin’s storage, Library and authorized media. Sharing delivers a copy only between enabled plugins that declare storage under the same account and organization. Other plugins’ storage cannot be read.",
         "codeDetailStorage": "Storage operations stay within this plugin’s data. Sharing delivers copies between enabled plugins that declare storage under the same account and organization.",
+        "storageShareTitle": "Give a Copy to Another Plugin",
+        "storageShareMessage": "Copy “{{file}}” ({{size}}) from plugin “{{name}}” to plugin “{{target}}”. The recipient gets an independent copy; source updates are not synchronized. Content already read or saved by the recipient cannot be recalled.",
         "hostTools_files": "Files in Selected Directories",
         "hostTools_filesDetail": "Read, write, list, delete files and watch changes in directories you explicitly select. Previous selections do not grant access. Disabling the plugin stops access.",
         "filesPickMessage": "Plugin “{{name}}” will be able to read, write, list and delete files in the selected directory and watch changes. Select a directory you allow it to access.",
         "codeDetailTerminal": "Plugin pages run in an isolated sandbox. Approved commands run as your user and can access local files, apps and networks.",
         "hostTools_terminalDetail": "Start commands and interactive terminals as your user on this computer, read output, send input and stop this plugin’s processes. Commands can access your files and apps.",
+        "hostToolsRequest": "Review {{group}} Permission",
+        "hostToolCallTitle": "Allow Plugin Operation",
+        "hostToolCallMessage": "The plugin “{{name}}” wants to call {{server}} / {{tool}}. This approval applies only to the parameters below.",
         "agentHiddenTasks": "Can create background tasks hidden from the task list",
         "agentHiddenTasksDetail": "Tasks this plugin creates can stay out of the task list, search and notifications. You can always view, open or show them in the task list from Background Tasks on this plugin’s page; uninstalling the plugin shows them again.",
         "agentErrand": "Create tasks, perform work, and read results",
@@ -8497,11 +8498,10 @@
             "assistant": "Assistant"
           }
         },
-        "storageShareTitle": "Give a Copy to Another Plugin",
-        "storageShareMessage": "Copy “{{file}}” ({{size}}) from plugin “{{name}}” to plugin “{{target}}”. The recipient gets an independent copy; source updates are not synchronized. Content already read or saved by the recipient cannot be recalled.",
-        "hostToolsRequest": "Review {{group}} Permission",
-        "hostToolCallTitle": "Allow Plugin Operation",
-        "hostToolCallMessage": "The plugin “{{name}}” wants to call {{server}} / {{tool}}. This approval applies only to the parameters below."
+        "cindyModelsDecisions": "Can call decision models (uses your model quota)",
+        "cindyModelsRerank": "Can call reranking models (uses your model quota)",
+        "hostTools_usage": "Read subscription usage",
+        "hostTools_usageDetail": "Read account identifiers, plans, quota windows and update times for Claude and Codex subscriptions connected to your current Cindy account on this computer. Cannot read emails, credentials, files or other computers, or change accounts."
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -8595,16 +8595,6 @@
         "browserSwitchTitle": "Switch browser extension connection?",
         "browserSwitchMessage": "Use “{{name}}” for this browser connection?",
         "browserSwitchDetail": "Instance: {{instance}}\nRegistration: {{host}}\nThis replaces the current registration. The extension will connect to this plugin.",
-        "reuseAccountTitle": "Use an Account or Credential",
-        "reuseAccountDescription": "Use an account or credential already saved in Cindy. Cindy injects it without exposing the original value.",
-        "reuseAccountChoose": "Choose an Account or Credential",
-        "reuseAccountUse": "Use This Selection",
-        "reuseAccountStop": "Stop Using",
-        "reuseAccountEmpty": "No compatible account or credential is saved. Connect an account or save a key in the source plugin settings.",
-        "reuseAccountUnavailable": "The original account or credential is unavailable. Choose another source.",
-        "reuseAccountLoadFailed": "Could not load accounts and credentials",
-        "reuseAccountChangeFailed": "Could not change this selection",
-        "reuseAccountRefresh": "Refresh",
         "portReclaimTitle": "End the program using the callback port?",
         "portReclaimMessage": "“{{name}}” needs port {{port}}. End the following program?",
         "portReclaimDetail": "Ending it may interrupt its work or lose unsaved data. You can cancel and close the program yourself.",
@@ -8619,7 +8609,17 @@
         "viewAllPermissions": "See All",
         "permissionsDialogDescription": "All {{count}} permissions requested by this Plugin",
         "closeDialog": "Close Dialog",
-        "resetPlacement": "Reset to default position"
+        "resetPlacement": "Reset to default position",
+        "reuseAccountTitle": "Use an Account or Credential",
+        "reuseAccountDescription": "Use an account or credential already saved in Cindy. Cindy injects it without exposing the original value.",
+        "reuseAccountChoose": "Choose an Account or Credential",
+        "reuseAccountUse": "Use This Selection",
+        "reuseAccountStop": "Stop Using",
+        "reuseAccountEmpty": "No compatible account or credential is saved. Connect an account or save a key in the source plugin settings.",
+        "reuseAccountUnavailable": "The original account or credential is unavailable. Choose another source.",
+        "reuseAccountLoadFailed": "Could not load accounts and credentials",
+        "reuseAccountChangeFailed": "Could not change this selection",
+        "reuseAccountRefresh": "Refresh"
       },
       "contents": {
         "mainView": "Main view",
@@ -8900,10 +8900,6 @@
         "projectReadFailed": "Could not read project settings. Try again."
       },
       "usage": {
-        "downloadExplanation": "Cumulative download URL requests. Each successfully issued package URL counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
-        "downloadsValue": "{{value}} downloads",
-        "usesValue": "{{value}} uses",
-        "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience.",
         "title": "Your calls",
         "explanationLabel": "How usage is counted",
         "explanation": "Tool calls dispatched on this computer by the current account, including failures, timeouts and cancellations. The last 7 days is a rolling 168 hours. Panels, Skills and debugging are excluded. Records remain until cleared.",
@@ -8916,7 +8912,11 @@
         "never": "No calls yet",
         "clearTitle": "Clear this Plugin’s usage records?",
         "clearDescription": "Remove call records and Session links for this account on this computer. New calls start a fresh history. Shared totals already received by the server are not withdrawn.",
-        "clearAction": "Clear"
+        "downloadExplanation": "Cumulative download URL requests. Each successfully issued package URL counts once, including updates, reinstalls and retries that request a new URL. This is not a count of completed installations.",
+        "clearAction": "Clear",
+        "downloadsValue": "{{value}} downloads",
+        "usesValue": "{{value}} uses",
+        "usesExplanation": "Cumulative shared tool calls across all releases in the authorized audience."
       },
       "contribution": {
         "unreadReview": "New plugin result",
@@ -9486,7 +9486,6 @@
     "backToLogin": "Back to sign-in"
   },
   "login": {
-    "networkResponseHint": "The sign-in service returned an unexpected response. A network intermediary or proxy may be blocking the request. Check your network and proxy settings.",
     "title": "Welcome to Cindy",
     "subtitle": "Choose a secure way to sign in",
     "savedLoginPreserved": "Recovery keeps your saved sign-in details",
@@ -9622,7 +9621,8 @@
       "intro": "The sign-in service is temporarily limiting requests. This is separate from a local credential-storage error.",
       "guidance": "Wait before requesting another code. Restarting, reinstalling, or changing networks does not guarantee that the limit will be lifted.",
       "support": "If this continues after waiting, privately send logs to feedback@cindy.app with your OS, Cindy version, error time, and the code below. Do not post logs publicly."
-    }
+    },
+    "networkResponseHint": "The sign-in service returned an unexpected response. A network intermediary or proxy may be blocking the request. Check your network and proxy settings."
   },
   "legacyMigration": {
     "title": "Migrate data from the previous version",
@@ -9833,7 +9833,6 @@
     "tokenLine": "Tokens: {{total}} total · input {{input}} · output {{output}}",
     "cacheLine": "Cache breakdown: read {{read}} · write {{create}} · hit rate {{rate}}",
     "cacheLineNoRate": "Cache breakdown: read {{read}} · write {{create}}",
-    "stepsLine": "Requests this turn: {{steps}} · ~{{context}} context each",
     "modelLine": "Model: {{model}}",
     "multipleModels": "{{count}} models",
     "costBreakdownHeader": "By model:",
@@ -9842,7 +9841,8 @@
     "noBilledCost": "Cost unavailable for this turn; showing usage only",
     "suggestion": {
       "lowCache": "Cache hit rate is low; more context was billed again this turn"
-    }
+    },
+    "stepsLine": "Requests this turn: {{steps}} · ~{{context}} context each"
   },
   "usageHistory": {
     "description": "Token usage produced inside Cindy across your computers, combined by default; you can also view one device at a time. Other computers must be online and allow remote control to be read; when one can't be reached, its last-read data is used. Records start accumulating when the feature ships; earlier history is not backfilled.",
@@ -11543,10 +11543,10 @@
         "projectDirNote": "Buddies work here when they split the work. You can leave it empty and they’ll use this group chat’s own folder. If you choose a git project, each work split gets a new worktree and branch, so your own code stays untouched.",
         "autoContinueSaveFailed": "Couldn’t save step handoffs. Try again.",
         "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again.",
-        "allowMemberInvites": "Let all members invite friends",
-        "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
         "allowMentionAllBots": "Allow @all buddies",
-        "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
+        "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent.",
+        "allowMemberInvites": "Let all members invite friends",
+        "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this."
       },
       "errors": {
         "memberLimit": "A group chat needs 2–6 buddies",
@@ -11650,7 +11650,6 @@
         "threadRecent": "Recent messages in the thread",
         "threadNew": "New messages in the thread",
         "replyingTo": "Replying to “{{name}}”: {{text}}",
-        "filesOutsideWorkingDir": "Files outside the working directory were not attached.",
         "earlierOmitted": "(Earlier messages omitted)",
         "actingFor": "{{name}} · for {{person}}",
         "checkout": {
@@ -11665,7 +11664,8 @@
             "win32": "Download and install Git from https://git-scm.com/download/win with the default options.",
             "linux": "Install git with your system's package manager (for example, sudo apt install git)."
           }
-        }
+        },
+        "filesOutsideWorkingDir": "Files outside the working directory were not attached."
       },
       "files": {
         "openFailed": "Couldn’t open the file. It may have been moved or deleted.",
@@ -11823,11 +11823,6 @@
           "transferHint": "They will become the owner and you will become an admin.",
           "removeTitle": "Remove {{name}} from this group?",
           "removeHint": "They will lose access to messages. Their companions will also leave.",
-          "removeOwn": "Remove from group",
-          "removeOwnScope": "This only affects this group. Your companion stays in your account.",
-          "removeOwnHint": "{{name}} will no longer receive messages from “{{group}}”. Message history stays; other groups and private chats are unaffected.",
-          "removeOwnActiveHint": "Removing this companion stops its active requests in this group. Tasks opened independently keep running.",
-          "stopAndRemove": "Stop and remove",
           "leave": "Leave group",
           "leaveHint": "You and your companions will leave this group. You will no longer receive new messages or have access to its history.",
           "soleOwnerHint": "You’re the only member left. Archive this group to keep its history and restore it later.",
@@ -11926,7 +11921,12 @@
           "accessToolsTitle": "Tools and information",
           "accessToolsHint": "Can use {{name}}'s existing tools and your private info. Results are visible to everyone. Approvals still apply; finished actions can't be undone after you revoke access.",
           "capabilitiesRow": "{{name}}'s tools and access",
-          "accessMenu": "Permissions here"
+          "accessMenu": "Permissions here",
+          "removeOwn": "Remove from group",
+          "removeOwnScope": "This only affects this group. Your companion stays in your account.",
+          "removeOwnHint": "{{name}} will no longer receive messages from “{{group}}”. Message history stays; other groups and private chats are unaffected.",
+          "removeOwnActiveHint": "Removing this companion stops its active requests in this group. Tasks opened independently keep running.",
+          "stopAndRemove": "Stop and remove"
         }
       },
       "lifecycle": {
@@ -14094,10 +14094,10 @@
         "realtime": "Realtime Audio",
         "embedding": "Embeddings",
         "decision": "Decision",
-        "rerank": "Rerank",
         "compression": "Compression",
         "ungrouped": "Ungrouped",
-        "other": "Other"
+        "other": "Other",
+        "rerank": "Rerank"
       },
       "search": {
         "placeholder": "Search {{source}} models…",
@@ -15467,6 +15467,19 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "sent": "Dispatched to {{worker}}",
+        "queued": "Queued for {{worker}}",
+        "unverified": "Dispatch not verified",
+        "notice": {
+          "claim": "Lead said it dispatched",
+          "claimTarget": "Lead said it dispatched to {{target}}",
+          "noDispatch": "The host accepted no dispatch this turn",
+          "notDispatched": "The host has no record of dispatching to {{target}} this turn",
+          "unknownId": "The queued message id {{id}} matches no dispatch",
+          "body": "{{claim}}. {{reason}}. Quoted from its reply this turn: “{{quote}}”. Lead has been asked to re-dispatch."
+        }
+      },
       "help": {
         "title": "Available Commands",
         "builtInCommands": "Built-in Commands",
@@ -15634,11 +15647,6 @@
         "baseline": "Base branch: ",
         "additionalDirectories": "Also: ",
         "unverifiedResult": "The reviewer produced these findings, but their validity could not be verified."
-      },
-      "orcaDispatch": {
-        "sent": "Dispatched to {{worker}}",
-        "queued": "Queued for {{worker}}",
-        "unverified": "Dispatch not verified"
       }
     },
     "markdownRenderer": {
@@ -15855,11 +15863,6 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "The remote working directory is unavailable. Check that the folder still exists on that computer, then try again.",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "The computer cannot yet confirm whether this message was sent. Wait a moment and try again. Do not send the same message twice.",
       "REMOTE_AGENT_UNAVAILABLE": "Could not communicate with the computer running the Agent. Check the error details.",
-      "REMOTE_AGENT_TIMEOUT": "Timed out waiting for the computer running the Agent. The result is unknown. Check the task before retrying.",
-      "REMOTE_AGENT_LINK_BUSY": "Communication with the computer running the Agent is busy. Wait a moment before retrying.",
-      "REMOTE_AGENT_UNRESPONSIVE": "The computer running the Agent repeatedly failed to respond, so calls were temporarily paused. Wait a moment before retrying.",
-      "REMOTE_AGENT_OFFLINE": "The computer running the Agent is offline. Retry after it reconnects.",
-      "REMOTE_AGENT_ACCESS_DENIED": "Remote access to the computer running the Agent was denied. Check its access settings before retrying.",
       "REMOTE_AGENT_PEER_TOO_OLD": "Cindy on the other computer is too old for this action. Update Cindy there first.",
       "REMOTE_AGENT_EXPIRED": "This session already ended on the computer running the Agent. Send your message again.",
       "REMOTE_AGENT_NOT_FOUND": "This session already ended on the computer running the Agent. Send your message again.",
@@ -15882,7 +15885,12 @@
       "REMOTE_AGENT_DEVICE_LIMIT": "This device has reached its remote session limit. Archive unused sessions or ask the provider owner to raise the limit in Remote & sharing.",
       "REMOTE_AGENT_TOTAL_LIMIT": "The provider computer has reached its total remote session limit. Ask the owner to release unused sessions or raise the limit in Remote & sharing.",
       "REMOTE_AGENT_RESUME_LOST": "The earlier conversation on the other computer could not be reconnected, so the agent continues without that context.",
-      "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again."
+      "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy cannot read the source attachment; the message was not sent. Save a copy to Downloads or another accessible folder, remove the original attachment, and add the copy using the attachment button before sending again.",
+      "REMOTE_AGENT_TIMEOUT": "Timed out waiting for the computer running the Agent. The result is unknown. Check the task before retrying.",
+      "REMOTE_AGENT_LINK_BUSY": "Communication with the computer running the Agent is busy. Wait a moment before retrying.",
+      "REMOTE_AGENT_UNRESPONSIVE": "The computer running the Agent repeatedly failed to respond, so calls were temporarily paused. Wait a moment before retrying.",
+      "REMOTE_AGENT_OFFLINE": "The computer running the Agent is offline. Retry after it reconnects.",
+      "REMOTE_AGENT_ACCESS_DENIED": "Remote access to the computer running the Agent was denied. Check its access settings before retrying."
     },
     "generatedFiles": {
       "title": "Files created in this message",
@@ -16314,8 +16322,6 @@
       "claudeSubscriptionWorkspaceOverride": "This folder's .claude settings change where Claude sends requests or how it signs in, so the Claude subscription can't be used here. Remove those settings, or pick a gateway or API key model",
       "deviceStillLoading": "The remote device is still loading. Wait a moment.",
       "remoteDefaultsLoadFailed": "Could not load the remote device settings. Check the connection; Cindy is retrying.",
-      "branchChanged": "The project is now on {{branch}}. Check it, then send again.",
-      "branchCheckFailed": "Could not verify the current branch. Enable worktree to use the selected branch, or check the project and try again.",
       "worktreeMissingRepo": "Can't create a worktree: the current directory's repo root is missing",
       "worktreeRepoHint": "Try picking the working directory again, and retry once the folder badge at the bottom right refreshes",
       "sessionInactive": "Session is no longer active",
@@ -16323,6 +16329,8 @@
       "remoteDialogueBanner": "New session on {{device}} (no project)",
       "agentDeviceBanner": "Session and files stay on this computer — the Agent runs on {{device}}",
       "agentDeviceElsewhereBanner": "The Agent runs on {{device}}",
+      "branchChanged": "The project is now on {{branch}}. Check it, then send again.",
+      "branchCheckFailed": "Could not verify the current branch. Enable worktree to use the selected branch, or check the project and try again.",
       "branchRequiresWorktree": "The selected branch is not the current branch. Enable worktree or select the current branch."
     },
     "jumpSession": {
@@ -16892,13 +16900,13 @@
             "title": "Repository events",
             "description": "Connect the Cindy GitHub App to update followed PRs when reviews or CI change.",
             "connected": "Connected as {{login}} · Repositories watched: {{count}}",
-            "syncing": "Syncing repositories…",
-            "finishInBrowser": "Finish repository setup in GitHub, then return to Cindy.",
             "missing": "Check App installation and access for: {{repositories}}",
             "error": "Could not check the connection. Try again.",
             "repositories": "Choose repositories",
             "disconnect": "Disconnect events",
-            "connect": "Connect GitHub App"
+            "connect": "Connect GitHub App",
+            "syncing": "Syncing repositories…",
+            "finishInBrowser": "Finish repository setup in GitHub, then return to Cindy."
           }
         },
         "unresolved": "Unresolved review threads: {{count}}",
@@ -17476,11 +17484,11 @@
         "session": "Session",
         "silentRun": "Silent run",
         "silentRunTooltip": "When enabled, successful runs do not notify by default. If the task prompt asks to notify under specific conditions, AI will report when those conditions are met. Failures and errors still notify.",
+        "silentRunInfoAria": "View silent run rules",
         "finishSendToFeishu": "Send result to Feishu bot",
         "finishSendToWecomGroup": "Send result to WeCom group",
         "configWecomGroup": "Configure WeCom group notifications",
-        "configFeishu": "Configure Feishu bot",
-        "silentRunInfoAria": "View silent run rules"
+        "configFeishu": "Configure Feishu bot"
       },
       "runSession": {
         "label": "Run session",
@@ -17665,6 +17673,8 @@
         "repositoriesLabel": "Repositories",
         "repositoriesHint": "Enter owner/repository, one per line. Only repositories authorized for this GitHub App can trigger the task.",
         "repositoriesInvalid": "Enter 1–50 valid repository names in owner/repository format.",
+        "githubAppHint": "Connect GitHub App on the computer running this task and authorize these repositories. No separate Webhook URL or secret is needed.",
+        "githubAppPaused": "This task is paused. Events will not start it.",
         "connectAccount": "Connect account",
         "connectionLabel": "Connection method",
         "cindyConnection": "Connect through Cindy (recommended)",
@@ -17677,9 +17687,7 @@
         "authorizeRepositories": "Authorize repositories",
         "appUnavailable": "GitHub App connection is unavailable here. You can set up a Webhook manually.",
         "cindyConnectionTitle": "GitHub · Via Cindy",
-        "manualConnectionTitle": "GitHub · Manual Webhook",
-        "githubAppHint": "Connect GitHub App on the computer running this task and authorize these repositories. No separate Webhook URL or secret is needed.",
-        "githubAppPaused": "This task is paused. Events will not start it."
+        "manualConnectionTitle": "GitHub · Manual Webhook"
       },
       "trigger": {
         "label": "Trigger mode",
@@ -18268,6 +18276,7 @@
       "descriptionSaveDir": "The directory below is outside this session's working directory. If you allow, this plugin can save downloaded files into it (existing files are never overwritten).",
       "descriptionRevealPath": "The path is returned to the current Agent only after you allow it and will enter the conversation record; paired devices may sync that record. This does not grant any plugin access to the file.",
       "descriptionFsWrite": "This plugin requests to write the files below into the current session's working directory. If you allow, further writes to the same directory in this session won't ask again.",
+      "descriptionFsDelete": "This plugin requests to delete the files or folders below from the current task's working directory. Deleting a folder also deletes its contents. This approval applies to this deletion only.",
       "descriptionWorkspace": "This folder is outside this session's working directory. If you allow, Cindy creates an empty session for it in the sidebar (an existing session is reused) without reading any files inside.",
       "descriptionForgeSource": "The directory below is outside this session's working directory. If you allow, Forge will pack or scaffold the plugin there (it writes a .cindy artifact or skeleton files).",
       "descriptionForgeScaffold": "The directory below is outside this session's working directory. If you allow, Forge will create plugin source files there.",
@@ -18280,8 +18289,7 @@
       "directory": "Directory",
       "allowDirs": "Also allow their folders (media files in the same folders won't ask again this session)",
       "allow": "Allow",
-      "deny": "Deny",
-      "descriptionFsDelete": "This plugin requests to delete the files or folders below from the current task's working directory. Deleting a folder also deletes its contents. This approval applies to this deletion only."
+      "deny": "Deny"
     }
   },
   "inputHandoff": {
@@ -21710,6 +21718,7 @@
     "providerManagedAuth": "The current Codex provider does not expose a ChatGPT account. When adding the provider, choose “$t(subscriptionAccounts.signIn.anotherAccount)” to use a separate folder.",
     "signIn": {
       "checking": "Checking local account…",
+      "detected": "Signed-in account found",
       "useAccount": "Use the {{cli}} account on this computer",
       "anotherAccount": "Sign in to another account",
       "keepExisting": "The new account becomes its own provider unless you choose one to join. Existing sign-ins stay unchanged.",
@@ -21720,6 +21729,7 @@
     "title": "Subscription accounts",
     "strategy": "Load balancing",
     "add": "Add account",
+    "default": "Default folder",
     "defaultTag": "Default",
     "ready": "Connected",
     "signedOut": "Sign in required",

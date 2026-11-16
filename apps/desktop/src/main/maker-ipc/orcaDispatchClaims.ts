@@ -8,6 +8,8 @@
  * - 处置（action）：一条 Lead 至多唤醒一次、升级一次，且在真派发出现前保持静默。
  */
 
+import type { OrcaDispatchClaimFailure } from '../../shared/orcaDispatchReceipt.js';
+
 export type OrcaDispatchDelivery = 'direct' | 'queued';
 
 export interface LeadDispatchFact {
@@ -42,7 +44,7 @@ export type DispatchClaimVerdict =
   | { consistent: true }
   | {
       consistent: false;
-      reason: 'no-dispatch' | 'target-not-dispatched' | 'unknown-message-id';
+      reason: OrcaDispatchClaimFailure;
       /** 出问题的目标名或编号，用于文案与日志。 */
       detail: string;
     };
@@ -257,7 +259,7 @@ export function verifyDispatchClaim(
   return { consistent: true };
 }
 
-/** 卡片与唤醒文本共用的短原因，避免同一判定在别处再写一遍分支。 */
+/** 唤醒文本用的短原因；卡片正文走 i18n，不再复用这句英文。 */
 export function describeDispatchClaimVerdict(verdict: DispatchClaimVerdict): string {
   if (verdict.consistent) return '';
   switch (verdict.reason) {
@@ -297,3 +299,4 @@ export function settleDispatchClaimIncident(leadSessionId: string, consistent: b
 export function resetDispatchClaimState(): void {
   ledgers.clear();
 }
+

@@ -264,15 +264,15 @@
     "transferProgress": "已傳輸 {{sent}} / {{total}} · 平均 {{speed}}/s",
     "thisComputer": "本機",
     "selectedComputer": "所選電腦",
-    "sourceComputer": "來源電腦",
-    "waitingForSource": "{{name}}已離線，上線後會繼續複製。",
     "estimating": "正在統計檔案數量和大小…",
     "fileSummary": "專案檔案：{{count}} 個，共 {{size}}",
     "estimateNote": "複製前估算，含隱藏檔案；不含另行複製的 Git 歷史、任務對話及附件。檔案變化可能影響最終大小。",
     "estimateFailed": "無法統計檔案。請檢查任務所在電腦的連線和版本，然後關閉重試。",
     "estimateFailedWithCode": "無法統計檔案。請檢查任務所在電腦的連線和版本，然後關閉重試。（{{code}}）",
     "estimateTimeout": "統計逾時：專案檔案過多，任務所在電腦未能在時限內完成統計。可以改為複製檔案較少的專案。",
-    "estimateTooManyFiles": "專案檔案超過 {{limit, number}} 個，無法複製。請改為複製檔案較少的專案。"
+    "estimateTooManyFiles": "專案檔案超過 {{limit, number}} 個，無法複製。請改為複製檔案較少的專案。",
+    "sourceComputer": "來源電腦",
+    "waitingForSource": "{{name}}已離線，上線後會繼續複製。"
   },
   "sharedTask": {
     "officialRelayNote": "Agent-Net 分享使用邀請指定的中繼；舊版分享仍經 Cindy 官方中繼。",
@@ -1463,10 +1463,6 @@
   },
   "agentIsland": {
     "native": {
-      "summaryAttention": "待查看",
-      "summaryInProgress": "進行中",
-      "summaryPending": "等你處理",
-      "summaryUnread": "未讀結果",
       "markRead": "標為已讀",
       "archive": "歸檔",
       "actionFailed": "操作未完成，提醒已保留，請重試。",
@@ -1499,7 +1495,11 @@
       "permissionPromptTitleWithTool": "允許 {{toolName}}？",
       "allowOnce": "允許一次",
       "alwaysAllowForSession": "本任務總是允許",
-      "deny": "拒絕"
+      "deny": "拒絕",
+      "summaryAttention": "待查看",
+      "summaryInProgress": "進行中",
+      "summaryPending": "等你處理",
+      "summaryUnread": "未讀結果"
     }
   },
   "menubar": {
@@ -1904,12 +1904,6 @@
       "footnote": "第一版僅支援 SSH 連線管理。在遠端執行 Agent 的能力將在後續版本中加入。",
       "viaAuth": "透過 {{label}} 認證",
       "readOnlyFromSshConfig": "連線資訊來自 SSH 設定",
-      "importedAgentHint": "使用本機 SSH 金鑰代理程式（ssh-agent）完成驗證。終端機 ssh 能連線，不代表代理程式已就緒。",
-      "agentError": {
-        "environmentUnset": "IdentityAgent 引用的環境變數未在 Cindy 中設定。請為 Cindy 設定該變數，或修正 SSH 設定中的 IdentityAgent",
-        "endpointEmpty": "IdentityAgent 解析後的端點為空。請修正 SSH 設定中的 IdentityAgent",
-        "endpointUnavailable": "IdentityAgent 設定的 SSH 金鑰代理程式端點無法使用。請檢查該端點及其代理程式；預設 ssh-agent 可能使用不同端點"
-      },
       "configWarning": "部分 SSH 設定規則 Cindy 無法解析，主機列表或連線資訊可能與終端 SSH 不一致。",
       "configDiagnostic": {
         "io": "Cindy 無法讀取 SSH 設定。這裡仍顯示上次成功讀取的主機；請檢查檔案權限，然後重新載入。",
@@ -2165,6 +2159,12 @@
         "cancel": "保留原金鑰",
         "trust": "信任新金鑰並重新連線",
         "updateFailed": "無法更新主機信任記錄。連線資訊或已存金鑰可能已變更，也可能無法寫入記錄檔。請重新連線以更新指紋，並檢查檔案權限"
+      },
+      "importedAgentHint": "使用本機 SSH 金鑰代理程式（ssh-agent）完成驗證。終端機 ssh 能連線，不代表代理程式已就緒。",
+      "agentError": {
+        "environmentUnset": "IdentityAgent 引用的環境變數未在 Cindy 中設定。請為 Cindy 設定該變數，或修正 SSH 設定中的 IdentityAgent",
+        "endpointEmpty": "IdentityAgent 解析後的端點為空。請修正 SSH 設定中的 IdentityAgent",
+        "endpointUnavailable": "IdentityAgent 設定的 SSH 金鑰代理程式端點無法使用。請檢查該端點及其代理程式；預設 ssh-agent 可能使用不同端點"
       }
     },
     "appearance": {
@@ -5358,13 +5358,6 @@
       }
     },
     "compaction": {
-      "codex": {
-        "label": "Codex 伺服器壓縮",
-        "description": "開啟時優先使用伺服器壓縮；關閉後使用 Codex 原生本地摘要，仍會呼叫目前模型。",
-        "hint": "在這台電腦執行的 Codex 下次啟動或恢復任務時生效。不支援伺服器壓縮的供應商維持原有方式。",
-        "loadFailed": "無法讀取 Codex 壓縮設定",
-        "saveFailed": "儲存 Codex 壓縮設定失敗"
-      },
       "title": "上下文壓縮",
       "description": "Claude Code 和 Pi 的壓縮比例在此調整。Codex 隨模型設定的上下文上限自動調整壓縮門檻；遠端壓縮失敗時自動改用摘要壓縮，並在目前任務中保持。",
       "card": {
@@ -5380,6 +5373,13 @@
         "description": "Pi 的原生自動壓縮會在上下文佔用達到該比例時開始。此設定會在下次啟動 Pi 任務時生效。",
         "hint": "調低會更早壓縮、為回應保留更多餘量；調高會更晚壓縮。修改會在下次啟動 Pi 任務時生效。",
         "sliderAria": "調整 Pi 自動壓縮觸發門檻"
+      },
+      "codex": {
+        "label": "Codex 伺服器壓縮",
+        "description": "開啟時優先使用伺服器壓縮；關閉後使用 Codex 原生本地摘要，仍會呼叫目前模型。",
+        "hint": "在這台電腦執行的 Codex 下次啟動或恢復任務時生效。不支援伺服器壓縮的供應商維持原有方式。",
+        "loadFailed": "無法讀取 Codex 壓縮設定",
+        "saveFailed": "儲存 Codex 壓縮設定失敗"
       }
     },
     "terminalShell": {
@@ -7919,6 +7919,7 @@
         "install": "安裝",
         "details": "詳情",
         "detailsAria": "檢視 {{name}} 的詳情",
+        "loadingDetails": "正在載入詳情…",
         "update": "從市場更新",
         "updateTo": "更新到 v{{version}}",
         "installed": "已安裝",
@@ -8021,8 +8022,7 @@
         "customSourcesUnavailable": "以下自訂市場暫時無法存取：{{names}}，其他市場不受影響。",
         "replace": "取代",
         "replaceAria": "以此市場版本取代 {{name}}",
-        "replaceDescription": "已安裝相同 ID 的插件；繼續安裝會切換來源。原來源的資料將隔離保留，新來源不會繼承原帳號和金鑰，需要重新連線。",
-        "loadingDetails": "正在載入詳情…"
+        "replaceDescription": "已安裝相同 ID 的插件；繼續安裝會切換來源。原來源的資料將隔離保留，新來源不會繼承原帳號和金鑰，需要重新連線。"
       },
       "install": "從檔案安裝…",
       "empty": "還沒有安裝任何插件",
@@ -8199,8 +8199,6 @@
         "cindyTextOneshot": "可向 Cindy 的快速通道提問並獲得文字回答",
         "cindyTextOneshotDetail": "走系統的輕量任務模型鏈（與自動起標題同一條通道），不動用 Agent、碰不到你的檔案，可能產生模型費用。",
         "cindyEmbedText": "可把文字送去算成向量（用於語義檢索）",
-        "cindyModelsDecisions": "可呼叫決策模型（使用你的模型配額）",
-        "cindyModelsRerank": "可呼叫重排模型（使用你的模型配額）",
         "cindyEmbedTextDetail": "文字會送到系統的向量模型算成一串數字，單次最多 {{max}} 條，可能產生模型費用。算出的向量只交給插件自己保管，不寫入你的資料庫。",
         "cindySearchWeb": "可使用 Cindy AI 搜尋公網",
         "cindySearchWebDetail": "查詢會存取公開網路，並可能消耗 Cindy AI 配額。",
@@ -8228,8 +8226,6 @@
         "hostTools_controlDetail": "透過 Cindy 的任務工具修改、封存、還原及控制現有任務與專案，並在本機匯入原生任務檔案。",
         "hostTools_handoff": "任務投遞",
         "hostTools_handoffDetail": "透過 Cindy 的任務工具向現有任務傳送訊息。需要目前任務情境的操作須明確指定任務。",
-        "hostTools_usage": "讀取訂閱用量",
-        "hostTools_usageDetail": "讀取目前 Cindy 帳號在這台電腦上已連接的 Claude 和 Codex 帳號識別碼、方案、配額時段及更新時間。無法讀取電子郵件地址、憑證、檔案或其他電腦的資料，也無法修改帳號",
         "hostTools_settings": "應用程式設定",
         "hostTools_settingsDetail": "透過 Cindy 的設定工具讀取及修改應用程式設定；不傳回金鑰，也不代你完成機密輸入。",
         "hostTools_scheduler": "自動化管理",
@@ -8250,11 +8246,16 @@
         "hostTools_storage": "儲存與跨插件分享",
         "hostTools_storageDetail": "使用本插件的儲存、作品庫和授權素材。僅同帳號、同組織且雙方均已啟用並宣告 storage 的插件可分享副本；不能讀取其他插件的儲存。",
         "codeDetailStorage": "儲存操作只在本插件的資料範圍內執行；分享要求雙方已啟用並宣告 storage、同帳號且同組織，交付為副本。",
+        "storageShareTitle": "將副本交給其他插件",
+        "storageShareMessage": "將插件「{{name}}」的「{{file}}」（{{size}}）複製給插件「{{target}}」。對方將取得獨立副本，來源檔案更新不會同步。對方已讀取或另存的內容無法收回。",
         "hostTools_files": "授權目錄檔案",
         "hostTools_filesDetail": "可在你親手選擇的目錄內自主讀取、寫入、列出、刪除檔案及監聽變化。舊目錄選擇不會自動生效，停用插件即停止存取。",
         "filesPickMessage": "插件「{{name}}」將能讀取、寫入、列出、刪除所選目錄內的檔案，並持續監聽變化。請選擇允許它存取的目錄。",
         "codeDetailTerminal": "插件頁面在獨立沙箱中執行；獲准的命令以你的使用者身分執行，可存取本機檔案、應用程式與網路。",
         "hostTools_terminalDetail": "在這台電腦以你的使用者身分啟動命令和互動終端機、讀取輸出、輸入及停止此插件的處理程序。命令可存取你的檔案與應用程式。",
+        "hostToolsRequest": "確認{{group}}權限",
+        "hostToolCallTitle": "允許插件執行操作",
+        "hostToolCallMessage": "插件「{{name}}」要呼叫 {{server}} / {{tool}}。此次允許僅適用於下列參數。",
         "agentHiddenTasks": "可建立不顯示在任務列表裡的背景任務",
         "agentHiddenTasksDetail": "本插件建立的任務可以不出現在任務列表、搜尋和通知裡。你可以隨時在插件詳情的「背景任務」中查看、開啟，或顯示到任務列表；解除安裝插件時這些任務會恢復顯示。",
         "agentErrand": "可建立任務、執行工作並讀取結果",
@@ -8454,11 +8455,10 @@
             "assistant": "助手"
           }
         },
-        "storageShareTitle": "將副本交給其他插件",
-        "storageShareMessage": "將插件「{{name}}」的「{{file}}」（{{size}}）複製給插件「{{target}}」。對方將取得獨立副本，來源檔案更新不會同步。對方已讀取或另存的內容無法收回。",
-        "hostToolsRequest": "確認{{group}}權限",
-        "hostToolCallTitle": "允許插件執行操作",
-        "hostToolCallMessage": "插件「{{name}}」要呼叫 {{server}} / {{tool}}。此次允許僅適用於下列參數。"
+        "cindyModelsDecisions": "可呼叫決策模型（使用你的模型配額）",
+        "cindyModelsRerank": "可呼叫重排模型（使用你的模型配額）",
+        "hostTools_usage": "讀取訂閱用量",
+        "hostTools_usageDetail": "讀取目前 Cindy 帳號在這台電腦上已連接的 Claude 和 Codex 帳號識別碼、方案、配額時段及更新時間。無法讀取電子郵件地址、憑證、檔案或其他電腦的資料，也無法修改帳號"
       },
       "connections": {
         "confirmTitle": "新增連線位址",
@@ -8552,16 +8552,6 @@
         "browserSwitchTitle": "切換瀏覽器擴充功能連線？",
         "browserSwitchMessage": "將此瀏覽器連線交給「{{name}}」？",
         "browserSwitchDetail": "實例：{{instance}}\n註冊名稱：{{host}}\n這會取代目前的註冊，擴充功能將連線到此插件。",
-        "reuseAccountTitle": "使用既有帳號或憑證",
-        "reuseAccountDescription": "使用已在 Cindy 儲存的帳號或憑證，由 Cindy 代為注入，插件無法讀取原始值",
-        "reuseAccountChoose": "選擇帳號或憑證",
-        "reuseAccountUse": "使用此項",
-        "reuseAccountStop": "停止使用",
-        "reuseAccountEmpty": "暫無可用的同服務帳號或憑證，可在來源插件設定中連線帳號或儲存金鑰",
-        "reuseAccountUnavailable": "原帳號或憑證已無法使用，請選擇其他來源",
-        "reuseAccountLoadFailed": "無法讀取帳號與憑證",
-        "reuseAccountChangeFailed": "無法變更使用方式",
-        "reuseAccountRefresh": "重新整理",
         "portReclaimTitle": "結束佔用回呼連接埠的程式？",
         "portReclaimMessage": "「{{name}}」需要使用連接埠 {{port}}，是否結束以下程式？",
         "portReclaimDetail": "結束程式可能中斷其工作或遺失未儲存的資料。取消後可自行關閉佔用程式。",
@@ -8576,7 +8566,17 @@
         "viewAllPermissions": "檢視更多",
         "permissionsDialogDescription": "該插件申請的全部 {{count}} 項權限",
         "closeDialog": "關閉彈窗",
-        "resetPlacement": "恢復預設位置"
+        "resetPlacement": "恢復預設位置",
+        "reuseAccountTitle": "使用既有帳號或憑證",
+        "reuseAccountDescription": "使用已在 Cindy 儲存的帳號或憑證，由 Cindy 代為注入，插件無法讀取原始值",
+        "reuseAccountChoose": "選擇帳號或憑證",
+        "reuseAccountUse": "使用此項",
+        "reuseAccountStop": "停止使用",
+        "reuseAccountEmpty": "暫無可用的同服務帳號或憑證，可在來源插件設定中連線帳號或儲存金鑰",
+        "reuseAccountUnavailable": "原帳號或憑證已無法使用，請選擇其他來源",
+        "reuseAccountLoadFailed": "無法讀取帳號與憑證",
+        "reuseAccountChangeFailed": "無法變更使用方式",
+        "reuseAccountRefresh": "重新整理"
       },
       "contents": {
         "mainView": "主視圖",
@@ -8857,10 +8857,6 @@
         "projectReadFailed": "專案開關讀取失敗，請重試。"
       },
       "usage": {
-        "downloadExplanation": "累計下載請求次數：成功取得安裝包下載位址後計一次，包括更新、重新安裝及重新取得位址的重試；不代表成功安裝次數。",
-        "downloadsValue": "{{value}} 次下載",
-        "usesValue": "{{value}} 次使用",
-        "usesExplanation": "目前共享範圍內各版本累計的工具呼叫次數。",
         "title": "個人呼叫",
         "explanationLabel": "統計口徑",
         "explanation": "僅統計本機目前帳號成功派發的工具呼叫，失敗、逾時或取消也計入。近 7 天為滾動 168 小時；面板、Skill 與除錯操作不計入。記錄預設保留，清除後重新開始。",
@@ -8873,7 +8869,11 @@
         "never": "尚未呼叫",
         "clearTitle": "清除此插件的使用記錄？",
         "clearDescription": "清除本機目前帳號的呼叫記錄及任務關聯，後續呼叫重新開始記錄。已共享的累計統計不會撤回。",
-        "clearAction": "清除"
+        "downloadExplanation": "累計下載請求次數：成功取得安裝包下載位址後計一次，包括更新、重新安裝及重新取得位址的重試；不代表成功安裝次數。",
+        "clearAction": "清除",
+        "downloadsValue": "{{value}} 次下載",
+        "usesValue": "{{value}} 次使用",
+        "usesExplanation": "目前共享範圍內各版本累計的工具呼叫次數。"
       },
       "contribution": {
         "unreadReview": "有新的處理結果",
@@ -9443,7 +9443,6 @@
     "backToLogin": "返回登入方式"
   },
   "login": {
-    "networkResponseHint": "登入服務傳回異常回應，請求可能被中間網路或 Proxy 攔截。請檢查網路和 Proxy 設定。",
     "title": "歡迎使用 Cindy",
     "subtitle": "選擇一種方式安全登入",
     "savedLoginPreserved": "恢復操作會保留已儲存的登入資訊",
@@ -9579,7 +9578,8 @@
       "intro": "登入服務暫時限制了請求次數。這與本機憑證儲存異常是不同的問題。",
       "guidance": "請等待後再取得驗證碼。重新啟動、重新安裝或切換網路不保證解除限制。",
       "support": "等待後仍無法登入，請將記錄私下寄給 feedback@cindy.app，並提供作業系統、Cindy 版本、出錯時間和下方錯誤碼。請勿公開發布記錄。"
-    }
+    },
+    "networkResponseHint": "登入服務傳回異常回應，請求可能被中間網路或 Proxy 攔截。請檢查網路和 Proxy 設定。"
   },
   "legacyMigration": {
     "title": "遷移舊版本資料",
@@ -9790,7 +9790,6 @@
     "tokenLine": "Tokens：共 {{total}} · 輸入 {{input}} · 輸出 {{output}}",
     "cacheLine": "快取拆分：讀取 {{read}} · 寫入 {{create}} · 命中率 {{rate}}",
     "cacheLineNoRate": "快取拆分：讀取 {{read}} · 寫入 {{create}}",
-    "stepsLine": "本輪請求 {{steps}} 次 · 每次約 {{context}} 上下文",
     "modelLine": "模型：{{model}}",
     "multipleModels": "{{count}} 個模型",
     "costBreakdownHeader": "按模型拆分：",
@@ -9799,7 +9798,8 @@
     "noBilledCost": "本輪費用暫不可用，僅顯示用量",
     "suggestion": {
       "lowCache": "快取命中率偏低，本輪較多上下文重新計費"
-    }
+    },
+    "stepsLine": "本輪請求 {{steps}} 次 · 每次約 {{context}} 上下文"
   },
   "usageHistory": {
     "description": "你各台電腦上 Cindy 內部產生的 token 用量，預設合併顯示，也可以只看某一台。其他電腦需要在線並允許遠端控制才能讀取，暫時讀不到時沿用上次讀到的資料。紀錄從該功能上線起累積，不回填更早的歷史。",
@@ -11498,10 +11498,10 @@
         "projectDirNote": "分工做事時，夥伴們在這裡工作。不選也行，會用這個群聊自己的資料夾；選了 git 專案，每次分工會新開一個 worktree 和分支，不動你手上的程式碼。",
         "autoContinueSaveFailed": "分工交接沒能儲存，請再試一次",
         "projectDirSaveFailed": "專案資料夾沒能儲存，確認資料夾還在後再試",
-        "allowMemberInvites": "允許所有成員邀請朋友",
-        "allowMemberInvitesHint": "開啟後，已加入的所有成員都可邀請朋友。僅群主和管理員可變更。",
         "allowMentionAllBots": "允許 @所有夥伴",
-        "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
+        "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。",
+        "allowMemberInvites": "允許所有成員邀請朋友",
+        "allowMemberInvitesHint": "開啟後，已加入的所有成員都可邀請朋友。僅群主和管理員可變更。"
       },
       "errors": {
         "memberLimit": "一個群聊需要 2–6 位夥伴",
@@ -11605,7 +11605,6 @@
         "threadRecent": "話題裡最近的訊息",
         "threadNew": "話題裡的新訊息",
         "replyingTo": "回覆「{{name}}」：{{text}}",
-        "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。",
         "earlierOmitted": "（更早的訊息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
@@ -11620,7 +11619,8 @@
             "win32": "從 https://git-scm.com/download/win 下載 Git 安裝，全部使用預設選項即可。",
             "linux": "用系統的套件管理工具安裝 git（例如 sudo apt install git）。"
           }
-        }
+        },
+        "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。"
       },
       "files": {
         "openFailed": "檔案沒能開啟，可能已被移動或刪除",
@@ -11778,11 +11778,6 @@
           "transferHint": "對方成為群主，你將成為管理員。",
           "removeTitle": "將 {{name}} 移出群組？",
           "removeHint": "該成員將無法繼續查看或傳送訊息；其夥伴也會退出。",
-          "removeOwn": "移出群聊",
-          "removeOwnScope": "移出僅影響這個群，夥伴仍保留在你的帳號中。",
-          "removeOwnHint": "{{name}} 將不再接收「{{group}}」的訊息。歷史訊息會保留，其他群和私聊不受影響。",
-          "removeOwnActiveHint": "移出會停止它在本群的執行中請求。已獨立開啟的任務繼續執行。",
-          "stopAndRemove": "停止並移出",
           "leave": "退出群組",
           "leaveHint": "你和你的夥伴將退出此群聊，不再接收新訊息，也無法查看群歷史。",
           "soleOwnerHint": "群組裡只剩你。可以封存群組，保留歷史記錄，以後再恢復使用。",
@@ -11881,7 +11876,12 @@
           "accessToolsTitle": "可以用工具和資料",
           "accessToolsHint": "可以使用 {{name}} 已有的工具和你的私人資料，結果全群可見。原有的操作審批照常；撤回後，已經完成的操作無法撤銷。",
           "capabilitiesRow": "{{name}} 的工具與授權",
-          "accessMenu": "在本群的權限"
+          "accessMenu": "在本群的權限",
+          "removeOwn": "移出群聊",
+          "removeOwnScope": "移出僅影響這個群，夥伴仍保留在你的帳號中。",
+          "removeOwnHint": "{{name}} 將不再接收「{{group}}」的訊息。歷史訊息會保留，其他群和私聊不受影響。",
+          "removeOwnActiveHint": "移出會停止它在本群的執行中請求。已獨立開啟的任務繼續執行。",
+          "stopAndRemove": "停止並移出"
         }
       },
       "lifecycle": {
@@ -14039,10 +14039,10 @@
         "realtime": "即時語音",
         "embedding": "向量",
         "decision": "決策",
-        "rerank": "重排",
         "compression": "壓縮",
         "ungrouped": "未分組",
-        "other": "其他"
+        "other": "其他",
+        "rerank": "重排"
       },
       "search": {
         "placeholder": "搜尋 {{source}} 的模型…",
@@ -15401,6 +15401,19 @@
       }
     },
     "systemCard": {
+      "orcaDispatch": {
+        "sent": "已派給 {{worker}}",
+        "queued": "已排隊給 {{worker}}",
+        "unverified": "派單未經核實",
+        "notice": {
+          "claim": "Lead 稱已派單",
+          "claimTarget": "Lead 稱已派給 {{target}}",
+          "noDispatch": "宿主這一輪沒有接受任何派單",
+          "notDispatched": "宿主這一輪沒有派往 {{target}} 的記錄",
+          "unknownId": "引用的排隊編號 {{id}} 不對應任何派單",
+          "body": "{{claim}}。{{reason}}。引文取自它這輪回覆：「{{quote}}」。已要求 Lead 重派。"
+        }
+      },
       "help": {
         "title": "可用命令",
         "builtInCommands": "內建命令",
@@ -15568,11 +15581,6 @@
         "baseline": "基準分支：",
         "additionalDirectories": "另含：",
         "unverifiedResult": "以下結論已產生，但未能驗證是否仍然有效。"
-      },
-      "orcaDispatch": {
-        "sent": "已派給 {{worker}}",
-        "queued": "已排隊給 {{worker}}",
-        "unverified": "派單未經核實"
       }
     },
     "markdownRenderer": {
@@ -15789,11 +15797,6 @@
       "REMOTE_WORKDIR_UNAVAILABLE": "遠端工作目錄現在無法使用。請確認那台電腦上的目錄還在，然後重試。",
       "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "電腦端暫時無法確認這則訊息是否已經送出。請稍後再試，不要重複傳送同一則。",
       "REMOTE_AGENT_UNAVAILABLE": "未能與執行 Agent 的電腦通訊，請查看錯誤詳情。",
-      "REMOTE_AGENT_TIMEOUT": "等待執行 Agent 的電腦回應逾時，結果尚未確認。重試前請先檢查任務進度。",
-      "REMOTE_AGENT_LINK_BUSY": "與執行 Agent 的電腦之間的通訊忙碌，請稍後重試。",
-      "REMOTE_AGENT_UNRESPONSIVE": "執行 Agent 的電腦多次未回應，呼叫已暫時暫停。請稍後重試。",
-      "REMOTE_AGENT_OFFLINE": "執行 Agent 的電腦目前離線，待重新上線後重試。",
-      "REMOTE_AGENT_ACCESS_DENIED": "未獲准遠端存取執行 Agent 的電腦。請先檢查該電腦的存取設定。",
       "REMOTE_AGENT_PEER_TOO_OLD": "那臺電腦上的 Cindy 版本過舊，暫不支援此操作。請先在那臺電腦上更新 Cindy。",
       "REMOTE_AGENT_EXPIRED": "這個任務在執行 Agent 的電腦上已經結束。請重新傳送。",
       "REMOTE_AGENT_NOT_FOUND": "這個任務在執行 Agent 的電腦上已經結束。請重新傳送。",
@@ -15816,7 +15819,12 @@
       "REMOTE_AGENT_DEVICE_LIMIT": "這台裝置保留的遠端任務數已達上限。可封存暫時不用的任務，或請遠端電腦的主人在「遠端與分享」中提高上限。",
       "REMOTE_AGENT_TOTAL_LIMIT": "遠端電腦保留的任務總數已達上限。請那台電腦的主人釋放暫時不用的任務，或在「遠端與分享」中提高上限。",
       "REMOTE_AGENT_RESUME_LOST": "之前在那台電腦上的對話沒能接上，Agent 會在沒有之前上下文的情況下繼續。",
-      "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 無法讀取來源附件，訊息未傳送。請將檔案另存到「下載」或其他可存取的資料夾，移除原附件，再用附件按鈕加入副本後傳送。"
+      "DEVICE_LINK_MEDIA_ACCESS_DENIED": "Cindy 無法讀取來源附件，訊息未傳送。請將檔案另存到「下載」或其他可存取的資料夾，移除原附件，再用附件按鈕加入副本後傳送。",
+      "REMOTE_AGENT_TIMEOUT": "等待執行 Agent 的電腦回應逾時，結果尚未確認。重試前請先檢查任務進度。",
+      "REMOTE_AGENT_LINK_BUSY": "與執行 Agent 的電腦之間的通訊忙碌，請稍後重試。",
+      "REMOTE_AGENT_UNRESPONSIVE": "執行 Agent 的電腦多次未回應，呼叫已暫時暫停。請稍後重試。",
+      "REMOTE_AGENT_OFFLINE": "執行 Agent 的電腦目前離線，待重新上線後重試。",
+      "REMOTE_AGENT_ACCESS_DENIED": "未獲准遠端存取執行 Agent 的電腦。請先檢查該電腦的存取設定。"
     },
     "generatedFiles": {
       "title": "本條訊息生成的檔案",
@@ -16240,8 +16248,6 @@
       "claudeSubscriptionWorkspaceOverride": "這個工作目錄的 .claude 設定修改了 Claude 的上游位址或驗證方式，不能在這裡使用 Claude 訂閱。請移除這些設定，或選擇閘道器或 API Key 模型",
       "deviceStillLoading": "遠端裝置仍在載入中，請稍候",
       "remoteDefaultsLoadFailed": "無法讀取遠端裝置設定。請檢查連線，Cindy 正在重試。",
-      "branchChanged": "專案目前分支已變成 {{branch}}，請確認後再傳送",
-      "branchCheckFailed": "無法確認目前分支。請勾選 worktree 使用所選分支，或檢查專案後重試。",
       "worktreeMissingRepo": "無法建立 worktree：找不到目前目錄的儲存庫根目錄",
       "worktreeRepoHint": "可嘗試重新選一次工作目錄，等右下角資料夾標識重新整理後再試",
       "sessionInactive": "任務已不再處於活躍狀態",
@@ -16249,6 +16255,8 @@
       "remoteDialogueBanner": "在 {{device}} 上新建對話（不繫結專案）",
       "agentDeviceBanner": "任務和檔案留在本機，Agent 在 {{device}} 上執行",
       "agentDeviceElsewhereBanner": "Agent 在 {{device}} 上執行",
+      "branchChanged": "專案目前分支已變成 {{branch}}，請確認後再傳送",
+      "branchCheckFailed": "無法確認目前分支。請勾選 worktree 使用所選分支，或檢查專案後重試。",
       "branchRequiresWorktree": "所選分支與目前分支不同。請勾選 worktree，或選擇目前分支。"
     },
     "jumpSession": {
@@ -16818,13 +16826,13 @@
             "title": "儲存庫事件",
             "description": "連接 Cindy GitHub App，在審查或 CI 變更時更新正在跟進的 PR。",
             "connected": "已連接 {{login}} · 正在關注 {{count}} 個儲存庫",
-            "syncing": "正在同步儲存庫…",
-            "finishInBrowser": "請在 GitHub 完成儲存庫設定後返回 Cindy。",
             "missing": "請檢查這些儲存庫的 App 安裝與存取權限：{{repositories}}",
             "error": "無法檢查連線，請重試。",
             "repositories": "選擇儲存庫",
             "disconnect": "中斷事件連線",
-            "connect": "連接 GitHub App"
+            "connect": "連接 GitHub App",
+            "syncing": "正在同步儲存庫…",
+            "finishInBrowser": "請在 GitHub 完成儲存庫設定後返回 Cindy。"
           }
         },
         "unresolved": "{{count}} 條未解決的 review 評論",
@@ -17402,11 +17410,11 @@
         "session": "任務",
         "silentRun": "靜默執行",
         "silentRunTooltip": "開啟後，任務成功完成時預設不提醒。若任務說明中要求在特定情況提醒，AI 會在滿足條件時主動上報；失敗和異常仍會提醒。",
+        "silentRunInfoAria": "檢視靜默執行規則",
         "finishSendToFeishu": "完成時傳送到飛書機器人",
         "finishSendToWecomGroup": "完成時傳送到企業微信群",
         "configWecomGroup": "設定企業微信群通知",
-        "configFeishu": "設定飛書機器人",
-        "silentRunInfoAria": "檢視靜默執行規則"
+        "configFeishu": "設定飛書機器人"
       },
       "runSession": {
         "label": "執行任務",
@@ -17591,6 +17599,8 @@
         "repositoriesLabel": "倉庫",
         "repositoriesHint": "每行填寫一個 owner/repository。只有已授權給此 GitHub App 的倉庫才能觸發任務。",
         "repositoriesInvalid": "請填寫 1–50 個有效的 owner/repository 倉庫名稱。",
+        "githubAppHint": "請在執行此任務的電腦上連接 GitHub App，並授權這些倉庫，無需另設 Webhook 位址或金鑰。",
+        "githubAppPaused": "此任務已暫停，事件不會啟動它。",
         "connectAccount": "連接帳號",
         "connectionLabel": "連接方式",
         "cindyConnection": "透過 Cindy 連接（推薦）",
@@ -17603,9 +17613,7 @@
         "authorizeRepositories": "授權倉庫",
         "appUnavailable": "目前無法使用 GitHub App 連接，可選擇手動設定 Webhook。",
         "cindyConnectionTitle": "GitHub · 透過 Cindy 連接",
-        "manualConnectionTitle": "GitHub · 手動 Webhook",
-        "githubAppHint": "請在執行此任務的電腦上連接 GitHub App，並授權這些倉庫，無需另設 Webhook 位址或金鑰。",
-        "githubAppPaused": "此任務已暫停，事件不會啟動它。"
+        "manualConnectionTitle": "GitHub · 手動 Webhook"
       },
       "trigger": {
         "label": "觸發方式",
@@ -18193,6 +18201,7 @@
       "descriptionSaveDir": "以下目錄在當前任務的工作目錄之外。允許後，該插件可以把下載的檔案存入其中(不會覆蓋已有檔案)。",
       "descriptionRevealPath": "該路徑只會在你允許後回傳給目前 Agent，並進入對話記錄；配對裝置可能同步該記錄。此操作不授予插件讀取檔案的權限。",
       "descriptionFsWrite": "該插件請求在當前任務的工作目錄寫入以下檔案。允許後，本任務內它寫同一目錄不再詢問。",
+      "descriptionFsDelete": "該插件請求刪除當前任務工作目錄中的以下檔案或資料夾。刪除資料夾也會刪除其中的內容。本次允許只對這一次刪除生效。",
       "descriptionWorkspace": "該資料夾在當前任務的工作目錄之外。允許後，Cindy 會以它為工作目錄在側邊欄建立一個空任務(已有任務時直接重複使用)，不會讀取其中的檔案。",
       "descriptionForgeSource": "以下目錄在當前任務的工作目錄之外。允許後，Forge 會在該目錄打包或產生插件原始碼(會寫入 .cindy 產物或骨架檔案)。",
       "descriptionForgeScaffold": "以下目錄在當前任務的工作目錄之外。允許後，Forge 會在該目錄產生插件原始碼骨架。",
@@ -18205,8 +18214,7 @@
       "directory": "目錄",
       "allowDirs": "同時允許這些檔案所在目錄(本任務內同目錄媒體檔案不再詢問)",
       "allow": "允許",
-      "deny": "拒絕",
-      "descriptionFsDelete": "該插件請求刪除當前任務工作目錄中的以下檔案或資料夾。刪除資料夾也會刪除其中的內容。本次允許只對這一次刪除生效。"
+      "deny": "拒絕"
     }
   },
   "inputHandoff": {
@@ -21629,6 +21637,7 @@
     "providerManagedAuth": "Codex 目前的供應商未提供 ChatGPT 帳號資訊。請在新增供應商時選擇「$t(subscriptionAccounts.signIn.anotherAccount)」，使用獨立目錄。",
     "signIn": {
       "checking": "正在偵測本機帳號…",
+      "detected": "偵測到已登入帳號",
       "useAccount": "使用這台電腦上的 {{cli}} 帳號",
       "anotherAccount": "登入另一個帳號",
       "keepExisting": "新帳號預設作為單獨的供應商，也可以選擇併入現有的供應商。現有帳號的登入保持不變。",
@@ -21639,6 +21648,7 @@
     "title": "訂閱帳號",
     "strategy": "負載平衡",
     "add": "新增帳號",
+    "default": "預設目錄",
     "defaultTag": "預設",
     "ready": "已連線",
     "signedOut": "需要登入",
