@@ -1,5 +1,12 @@
 # 远程连接与手机版适配
 
+> **读取时机**：新增或修改涉及 workdir 文件、agent 进程、会话数据的功能，新增 IPC channel／推送事件，
+> 或修改 device-link 的重试／超时／断链恢复逻辑之前；功能不在下列路径内时同样适用
+> **适用路径**：`packages/{device-link,remote-file-service,maker-remote-ssh}/**`、
+> `apps/desktop/src/main/device-link/**`、`apps/mobile/src/device-link/**`、
+> `apps/desktop/src/main/{remote-agent,remote-ssh}/**`、`apps/desktop/src/main/remote-desktop*/**`、
+> `apps/mobile/src/remote-desktop/**`、`apps/desktop/src/preload/preload.ts`
+
 ## 弱网下的备用截图与视频恢复（2026-11-15）
 
 备用截图仍走原有远程桌面请求，发送端将 JPEG 压到 64 KiB 以内；base64 与回复包装
@@ -1048,6 +1055,13 @@ Desktop 的同账号远程 Cindy Make 任务同样消费该投影：准备与测
 共用；不增加已完成结果缓存。远程权限结论仍只在授权边界处理。
 
 ### 远程边界与延迟诊断
+
+Desktop 远程发送的附件授权作用域绑定账号与发起文档，不绑定当前任务路由。
+HashRouter 的同文档导航（切换任务或新任务进入任务页）不得取消在途发送，也不得把
+原始传输超时覆盖成附件授权失效；主文档替换、窗口销毁与账号失效仍立即取消，文件读取
+和最终派发仍复核原 frame 与账号。实现与回归见 `device-link/ipc.ts`、
+`device-link/__tests__/mirrorCacheIpcBoundary.test.ts`。此边界只在本机 IPC adapter 生效，
+不改变远端或自建中转的协议、授权与重试策略。
 
 远程列表复用本地查询，返回前额外执行伙伴可见性过滤。过滤按本次授权阶段批量查询，
 每条 SQL 最多 200 个 ID；不跨请求缓存授权结论。缓存回复与离线重放仍重新检查，账号

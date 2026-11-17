@@ -78,6 +78,11 @@ import { sanitizeSourceName, type MessageSourceHostDevice } from '@cindy/maker-s
 import * as authManager from '../authManager';
 import { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { activeOwnerScopeKey, getActiveDataOwnerPushStamp, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { setDirectoryThrottleOwnerSource } from './directoryThrottle.js';
+
+// 目录限流账本按 owner 分桶:登记当前账号的桶身份来源,让 deviceLinkApiFetch 的
+// 检查与 handleListDevices 的记账落在同一个桶里(Codex review #9360)。
+setDirectoryThrottleOwnerSource(activeOwnerScopeKey);
 import { createLogger } from '../logger';
 import { markStartupMilestone } from '../startupTimeline';
 import { onQuit } from '../lifecycle';
@@ -196,6 +201,7 @@ import {
   mobileNotificationIdentity,
   buildBotGroupNotifyPayload,
   buildSessionNotifyPayload,
+  shouldSuppressForActivity,
   type MobileSessionEventKind,
   type PermissionAlert,
   type QuestionAlert,
@@ -249,6 +255,11 @@ export function deviceLinkApiBase(): string {
 
 type DeviceDirectoryResponse = {
   devices?: DeviceView[];
+  /**
+   * Only one hybrid discovery leg answered: the rows are fresh but its absence
+   * proves nothing (a device that lives only on the other leg would look gone).
+   */
+  partial?: boolean;
 };
 let controllerDisplayNameRefreshGeneration = 0;
 const controllerDisplayNameFreshness = createControllerDisplayNameFreshnessTracker();
@@ -409,6 +420,10 @@ async function runControllerDisplayNamesFromDirectory(
     ) {
       return;
     }
+    // 只有一条腿读到时,这份目录证明不了缺席:展示名/presence 快照都会把「列表里没有」
+    // 当成「已经不在了」,于是另一条腿上的设备被抹掉(Codex review #9360「Keep one-leg
+    // hybrid results non-authoritative」)。这种回答不落快照,等下一次完整目录。
+    if (result.partial === true) return;
     const cachedNames = readLastKnownDeviceNames();
     applyControllerDisplayNameDirectorySnapshot({
       devices: result.devices ?? [],
@@ -2692,6 +2707,8 @@ export function sendMobileSessionNotify(payload: {
    * 那一行的静音标记管不到这条远端事件,不参与手机通道的免打扰判定。
    */
   muteExempt?: boolean;
+  /** Explicit schedule notifications follow the schedule preference, not Agent Island attention. */
+  attentionExempt?: boolean;
   /** Execution host for a remotely mirrored session. */
   remoteDeviceId?: string;
   /** needs-reply only: one waiting tool permission the alert describes and can answer. */
@@ -2727,7 +2744,7 @@ export function sendMobileSessionNotify(payload: {
   const now = Date.now();
   if (!mobileNotifyDeduper.shouldSend(payload.sessionId, payload.kind, now, payload.eventId)) return false;
   const activity = !payload.remoteDeviceId ? notificationActivity?.(payload.sessionId) : undefined;
-  if (!payload.muteExempt && activity && (payload.kind === 'needs-reply' ? activity.phase !== 'needs-interaction' : !activity.attention)) return false;
+  if (!payload.muteExempt && shouldSuppressForActivity(payload.kind, activity, payload.attentionExempt)) return false;
   const sent = client.sendNotify(
     { notificationId, recipientId: authManager.getCurrentUserId() ?? undefined, ...buildSessionNotifyPayload({
       sessionId: payload.sessionId,
