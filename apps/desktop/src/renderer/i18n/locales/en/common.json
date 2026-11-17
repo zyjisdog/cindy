@@ -15705,6 +15705,8 @@
       "orcaFromWorker": "Message from Worker",
       "orcaFromWorkerBatch": "System report: {{count}} Worker results",
       "orcaFromWorkerNamed": "Message from Worker “{{role}}”",
+      "orcaFromHost": "Message from the host (Orca host)",
+      "orcaHostNoticeDispatchClaim": "The host found no record of the dispatch this turn; the Lead was asked to cite the queue id or the actual result.",
       "hookChannelFrom": "From {{channel}}",
       "deviceSentMobileNamed": "Sent from phone “{{name}}”",
       "deviceSentMobile": "Sent from phone",

@@ -15669,6 +15669,8 @@
       "orcaFromWorker": "Nachricht vom Worker",
       "orcaFromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
       "orcaFromWorkerNamed": "Nachricht vom Worker „{{role}}“",
+      "orcaFromHost": "Nachricht vom Host (Orca host)",
+      "orcaHostNoticeDispatchClaim": "Der Host hat in diesem Turn keinen Nachweis für die behauptete Übergabe gefunden; der Lead wurde gebeten, die Queue-ID oder das tatsächliche Ergebnis zu nennen.",
       "hookChannelFrom": "Aus {{channel}}",
       "deviceSentMobileNamed": "Vom Smartphone „{{name}}“ gesendet",
       "deviceSentMobile": "Vom Smartphone gesendet",

@@ -3,6 +3,7 @@ import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import type { OrcaStructuredWorkerReport } from '@cindy/orca-workflow';
+import type { OrcaHostNoticeKind } from '../../shared/orcaHostNotice.js';
 import {
   buildOrcaDispatchReceiptSummary,
   type OrcaDispatchClaimNotice,
@@ -512,6 +513,7 @@ export interface OrcaTeamServiceDeps {
     workerId: string,
     report?: WorkerTerminalTurnParams['remoteReport'],
     reportClientId?: string,
+    hostNotice?: OrcaHostNoticeKind,
   ): Promise<{ accepted: boolean; reportRejected?: true }>;
   /** 补派一轮仍无凭据时的升级：落一张会话内纠正卡（不进模型）+ 红点 + 既有通知通道。 */
   escalateDispatchClaim?(leadSessionId: string, notice: OrcaDispatchClaimNotice): void;
@@ -2570,10 +2572,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
 
     const roster = workers.map((worker) => ({ id: worker.id, label: worker.label ?? worker.role ?? worker.id }));
     const reading = readDispatchClaim(params.finalText, roster);
-    if (!reading.claimed) {
-      settleDispatchClaimIncident(params.leadSessionId, true);
-      return;
-    }
+    // 不带派发主张的普通回复不清账：账本只由「有据的派发主张」结束。
+    // 否则升级后的静默被一句普通回复解除，下一轮不实主张又从头唤醒一遍。
+    if (!reading.claimed) return;
 
     const facts = dispatchFactsForTurn(params.leadSessionId, params.turnGeneration);
     const verdict = verifyDispatchClaim(reading, facts);
@@ -2595,9 +2596,10 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       const delivered = await deps.sendAutoBridgeToLead(
         params.leadSessionId,
         lines("[Orca host] Your dispatch claim is not backed by this turn's dispatch records."),
-        // 上游给 auto-bridge 加了 worker 归属：这条纠正消息由本轮真实派单的 worker 背书，
-        // 没有派单记录时按主张指向的 worker 归属，都取不到就留空（仅影响 meta 归属标记）。
-        facts[0]?.workerId ?? reading.targets[0]?.id ?? '',
+        '',
+        undefined,
+        undefined,
+        'dispatch-claim',
       );
       const accepted = delivered.accepted;
       deps.log.info('orca lead dispatch claim wake', {

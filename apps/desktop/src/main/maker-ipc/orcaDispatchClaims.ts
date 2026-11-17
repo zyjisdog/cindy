@@ -90,6 +90,8 @@ const LABELED_MESSAGE_ID_PATTERN =
 
 const FENCED_CODE_PATTERN = /```[\s\S]*?```/g;
 const BLOCKQUOTE_LINE_PATTERN = /^\s*>.*$/gm;
+/** 标题行没有句末标点，会和下一句粘成一条主张，回显时要去掉。 */
+const HEADING_LINE_PATTERN = /^\s*#{1,6}\s.*$/gm;
 
 function emptyLedger(): LeadLedger {
   return { epoch: 0, lastGeneration: null, facts: [], woke: false, escalated: false };
@@ -121,7 +123,8 @@ export function noteLeadDispatchFact(leadSessionId: string, fact: LeadDispatchFa
   if (ledger.facts.length > MAX_FACTS_PER_LEAD) {
     ledger.facts.splice(0, ledger.facts.length - MAX_FACTS_PER_LEAD);
   }
-  // 真派发出现即视为恢复，重置升级抑制。
+  // 真派发出现即视为恢复：撤回补派额度与升级抑制，新的无据主张重新获得一次补派机会。
+  ledger.woke = false;
   ledger.escalated = false;
 }
 
@@ -201,7 +204,10 @@ export function readDispatchClaim(
   text: string,
   roster: readonly OrcaDispatchRosterEntry[] = [],
 ): DispatchClaimReading {
-  const body = (text ?? '').replace(FENCED_CODE_PATTERN, ' ').replace(BLOCKQUOTE_LINE_PATTERN, ' ');
+  const body = (text ?? '')
+    .replace(FENCED_CODE_PATTERN, ' ')
+    .replace(BLOCKQUOTE_LINE_PATTERN, ' ')
+    .replace(HEADING_LINE_PATTERN, ' ');
   const targets: OrcaDispatchRosterEntry[] = [];
   const messageIds: string[] = [];
   let quote = '';
@@ -216,7 +222,9 @@ export function readDispatchClaim(
     for (const id of extractLabeledMessageIds(readMessageIdText(quoted))) {
       if (!messageIds.includes(id)) messageIds.push(id);
     }
-    quote ||= own;
+    // 判定用抹掉行内代码的视图，回显保留原文：编号常写成 `queued_message_id: xxx`，
+    // 抹掉后通知里只会剩一对空括号，看起来像误报。
+    if (!quote) quote = quoted;
   }
 
   const claimed = quote.length > 0;

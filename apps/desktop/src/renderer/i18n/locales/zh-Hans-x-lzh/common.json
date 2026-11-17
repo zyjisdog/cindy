@@ -15631,6 +15631,8 @@
       "orcaFromWorker": "Worker 之讯",
       "orcaFromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",
       "orcaFromWorkerNamed": "Worker「{{role}}」之讯",
+      "orcaFromHost": "宿主（Orca host）来讯",
+      "orcaHostNoticeDispatchClaim": "此单于宿无据，已命 Lead 补其队号或实果。",
       "hookChannelFrom": "自 {{channel}} 来",
       "deviceSentMobileNamed": "自手机「{{name}}」所遣",
       "deviceSentMobile": "自手机所遣",

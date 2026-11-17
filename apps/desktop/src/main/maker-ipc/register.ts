@@ -16537,10 +16537,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     moveQueuedMessage: moveStoredControlMessage,
     // 宿主 -> Lead 队列的唯一盖章入口：Worker 回报与派单主张纠正文都从这里进队列，
     // 合批归属只有这一处，别的入口不得自行盖 autoBridge（见 orcaAutoBridgeBatch.contract）。
-    sendAutoBridgeToLead: async (leadSessionId, message, workerId, _report, reportClientId) => {
+    sendAutoBridgeToLead: async (
+      leadSessionId,
+      message,
+      workerId,
+      _report,
+      reportClientId,
+      hostNotice,
+    ) => {
       const result = await dispatchInterAgentMessage({
         targetSessionId: leadSessionId,
         ...(reportClientId ? { reportClientId } : {}),
+        ...(hostNotice ? { hostNotice } : {}),
         rawContent: message,
         source: 'worker',
         senderLabel: workerId ? 'Worker' : 'Orca host',

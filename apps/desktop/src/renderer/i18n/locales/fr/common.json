@@ -15811,6 +15811,8 @@
       "orcaFromWorker": "Message du Worker",
       "orcaFromWorkerBatch": "Rapport système : {{count}} résultats de Worker",
       "orcaFromWorkerNamed": "Message du Worker « {{role}} »",
+      "orcaFromHost": "Message de l’hôte (Orca host)",
+      "orcaHostNoticeDispatchClaim": "L’hôte n’a trouvé aucune trace de l’envoi annoncé pour ce tour ; le Lead a été prié d’indiquer l’identifiant de file ou le résultat réel.",
       "hookChannelFrom": "Depuis {{channel}}",
       "deviceSentMobileNamed": "Envoyé depuis le téléphone « {{name}} »",
       "deviceSentMobile": "Envoyé depuis un téléphone",
