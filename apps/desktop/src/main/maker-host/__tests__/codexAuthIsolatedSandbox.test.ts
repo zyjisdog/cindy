@@ -157,7 +157,7 @@ function trustIsolatedAuthSandbox(): void {
 
 // Auth ownership is the subject; asset projection has its own boundary fixture.
 beforeEach(() => {
-  vi.spyOn(DesktopCodexAuthAdapter.prototype, 'ensureGlobalCodexAssets').mockResolvedValue();
+  vi.spyOn(DesktopCodexAuthAdapter.prototype, 'ensureGlobalCodexAssets').mockResolvedValue(true);
 });
 
 afterEach(() => {
