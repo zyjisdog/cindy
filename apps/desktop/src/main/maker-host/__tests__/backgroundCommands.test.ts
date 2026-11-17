@@ -52,7 +52,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(logDir, { recursive: true, force: true });
+  // 后台命令进程退出前仍持有临时目录里的日志句柄，Windows 上直接 rmdir 会 EBUSY。
+  // 递归删除带重试，等句柄释放。
+  await rm(logDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
 });
 
 function buildService(
