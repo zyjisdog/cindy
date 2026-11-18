@@ -15473,6 +15473,8 @@
     },
     "systemCard": {
       "orcaDispatch": {
+        "sent": "{{worker}} に派遣しました",
+        "queued": "{{worker}} のキューに追加しました",
         "unverified": "派遣を確認できません",
         "notice": {
           "claim": "Lead は派遣済みと述べました",
@@ -19475,6 +19477,12 @@
       "duplicateLabel": "識別子 {{label}} はこのチームの別の Worker が使用しています",
       "saveFailed": "保存に失敗しました。もう一度お試しください。",
       "labelLocked": "この Worker の識別子は進行中のプラグインのチーム計画から参照されているため、計画の完了まで変更できません。ロール名を変更するか、先に Worker を解放してください。"
+    },
+    "workerReport": {
+      "dropped": "対応不要",
+      "failed": "失敗",
+      "awaitingAnswer": "回答待ち",
+      "awaitingReview": "確認待ち"
     }
   },
   "splitGroup": {

@@ -15644,6 +15644,8 @@
     },
     "systemCard": {
       "orcaDispatch": {
+        "sent": "Envoyé à {{worker}}",
+        "queued": "En file d’attente pour {{worker}}",
         "unverified": "Envoi non vérifié",
         "notice": {
           "claim": "Le Lead affirme avoir envoyé",
@@ -19737,6 +19739,12 @@
       "duplicateLabel": "Le libellé {{label}} est déjà utilisé par un autre Worker de cette équipe",
       "saveFailed": "Échec de l'enregistrement. Veuillez réessayer.",
       "labelLocked": "Le libellé de ce Worker est référencé par un plan d'équipe de plugin actif et ne peut pas être modifié avant la fin du plan. Modifiez le nom du rôle ou libérez d'abord le Worker."
+    },
+    "workerReport": {
+      "dropped": "Aucune action nécessaire",
+      "failed": "Échec",
+      "awaitingAnswer": "Réponse attendue",
+      "awaitingReview": "À réviser"
     }
   },
   "splitGroup": {

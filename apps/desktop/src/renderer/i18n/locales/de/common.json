@@ -15502,6 +15502,8 @@
     },
     "systemCard": {
       "orcaDispatch": {
+        "sent": "An {{worker}} gesendet",
+        "queued": "Für {{worker}} in der Warteschlange",
         "unverified": "Versand nicht bestätigt",
         "notice": {
           "claim": "Laut Lead wurde versandt",
@@ -19552,6 +19554,12 @@
       "duplicateLabel": "Die Kennung {{label}} wird bereits von einem anderen Worker in diesem Team verwendet",
       "saveFailed": "Speichern fehlgeschlagen. Versuch es erneut.",
       "labelLocked": "Die Kennung dieses Workers wird von einem aktiven Plugin-Teamplan verwendet und kann erst nach dessen Abschluss geändert werden. Ändere den Rollennamen oder gib den Worker zuerst frei."
+    },
+    "workerReport": {
+      "dropped": "Keine Aktion nötig",
+      "failed": "Fehlgeschlagen",
+      "awaitingAnswer": "Antwort ausstehend",
+      "awaitingReview": "Bereit zur Prüfung"
     }
   },
   "splitGroup": {
