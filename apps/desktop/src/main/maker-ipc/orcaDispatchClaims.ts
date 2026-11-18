@@ -90,8 +90,6 @@ const LABELED_MESSAGE_ID_PATTERN =
 
 const FENCED_CODE_PATTERN = /```[\s\S]*?```/g;
 const BLOCKQUOTE_LINE_PATTERN = /^\s*>.*$/gm;
-/** 标题行没有句末标点，会和下一句粘成一条主张，回显时要去掉。 */
-const HEADING_LINE_PATTERN = /^\s*#{1,6}\s.*$/gm;
 
 function emptyLedger(): LeadLedger {
   return { epoch: 0, lastGeneration: null, facts: [], woke: false, escalated: false };
@@ -145,7 +143,7 @@ export function dispatchFactsForTurn(
   return ledger.facts.filter((fact) => fact.turnGeneration >= turnGeneration);
 }
 
-/** 句级切分：中文句号与英文句点都算边界，保留标点后的语气不影响判定。 */
+/** 句级切分：中文句号与英文句点都算边界；换行不切——跨行的编号引用和引文必须留在同一句里。 */
 function splitSentences(body: string): string[] {
   return body
     .split(/(?<=[。！？.!?])\s*/)
@@ -204,27 +202,41 @@ export function readDispatchClaim(
   text: string,
   roster: readonly OrcaDispatchRosterEntry[] = [],
 ): DispatchClaimReading {
-  const body = (text ?? '')
+  const cleaned = (text ?? '')
     .replace(FENCED_CODE_PATTERN, ' ')
-    .replace(BLOCKQUOTE_LINE_PATTERN, ' ')
-    .replace(HEADING_LINE_PATTERN, ' ');
+    .replace(BLOCKQUOTE_LINE_PATTERN, ' ');
+  // 标题行自成一段：既不与正文粘连，也不靠全局换行分句——那样会拆散跨行的编号引用和引文。
+  const segments: string[] = [];
+  let plain: string[] = [];
+  for (const line of cleaned.split('\n')) {
+    if (/^\s*#{1,6}\s+/.test(line)) {
+      if (plain.length) segments.push(plain.join('\n'));
+      plain = [];
+      segments.push(line.replace(/^\s*#{1,6}\s+/, ''));
+    } else {
+      plain.push(line);
+    }
+  }
+  if (plain.length) segments.push(plain.join('\n'));
   const targets: OrcaDispatchRosterEntry[] = [];
   const messageIds: string[] = [];
   let quote = '';
 
-  for (const sentence of splitSentences(body)) {
-    const quoted = blankQuotedSpans(sentence);
-    const own = blankInlineCode(quoted);
-    if (!hasClaimWord(own) || hasNegation(own)) continue;
-    for (const entry of resolveTargets(own, roster)) {
-      if (!targets.some((item) => item.id === entry.id)) targets.push(entry);
+  for (const segment of segments) {
+    for (const sentence of splitSentences(segment)) {
+      const quoted = blankQuotedSpans(sentence);
+      const own = blankInlineCode(quoted);
+      if (!hasClaimWord(own) || hasNegation(own)) continue;
+      for (const entry of resolveTargets(own, roster)) {
+        if (!targets.some((item) => item.id === entry.id)) targets.push(entry);
+      }
+      for (const id of extractLabeledMessageIds(readMessageIdText(quoted))) {
+        if (!messageIds.includes(id)) messageIds.push(id);
+      }
+      // 判定用抹掉行内代码的视图，回显保留原文：编号常写成 `queued_message_id: xxx`，
+      // 抹掉后通知里只会剩一对空括号，看起来像误报。
+      if (!quote) quote = quoted;
     }
-    for (const id of extractLabeledMessageIds(readMessageIdText(quoted))) {
-      if (!messageIds.includes(id)) messageIds.push(id);
-    }
-    // 判定用抹掉行内代码的视图，回显保留原文：编号常写成 `queued_message_id: xxx`，
-    // 抹掉后通知里只会剩一对空括号，看起来像误报。
-    if (!quote) quote = quoted;
   }
 
   const claimed = quote.length > 0;
