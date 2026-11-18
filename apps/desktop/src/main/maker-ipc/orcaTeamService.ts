@@ -3,9 +3,9 @@ import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import type { OrcaStructuredWorkerReport } from '@cindy/orca-workflow';
-import type { OrcaHostNoticeKind } from '../../shared/orcaHostNotice.js';
-import type { OrcaDispatchClaimNotice } from '../../shared/orcaDispatchReceipt.js';
 import { createHostSendFailure } from '../maker-host/send-outcome.js';
+import type { OrcaDispatchClaimNotice } from '../../shared/orcaDispatchReceipt.js';
+import type { OrcaHostNoticeKind } from '../../shared/orcaHostNotice.js';
 import type {
   CollabDispatchFailureOutcome,
   CollabDispatchQueuedOutcome,
