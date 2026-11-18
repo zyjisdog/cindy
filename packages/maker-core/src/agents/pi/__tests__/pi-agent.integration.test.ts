@@ -2254,7 +2254,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       await vi.waitFor(() => expect(handle!.isTurnRunning!()).toBe(false), { timeout: 20_000 });
       expect(resolver).toHaveBeenCalled();
       expect(handle.getPlanMode!()).toBe(false);
-      expect(handle.getExecutionPlanMode!()).toBe(false);
+      // 原生同步是异步重读持久化状态: 紧接着断言会撞到“切换中”的 null。
+      await vi.waitFor(() => expect(handle!.getExecutionPlanMode!()).toBe(false), { timeout: 5_000 });
       const next = seenRequests.length;
       await handle.send({ type: 'user', content: 'An ordinary greeting.' });
       await vi.waitFor(() => expect(seenRequests.length).toBeGreaterThan(next), { timeout: 20_000 });

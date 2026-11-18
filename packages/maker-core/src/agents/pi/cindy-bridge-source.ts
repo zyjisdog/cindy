@@ -4772,9 +4772,6 @@ export default async function cindyBridge(piApi: any) {
   // switch_session reloads extensions. Keep the launch path in this Pi only;
   // shell environments and independent subagents strip it before spawning.
   const taskSystemPrompt = taskSystemPromptFile ? readFileSync(taskSystemPromptFile, 'utf8') : '';
-  if (taskSystemPrompt) pi.on('before_agent_start', (event: any) => ({
-    systemPrompt: event.systemPrompt + '\n\n' + taskSystemPrompt,
-  }));
   if (localHostToolsOnly) {
     const allowed = new Set(['cindy_mcp_list_tools', 'cindy_mcp_call_tool']);
     const isolate = () => pi.setActiveTools([...allowed]);
@@ -4796,6 +4793,9 @@ export default async function cindyBridge(piApi: any) {
   // Tool-efficiency policy: the split has to be stated where the model will read it, in both
   // directions — with only the "don't script" half, codemode never gets picked. Only injected
   // when codemode is actually active; guests and review sessions never reach this branch.
+  // 顺序要紧: 这个 handler 只能改 systemPromptOptions; 任何返回 systemPrompt 的 handler(任务片段、
+  // 托管 Workspace 段)一旦先跑就会把它固化成 forceSystemPrompt, 后面再加规则段就进不了提示词。
+  // 所以下面所有覆盖 systemPrompt 的 handler 必须注册在它之后。
   const PI_TOOL_EFFICIENCY_GUIDELINES = [
     'Put independent tool calls in the same message: Pi runs them in parallel and they cost one round trip. A call is independent when nothing in it needs another call\'s result; when you start exploring, batch every independent read, grep, ls or git query instead of taking one step at a time.',
     'Use a codemode script when the raw output is large or needs filtering, counting or cross-checking before it reaches you, or when one operation runs over many files; return only the fields you need, never the raw output. Issue one or two small calls directly, and never wrap a single call that needs no processing in a script.',
@@ -4813,6 +4813,10 @@ export default async function cindyBridge(piApi: any) {
     options.promptGuidelines.push(...PI_TOOL_EFFICIENCY_GUIDELINES);
   });
   installTextOnlyTurnPolicy(pi, runtimeModelRouting.prepare);
+  // 任务片段追加在最后: 必须在规则段注入之后, 否则 event.systemPrompt 读到的是还没带规则段的版本。
+  if (taskSystemPrompt) pi.on('before_agent_start', (event: any) => {
+    return { systemPrompt: event.systemPrompt + '\n\n' + taskSystemPrompt };
+  });
   const cacheRecovery = installCindyCacheRecovery(pi);
   const nativeProviderAdapters = await registerCindyNativeProviderAdapters(pi, cacheRecovery);
   const initialNativeSettings = typeof pi.getSettings === 'function' ? undefined
