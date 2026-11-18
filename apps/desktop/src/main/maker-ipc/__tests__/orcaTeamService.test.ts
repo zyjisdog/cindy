@@ -2116,6 +2116,84 @@ describe('OrcaTeamService', () => {
     expect(deps.setWorkerLatestReport).toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
   });
 
+  // A 轮派活的回执在途时用户又发了新消息（直连轮 B）：行已被 B 改回 running，
+  // A 的旧回执落地时不得按 A 保存的终态把 B 的 running 覆盖成 done，也不得写 latest_report。
+  it('does not let an in-flight dispatch report overwrite a newer direct turn', async () => {
+    let generation = 1;
+    const runtime = {
+      isTurnRunning: () => false,
+      getTurnGeneration: () => generation,
+      hasLiveBackgroundWork: async () => false,
+    };
+    const { deps, getWorker, service } = createDeps({ getLiveSession: () => runtime });
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '干活' });
+    // A 轮的 send_to_lead 回执在途（终态还没到）。
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    // A 轮终态：真实终态记在 A 的账上，随后在锁外等在途回执落地。
+    const terminal = service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '文本' });
+    await vi.waitFor(() => expect(getWorker().status).toBe('done'));
+    // 用户又发了一条：直连轮 B 开始，行改回 running（派活条目 A 仍在注册表里）。
+    generation = 2;
+    await service.handleWorkerTurnStarted('worker-session-1');
+    expect(getWorker().status).toBe('running');
+    // A 轮的回执这时才落地：行属于 B，A 的结论不得写进来。
+    await finish(true, { delivered: true, report: { state: 'ready', summary: 'A 轮的结论' } });
+    await terminal;
+    expect(getWorker().status).toBe('running');
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'ready' }));
+  });
+
+  // 派活轮的在途 progress 同样要复核轮次身份：换轮后行属于新轮，旧进度不得写进去。
+  it('does not let an in-flight dispatch progress overwrite a newer direct turn', async () => {
+    let generation = 1;
+    const runtime = {
+      isTurnRunning: () => false,
+      getTurnGeneration: () => generation,
+      hasLiveBackgroundWork: async () => false,
+    };
+    const { deps, getWorker, service } = createDeps({ getLiveSession: () => runtime });
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '干活' });
+    // progress 的归属查询卡住：A 轮的进度还在路上。
+    let releaseLink!: () => void;
+    const linkGate = new Promise<void>((resolve) => { releaseLink = resolve; });
+    const originalLink = deps.getWorkerLinkBySessionId;
+    let linkCalls = 0;
+    deps.getWorkerLinkBySessionId = async (sessionId: string) => {
+      linkCalls += 1;
+      if (linkCalls === 1) await linkGate;
+      return originalLink(sessionId);
+    };
+    const pending = service.recordWorkerReport('worker-session-1', { state: 'progress', summary: 'A 轮旧进度' });
+    // 用户又发了一条：直连轮 B 开始（行改回 running，派活条目 A 仍在）。
+    generation = 2;
+    await service.handleWorkerTurnStarted('worker-session-1');
+    releaseLink();
+    await pending;
+    expect(getWorker().latestReport).toBeNull();
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith('worker-1', expect.objectContaining({ state: 'progress' }));
+  });
+  // 终态先到、回执后落时，投影写进了 worker 行，来源也必须一起登记：
+  // 终态收尾会清掉派活条目，来源丢了就再也没法在队列内容被改写时作废这份投影。
+  it('keeps the queued report source after the terminal observed the turn', async () => {
+    // 稳定的运行实例：终态收尾会清掉派活条目，来源只剩独立登记这一份。
+    const runtime = { isTurnRunning: () => false, getTurnGeneration: () => 1, hasLiveBackgroundWork: async () => false };
+    const { deps, getWorker, service } = createDeps({ getLiveSession: () => runtime });
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '干活' });
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    // 终态先到：这一轮已被终态观察到，回执还在路上。
+    // 终态临界区里的广播发生在 terminalObserved 置位之后，用它做同步点。
+    const broadcastsBefore = vi.mocked(deps.broadcastOrcaWorkerChanged).mock.calls.length;
+    const terminal = service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '文本' });
+    await vi.waitFor(() => expect(vi.mocked(deps.broadcastOrcaWorkerChanged).mock.calls.length).toBeGreaterThan(broadcastsBefore));
+    // 回执这时落地：走终态已观察分支，投影写进 worker 行。
+    await finish(true, { delivered: true, queuedMessageId: 'queued-1', report: { state: 'dropped', summary: '没做' } });
+    await terminal;
+    // 回执落地后，投影在 worker 行上。
+    expect(getWorker().latestReport?.state).toBe('dropped');
+    // 终态收尾清掉了派活条目；队列内容随后被改写时，仍要能作废这份投影。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
+    expect(getWorker().latestReport).toBeNull();
+  });
   // 排队回报被改写/撤回/合并后，latest_report 投影必须失效（否则面板继续声称旧「等回复」）。
   it('invalidates the projected report when its queued message is rewritten', async () => {
     const { deps, getWorker, service } = createDeps();
@@ -2184,6 +2262,42 @@ describe('OrcaTeamService', () => {
     // 改写仍命中：面板不再挂着已失效的旧「等回复」。
     await service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
     expect(getWorker().latestReport).toBeNull();
+  });
+
+  // 改写在 link await 上挂起期间，直连轮 progress 已消费同一来源并写入更新的投影：
+  // 无 AutoBridgeState 时复核不得短路，旧队列改写不得清掉这份新投影。
+  it('does not let a queued rewrite clear a direct progress report that landed mid-await', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({ callerLeadSessionId: 'lead-1', targetSessionId: 'worker-session-1', message: '干活' });
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: false,
+      queuedMessageId: 'queued-1',
+      report: { state: 'blocked', question: '选 A 还是 B' },
+    });
+    // 终局清理 autoBridge 条目后，来源 map 是唯一线索。
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '结果' });
+    service.clearAutoBridgeState('worker-session-1');
+
+    // 改写先过守卫、再挂在 link await 上；期间直连 progress 完成并消费来源。
+    let gateRewrite = false;
+    let releaseRewrite!: () => void;
+    const rewriteGate = new Promise<void>((resolve) => { releaseRewrite = resolve; });
+    const originalLink = deps.getWorkerLinkBySessionId;
+    deps.getWorkerLinkBySessionId = async (sessionId: string) => {
+      const link = await originalLink(sessionId);
+      if (gateRewrite) await rewriteGate;
+      return link;
+    };
+    gateRewrite = true;
+    const rewrite = service.workerReportQueuedContentMutated('worker-session-1', ['queued-1']);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    gateRewrite = false;
+    await service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '新进度' });
+    expect(getWorker().latestReport).toMatchObject({ state: 'progress' });
+
+    releaseRewrite();
+    await rewrite;
+    expect(getWorker().latestReport).toMatchObject({ state: 'progress' });
   });
 
   // 迟到的旧派活回执只在旧 state 上记账，不得覆盖新一轮派活的面板。
@@ -2455,6 +2569,31 @@ describe('OrcaTeamService', () => {
       report: { state: 'waiting', summary: '已按方案 A 完成' },
     });
     expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
+  });
+
+  // 同一派活轮的多条已接受回报不能被一次性旗标吞掉（Codex P2）：终态先到时，
+  // 第二条结论同样要落库并映射，面板不能停在第一条结论上。
+  it('applies each accepted report in one assignment turn, not just the first', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '干活',
+    });
+    const finish1 = service.captureLocalWorkerReport('worker-session-1');
+    const terminal = service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '结束',
+    });
+    await finish1(true, { delivered: true, report: { state: 'failed', summary: '第一结论：失败' } });
+    const finish2 = service.captureLocalWorkerReport('worker-session-1');
+    await finish2(true, { delivered: true, report: { state: 'waiting', summary: '第二结论：改完了' } });
+    await terminal;
+
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith('worker-1', expect.objectContaining({ state: 'waiting' }));
+    expect(deps.updateWorkerStatus).toHaveBeenCalledWith('worker-1', 'error', expect.objectContaining({ state: 'failed' }));
+    expect(getWorker().status).toBe('idle');
   });
 
   // 队列回执是投影的事实源：消息被改写，投影就不能继续宣称旧状态。
@@ -4251,6 +4390,249 @@ describe('OrcaTeamService', () => {
       sessionId: 'worker-session-1',
       err: 'close failed',
     });
+  });
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：OrcaTeamService.captureLocalWorkerReport 的直连轮（无 autoBridge
+ *   条目）回调；worker 行的 latest_report 与六态映射。
+ * - Bug 依据：Greptile 2026-11-18 复审发现——直连轮的空回调让 send_to_lead 的结构化结论
+ *   （waiting/failed/dropped）不落库，terminal 统一写 done，面板丢掉 Worker 自己报的结论。
+ * - 现有覆盖缺口：此前所有回报用例都从 Lead 派活轮出发，没有任何直连轮回报落库用例。
+ * - 最小失败输入：不 setPending 直接把 send_to_lead 回执喂给 captureLocalWorkerReport。
+ * - tier：unit（内存 fake 的行状态与 spy）。
+ */
+describe('OrcaTeamService direct-turn report outcomes', () => {
+  it('persists a direct-turn report without settling Lead obligations', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.captureLocalWorkerReport('worker-session-1')(true, {
+      delivered: true,
+      report: { state: 'failed', summary: '直连轮失败', question: '选 A 还是 B' },
+    });
+    expect(deps.setWorkerLatestReport).toHaveBeenCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'failed' }),
+    );
+    // turn 未终：结论先落库，状态映射等真实终态，不预写 done/error。
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
+    expect(getWorker().status).toBe('idle');
+    // 直连轮没有 Lead 派活，不存在可结算的欠回报。
+    expect(service.hasPendingWorkerReports('lead-1')).toBe(false);
+  });
+
+  it('drops the prior direct-turn outcome at the next turn start so new progress lands', async () => {
+    const { deps, service } = createDeps();
+    // 轮 1:结论先落账(turn 未终,状态映射等真实终态),面板可见。
+    await service.handleWorkerTurnStarted('worker-session-1');
+    const finish1 = service.captureLocalWorkerReport('worker-session-1');
+    await finish1(true, { delivered: true, report: { state: 'failed', summary: '第一轮失败' } });
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'failed' }),
+    );
+    // running 结束路径:terminal 不消费直连账,记录残留到下一轮。
+    await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: 'done' });
+    // 轮 2 开始:上一轮结论作废,新 progress 不再被旧结论拦住。
+    await service.handleWorkerTurnStarted('worker-session-1');
+    await service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '第二轮进度' });
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'progress' }),
+    );
+  });
+
+  it('does not apply a stale direct-turn receipt to a newer direct turn', async () => {
+    const { deps, service } = createDeps();
+    let live: { getTurnGeneration: () => number } | null = null;
+    (deps.getLiveSession as ReturnType<typeof vi.fn>).mockImplementation(() => live);
+    live = { getTurnGeneration: () => 1 };
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    // 旧轮被停止、新直连轮开始：运行实例换新、代号递增,回执才迟到。
+    live = { getTurnGeneration: () => 2 };
+    await finish(true, { delivered: true, report: { state: 'failed', summary: '旧结论' } });
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'failed' }),
+    );
+  });
+
+  it('drops a late direct-turn report once a new Lead assignment owns the session', async () => {
+    const { deps, service } = createDeps();
+    const deliver = service.captureLocalWorkerReport('worker-session-1');
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '新活',
+    });
+    await deliver(true, { delivered: true, report: { state: 'dropped', summary: '直连结论' } });
+    // 回调执行时新派活已认领该会话：本轮归属检查放弃写入，不干扰新派活的状态机。
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'dropped' }),
+    );
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalledWith(
+      'worker-1',
+      'done',
+      expect.objectContaining({ state: 'dropped' }),
+    );
+  });
+
+  // ready 回报先到时 turn 未终：结论先落库保证可见，但状态映射必须等真实终态，
+  // 否则 error 终态会被 ready 预写的 done 洗掉（Codex P2）。
+  it('maps a direct-turn ready report with the real terminal status, not done', async () => {
+    const { deps, getWorker, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, { delivered: true, report: { state: 'ready', summary: '完成' } });
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'ready' }),
+    );
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalled();
+    expect(getWorker().status).not.toBe('done');
+
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'error',
+      finalText: '出错了',
+    });
+    expect(deps.updateWorkerStatus).toHaveBeenLastCalledWith(
+      'worker-1',
+      'error',
+      expect.objectContaining({ state: 'ready' }),
+    );
+    expect(getWorker().status).toBe('error');
+  });
+
+  // 真实终态先到、回执后到：ready 回报按已判定的 error 映射，不得把行洗回 done（Codex P2）。
+  it('keeps a persisted error terminal when a late direct-turn ready report arrives', async () => {
+    const { deps, getWorker, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'error',
+      finalText: '出错了',
+    });
+    await finish(true, { delivered: true, report: { state: 'ready', summary: '完成' } });
+    expect(deps.updateWorkerStatus).toHaveBeenLastCalledWith(
+      'worker-1',
+      'error',
+      expect.objectContaining({ state: 'ready' }),
+    );
+    expect(getWorker().status).toBe('error');
+  });
+
+  // 结论已入档后，迟到/并发的 report_progress 是遥测，不得把 latest_report 退回进度态（Codex P2）。
+  it('keeps a direct-turn conclusion when a late report_progress lands', async () => {
+    const { deps, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, { delivered: true, report: { state: 'dropped', summary: '无需回复' } });
+    await service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '又动了' });
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'dropped' }),
+    );
+  });
+
+  // 结论已被终态应用后，同轮迟到的 progress 仍只是遥测：结论不得退回进度态（Greptile P2）。
+  it('keeps an applied direct-turn conclusion when a late report_progress lands', async () => {
+    const { deps, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, { delivered: true, report: { state: 'dropped', summary: '无需回复' } });
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '结果',
+    });
+    await service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '又动了' });
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith(
+      'worker-1',
+      expect.objectContaining({ state: 'dropped' }),
+    );
+  });
+
+  // 来源消息被改写后，旧结论不得被终态分支复活（Greptile P2）。
+  it('does not revive a rewritten direct-turn conclusion at the terminal', async () => {
+    const { deps, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, {
+      delivered: true,
+      queuedMessageId: 'q-direct-2',
+      report: { state: 'dropped', summary: '无需回复' },
+    });
+    // 排队来源被改写：投影失效，旧结论一并作废。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['q-direct-2']);
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '结果',
+    });
+    expect(deps.updateWorkerStatus).not.toHaveBeenCalledWith(
+      'worker-1',
+      expect.anything(),
+      expect.objectContaining({ state: 'dropped' }),
+    );
+  });
+
+  // 直连入队回报与派活同款登记排队来源：Lead 空闲后改写/撤回时能复核这份投影（Codex P2）。
+  it('tracks the queued source of a direct-turn report for queue mutations', async () => {
+    const { deps, service } = createDeps();
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, {
+      delivered: true,
+      queuedMessageId: 'q-direct-1',
+      report: { state: 'ready', summary: '完成' },
+    });
+    // 改写的正是当前来源：投影失效（setWorkerLatestReport(null)）。
+    await service.workerReportQueuedContentMutated('worker-session-1', ['q-direct-1']);
+    expect(deps.setWorkerLatestReport).toHaveBeenLastCalledWith('worker-1', null);
+  });
+
+  // 直连轮的行在 turn 开始时是 running，终态分支不会走 idle/done/error 那条；
+  // 若终态只按原始 status 结算，failed 结论会被 done 洗掉、waiting 也不会回到 idle（Codex P2）。
+  it('applies the direct-turn report state at the terminal instead of the raw status', async () => {
+    const { deps, getWorker, service } = createDeps();
+    await service.handleWorkerTurnStarted('worker-session-1');
+    const finish = service.captureLocalWorkerReport('worker-session-1');
+    await finish(true, { delivered: true, report: { state: 'failed', summary: '直连轮失败' } });
+
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '结果',
+    });
+
+    expect(deps.updateWorkerStatus).toHaveBeenLastCalledWith(
+      'worker-1',
+      'error',
+      expect.objectContaining({ state: 'failed' }),
+    );
+    expect(getWorker().status).toBe('error');
+  });
+
+  // 直连轮的 progress 在 await link 期间换了新直连轮：旧 progress 不得写进新轮的投影（Codex P2）。
+  it('rejects a direct-turn progress report when a new direct turn starts mid-await', async () => {
+    const { deps, service } = createDeps();
+    let live: { getTurnGeneration: () => number } | null = { getTurnGeneration: () => 1 };
+    (deps.getLiveSession as ReturnType<typeof vi.fn>).mockImplementation(() => live);
+    let releaseLink!: () => void;
+    const linkGate = new Promise<void>((resolve) => { releaseLink = resolve; });
+    const originalLink = deps.getWorkerLinkBySessionId;
+    deps.getWorkerLinkBySessionId = async (sessionId: string) => {
+      await linkGate;
+      return originalLink(sessionId);
+    };
+
+    const pending = service.recordWorkerReport('worker-session-1', { state: 'progress', summary: '旧轮进度' });
+    // 旧轮停止、新直连轮开始：运行实例换新、代号递增。
+    live = { getTurnGeneration: () => 2 };
+    releaseLink();
+    await pending;
+
+    expect(deps.setWorkerLatestReport).not.toHaveBeenCalledWith(
+      'worker-1',
+      expect.objectContaining({ summary: '旧轮进度' }),
+    );
   });
 });
 
