@@ -220,7 +220,8 @@ describe('local-db:messages:list cursor', () => {
         .filter(message => message.role === 'assistant');
       expect(answers).toHaveLength(3);
       expect(answers.every(message => (message.agentMeta as { userTurnCostUsd: number }).userTurnCostUsd === 0.25)).toBe(true);
-      expect(queries.length).toBeLessThanOrEqual(11);
+      // 页面读取 + 2 条 revision 探针（pragma_data_version，页首/recheck 各一次）合计 12
+      expect(queries.length).toBeLessThanOrEqual(12);
       expect(queries.filter(query => query.includes('from "sessions"'))).toHaveLength(5);
     } finally {
       spy.mockRestore();
