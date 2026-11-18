@@ -1759,6 +1759,12 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       },
       getWorkerQueuePaused: () => h.coordinator.isQueuePaused(sid),
       getWorkerQueueHeld: () => h.coordinator.getProjection(sid).pendingQueue.some((item) => item.held === true),
+      holdQueuedMessage: (sessionId, clientId) => {
+        h.coordinator.hold(sessionId, clientId);
+      },
+      releaseQueueHold: (sessionId) => {
+        h.coordinator.releaseHold(sessionId);
+      },
       sendAutoBridgeToLead: vi.fn(async () => ({ accepted: true })),
       getSessionQueueSnapshot: async () => ({
         pendingQueue: h.coordinator.getQueueControlSnapshot(sid).pendingQueue,
@@ -8984,6 +8990,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       }),
       getQueueSnapshot: vi.fn(), replaceQueuedMessage: vi.fn(), removeQueuedMessage: vi.fn(),
       steerStoredQueuedMessage: vi.fn(), moveQueuedMessage: vi.fn(),
+      holdQueuedMessage: vi.fn(), releaseQueueHold: vi.fn(),
       createId: () => `unexpected-random-ID-${++allocatedIds}`,
     });
     const input = { callerSessionId: 'caller', targetSessionId: sid, message: 'urgent', queuedMessageId: 'stable-ID' };
@@ -9058,6 +9065,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       }),
       getQueueSnapshot: vi.fn(), replaceQueuedMessage: vi.fn(), removeQueuedMessage: vi.fn(),
       steerStoredQueuedMessage: vi.fn(), moveQueuedMessage: vi.fn(),
+      holdQueuedMessage: vi.fn(), releaseQueueHold: vi.fn(),
       createId: () => `unexpected-random-ID-${++allocatedIds}`,
     });
     const input = { callerSessionId: 'caller', targetSessionId: sid, message: 'urgent', queuedMessageId: 'stable-ID' };
@@ -18895,6 +18903,22 @@ describe('queue message hold (stop point)', () => {
     expect(h.sendToAgent).toHaveBeenCalledOnce();
     expect(h.sendToAgent.mock.calls[0]![3].persistUserMessage?.clientId).toBe('a');
     expect(queuedIds(h, sid)).toEqual(['b']);
+  });
+
+  it('dispatches the freed rows when the stop point moves further back', async () => {
+    const { h, sid } = await withQueued(['a', 'b', 'c']);
+    h.coordinator.hold(sid, 'a');
+    finishTurn(h, sid);
+    await flush();
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+
+    h.coordinator.hold(sid, 'c');
+    await flush();
+
+    // 停点后移到 c: 原来被挡住的 a 应立即派发, 不必等下一次发送或恢复。
+    expect(h.sendToAgent).toHaveBeenCalledOnce();
+    expect(h.sendToAgent.mock.calls[0]![3].persistUserMessage?.clientId).toBe('a');
+    expect(heldIds(h, sid)).toEqual(['c']);
   });
 
   it('still dispatches the head when the stop point sits behind it', async () => {
