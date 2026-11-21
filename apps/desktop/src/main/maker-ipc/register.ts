@@ -8123,6 +8123,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ) {
           throwIpcError('INVALID_PARAMS', 'allowManagedPiPackagePreview must be a boolean');
         }
+        if (params.forceReload !== undefined && typeof params.forceReload !== 'boolean') {
+          throwIpcError('INVALID_PARAMS', 'forceReload must be a boolean');
+        }
         const sessionId =
           typeof params.sessionId === 'string' && params.sessionId.trim()
             ? params.sessionId.trim()
@@ -8159,12 +8162,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             // An empty local Pi task may have a persisted session row before its
             // process starts. Keep inspected Prompt templates visible; send waits
             // for this task's get_commands catalog before allowing execution.
-            packageCommands = await listManagedPiPromptCommands();
+            packageCommands = await listManagedPiPromptCommands(params.forceReload === true);
           }
         } else if (mayListPackageCommands) {
           // Before a task exists, only prompt templates are statically knowable.
           // Extension commands appear after that exact Pi runtime confirms them.
-          packageCommands = await listManagedPiPromptCommands();
+          packageCommands = await listManagedPiPromptCommands(params.forceReload === true);
         }
         const commands = mergePiPackageCommands(kind, builtins, packageCommands);
         return { success: true, commands, ...(runtimeStatus ? { runtimeStatus } : {}) };
