@@ -396,6 +396,9 @@ export function filterSlashCommands(
       // 插件指令同名时 name 带隐藏的 `/slug`,菜单只显示 label:按两者中更好的一个排序,
       // 输入显示名算精确匹配,输入完整限定指令也照常命中。
       const ranks = [rankOf(command.name)];
+      if (command.kind === 'agent-skill' && command.runtimeCommandName) {
+        ranks.push(rankOf(command.runtimeCommandName));
+      }
       if (command.kind === 'desktop' && command.label) ranks.push(rankOf(command.label));
       const matched = ranks.filter((r) => r >= 0);
       const rank = q ? (matched.length > 0 ? Math.min(...matched) : -1) : 0;
@@ -454,6 +457,11 @@ export async function loadAllCommands(
     contextReady?: boolean;
     forceReload?: boolean;
     skipAgentSkills?: boolean;
+    /**
+     * Leave out the built-in Harness's own commands. Plugin engines (docs/plans/acp-plugin-bridge.md)
+     * read `/…` themselves, so offering Claude Code / Codex / Pi commands there would be wrong.
+     */
+    skipAgentCommands?: boolean;
     sessionId?: string;
     allowManagedPiPackagePreview?: boolean;
     onPiRuntimeStatus?: (status: PiPackageCommandRuntimeStatus) => void;
@@ -476,7 +484,7 @@ export async function loadAllCommands(
   const desktopP: Promise<CmdRes> = api.listDesktopCommands(
     deviceId ? { deviceId } : undefined,
   ).catch(() => ({ success: false }));
-  const builtinP: Promise<CmdRes> = (
+  const builtinP: Promise<CmdRes> = opts?.skipAgentCommands ? Promise.resolve({ success: true, commands: [] }) : (
     deviceId
       ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-commands', [
           agentKind,

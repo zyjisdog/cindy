@@ -58,12 +58,16 @@ function reportBuffered() {
 function snapshot() {
   const current = socket;
   if (!current) return;
+  // The socket leaves a device out of the directory it reports when a later certificate has its transport key; it still
+  // counts as a device seen on Agent-Net, and this is the only way its id gets here.
+  for (const id of current.knownPeers()) ids.add(id);
   const known = [...ids];
   const peers = known.map((id) => {
     const route = current.peerSnapshot(id);
     return [id, { available: current.supports(id), path: route?.path ?? null, rttMs: route?.rttMs ?? null, dialing: current.isDialing(id) }];
   });
-  send({ type: 'status', queued: current.bufferedAmount, known, peers });
+  // 经中转的数据报现在走中转的 UDP 还是 WebSocket（快照每秒一次，远程连接页最多晚一秒看到切换）。
+  send({ type: 'status', queued: current.bufferedAmount, known, peers, relayRoute: current.relayRoute() });
 }
 port.on('message', (message) => {
   if (message.type === 'http-result') {

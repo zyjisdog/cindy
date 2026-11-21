@@ -1,4 +1,4 @@
-import type { AgentKind } from '@cindy/maker-core';
+import type { AgentKind, EngineKind } from '@cindy/maker-core';
 import { normalizeOrcaWorkerLabel, normalizeOrcaWorkerRole } from '@cindy/maker-shared/orca-team';
 
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
@@ -53,7 +53,7 @@ export interface OrcaWorkerRecordSnapshot {
   latestReport?: OrcaStructuredWorkerReport | null;
   session: {
     title: string;
-    agentKind: AgentKind;
+    agentKind: EngineKind;
     model: string;
     effort: string | null;
     permissionMode: string;
@@ -77,7 +77,7 @@ export type SendToWorkerFailureCode =
 export type SendToWorkerResult =
   | {
       ok: true;
-      agentKind: AgentKind;
+      agentKind: EngineKind;
       wakeKind: 'resumed' | 'already-active' | 'queued' | 'steered';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -102,7 +102,7 @@ export type WorkerInterruptStopOutcome =
 export type InterruptWorkerResult =
   | {
       ok: true;
-      agentKind: AgentKind;
+      agentKind: EngineKind;
       queuedMessageId: string;
       stopOutcome: WorkerInterruptStopOutcome;
       queuePaused: boolean;
@@ -117,7 +117,7 @@ export type DispatchWorkerMessageResult =
       ok: true;
       mode: 'dispatched' | 'queued' | 'steered';
       /** Accepting runtime locally; remote delivery reports the execution device's Agent at enqueue. */
-      agentKind?: AgentKind;
+      agentKind?: EngineKind;
       /** 底层 dispatcher 为该消息生成的 clientId;queued 模式下即队列内寻址句柄。 */
       clientId: string;
       dispatchOutcome: CollabDispatchSuccessOutcome | CollabDispatchQueuedOutcome;
@@ -148,7 +148,7 @@ export type DispatchWorkerTaskResult =
       dispatched: true;
       queued?: false;
       dispatchOutcome: CollabDispatchSuccessOutcome;
-      agentKind: AgentKind;
+      agentKind: EngineKind;
       wakeKind: 'resumed' | 'already-active' | 'steered';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -157,7 +157,7 @@ export type DispatchWorkerTaskResult =
       dispatched: false;
       queued: true;
       dispatchOutcome: CollabDispatchQueuedOutcome;
-      agentKind: AgentKind;
+      agentKind: EngineKind;
       wakeKind: 'queued';
       targetTitle: string | null;
       targetLastUserSendAt: string | null;
@@ -375,6 +375,7 @@ export interface OrcaDeliveryPermissionBaseline {
 
 export interface OrcaDeliverySessionRowSnapshot {
   status: string;
+  sideChatClosePending?: boolean;
   clearedAt: number | null;
   permissionMode: string;
   planModeEnabled: boolean;
@@ -426,9 +427,10 @@ export function evaluateOrcaDeliveryScope(input: {
   live: OrcaDeliveryLiveSnapshot | null;
 }): OrcaDeliveryVerdict {
   const { row, live } = input;
-  // Archived is reversible sidebar storage (it does not end the team), so only deletion and a
-  // new clear boundary revoke a queued dispatch. Pinned by the unit case for `archived`.
-  if (!row || row.status === 'deleted' || row.clearedAt !== input.clearedAtAtCapture) return 'task-gone';
+  // Ordinary archives keep the team. A linked follow-up's archive fences
+  // delivery as soon as the host commits it, including during Worker shutdown.
+  if (!row || row.status === 'deleted' || row.sideChatClosePending
+    || row.clearedAt !== input.clearedAtAtCapture) return 'task-gone';
   if (live) {
     const permission = live.stablePermissionModeState;
     const plan = live.stablePlanModeState;
