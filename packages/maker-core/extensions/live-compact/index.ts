@@ -1851,6 +1851,8 @@ interface SpineEntry {
   opaque: boolean;
   /** 1.0.9: 条目时间(毫秒),只有宿主给了才填 —— 冷却窗口用。 */
   time?: number;
+  /** 卡片条目上的 details:索引卡靠它记住被合并的备份与层级。 */
+  details?: any;
 }
 
 interface SpineState {
@@ -2425,6 +2427,7 @@ export function spineEntries(contextEntries: any[]): SpineEntry[] {
       callMeta,
       turn,
       opaque,
+      details: projected?.sourceEntry?.details,
       time: Number.isFinite(Number(projected?.sourceEntry?.timestamp))
         ? Number(projected.sourceEntry.timestamp)
         : Number.isFinite(Number(projected?.sourceEntry?.time)) ? Number(projected.sourceEntry.time) : undefined,
@@ -2441,6 +2444,85 @@ function isCheckpoint(entry: SpineEntry): boolean {
   // 1.1.6(上游 5d0fba82): 工具结果/普通句子提到标记文本不算检查点,只认位于开头的旧版标记。
   const text = entry.text.trimStart();
   return text === MARK || text.startsWith(`${MARK}\n`) || text.startsWith(`${MARK}\r\n`);
+}
+
+// ---------------------------------------------------------------------------
+// 卡片分层(本仓扩展,非上游):上游 #58 讨论过、暂未实现。
+// 卡片本身也在 prefix 里越积越多:切得越多,旧卡片就越占地方。超过阈值时把最老的若干张
+// 普通卡片并成一张索引卡 —— 每张卡的原文备份本来就还在,索引只记文件名与规模,需要细节
+// 时按文件名读。默认关闭(SPINE_TIER_CARDS=1 打开),因为它会主动改写 prefix。
+// ---------------------------------------------------------------------------
+const TIER_INDEX_TAG = "[tier-2]";
+
+function tierCardsEnabled(): boolean {
+  return process.env.SPINE_TIER_CARDS === "1";
+}
+
+/** 一张卡片指向的备份文件:新卡记在 details.shadowPath,老卡只有正文里的提示行。 */
+export function cardBackupPath(entry: SpineEntry): string {
+  const recorded = typeof entry.details?.shadowPath === "string" ? entry.details.shadowPath : "";
+  if (recorded) return recorded;
+  const match = /省略的工具原文在 (.+?)。/.exec(entry.text);
+  return match ? match[1] : "";
+}
+
+/** 索引卡下的子备份:后续备份轮换必须保住它们,否则索引指向的是空气。 */
+export function indexCardPaths(entry: SpineEntry): string[] {
+  const children = entry.details?.indexChildren;
+  return Array.isArray(children)
+    ? children.filter((item: unknown): item is string => typeof item === "string" && item.length > 0)
+    : [];
+}
+
+export function selectTierMerge(entries: SpineEntry[]): { indexes: number[]; card: { text: string; details: Record<string, unknown>; est: number } } | null {
+  if (!tierCardsEnabled()) return null;
+  const cards: number[] = [];
+  entries.forEach((entry, index) => {
+    // 只并普通卡片:索引卡不再二次合并,否则索引套索引之后没人说得清哪层是哪层。
+    const card = entry.role === "custom" && entry.details?.tier !== 2 && entry.text.trimStart().startsWith(MARK);
+    if (card) cards.push(index);
+  });
+  const keep = positiveInt(process.env.SPINE_TIER_KEEP_CARDS, 2);
+  const minimum = positiveInt(process.env.SPINE_TIER_MERGE_MIN, 6);
+  const mergeable = cards.slice(0, Math.max(0, cards.length - keep));
+  if (mergeable.length < minimum) return null;
+  const span = mergeable.map((index) => entries[index]);
+  // 空 id 的 context_edit 会被 runner 忽略:卡片没抹掉而索引照加,净增长。
+  if (span.some((entry) => !entry.id)) return null;
+  const lines = span.map((entry) => {
+    const file = cardBackupPath(entry).split(/[\\/]/).pop() || "(无备份)";
+    const replaced = Array.isArray(entry.details?.shadowedSeqs) ? entry.details.shadowedSeqs.length : 0;
+    return `- ${file}${replaced > 0 ? ` (替换 ${replaced} 个条目)` : ""}`;
+  });
+  const text = [
+    `${TIER_INDEX_TAG} 早期 ${span.length} 张卡片已并入本索引,原文备份仍在;需要细节时按文件名读对应文件,不要一次全读。`,
+    ...lines,
+  ].join("\n");
+  const content = [{ type: "text", text: `${CHECKPOINT_PREAMBLE}\n\n${MARK}` }, { type: "text", text }];
+  let est = 0;
+  try {
+    est = estimateTokens({ role: "user", content, timestamp: Date.now() });
+  } catch {
+    est = Math.ceil(text.length / 4);
+  }
+  // 并了不更省就不并:否则只是白改写一遍 prefix。
+  const before = span.reduce((sum, entry) => sum + entry.est, 0);
+  if (!Number.isFinite(est) || est <= 0 || est >= before) return null;
+  return {
+    indexes: mergeable,
+    card: {
+      text,
+      details: {
+        tier: 2,
+        indexChildren: span.map((entry) => cardBackupPath(entry)).filter((path) => path.length > 0),
+        mergedCards: span.map((entry) => entry.id),
+        shadowedSeqs: span.flatMap((entry) => (Array.isArray(entry.details?.shadowedSeqs) ? entry.details.shadowedSeqs : [])),
+        provider: "local",
+        model: "spine-index",
+      },
+      est,
+    },
+  };
 }
 
 function isUser(entry: SpineEntry): boolean {
@@ -3264,7 +3346,9 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
     const edits: any[] = [];
     const cards: any[] = [];
     // 整批卡片一起提交:这一批里已经切出来的备份文件,在提交前谁都不许删。
+    // 索引卡指向的子备份同样不能删 —— 它们在这一批里也可能被轮换推到 80% 线以下。
     const batchProtect: string[] = [];
+    for (const entry of entries) batchProtect.push(...indexCardPaths(entry));
     let working = entries;
     let simulated = totalTokens;
     try {
@@ -3292,6 +3376,27 @@ export default function (pi: ExtensionAPI) {  // Idle cut: pi fires agent_before
     }
     growth.last = simulated;
     growth.max = 0;
+    // 卡片分层(本仓扩展):本轮既然已经动过 prefix,顺手把最老的卡片并成一张索引卡。
+    if (edits.length > 0) {
+      const tier = selectTierMerge(working);
+      if (tier !== null) {
+        const span = tier.indexes.map((index) => working[index]);
+        const content = [{ type: "text", text: `${CHECKPOINT_PREAMBLE}\n\n${MARK}` }, { type: "text", text: tier.card.text }];
+        for (const entry of span) {
+          edits.push({ type: "context_edit", targetId: entry.id, replacement: null });
+        }
+        cards.push({
+          type: "custom_message",
+          customType: SPINE_CUSTOM_TYPE,
+          content,
+          display: false,
+          details: tier.card.details,
+        });
+        const merged = span.reduce((sum, entry) => sum + entry.est, 0);
+        simulated = Math.max(0, simulated - merged + tier.card.est);
+        logLine(state, `spine tier merge ${span.length} cards -> index est=${tier.card.est} was=${merged} total est.${simulated}`);
+      }
+    }
     if (edits.length === 0 && cards.length === 0) return undefined;
     return { entries: [...(event.entries ?? []), ...orderedDrainDrafts(edits, cards)] };
   });
@@ -3460,6 +3565,8 @@ function attemptCut(options: {
           shadowedRange: { start: spanEntries[0].id, end: spanEntries.at(-1).id },
           shadowedSeqs: spanEntries.map((entry) => entry.id),
           shadowedTokenCount: chunk.tokens,
+          // 分层索引卡要按文件名列子备份;details 里直接记住,不必回头解正文。
+          shadowPath: file,
           provider: "local",
           model: "spine-extract",
         },

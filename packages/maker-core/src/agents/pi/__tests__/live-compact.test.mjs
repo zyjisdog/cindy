@@ -12,7 +12,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
 
 const extensionModule = await import('../../../../extensions/live-compact/index.ts');
 const registerLiveCompact = extensionModule.default;
-const { selectNewestChunk, balanceIndexes, buildCard, attachBackupHint, isToolFailure, rotateShadow, failureKeptLines, toolExcerpt, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, saveShadow, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden, rawName } = extensionModule;
+const { selectNewestChunk, balanceIndexes, buildCard, attachBackupHint, isToolFailure, rotateShadow, failureKeptLines, toolExcerpt, pruneShadowSessions, spineRoot, keptToolRounds, chooseKeptSpan, reservedCutEnd, toolEvidenceLine, pointerFor, captureToolResult, planRawEntry, commitRawEntry, verifiedRaw, resolveEngine, resolveSpineEngine, selectCutIndexes, pointerSpanAllowed, pointerOnlyText, spineEntries, longReadResults, writeOwner, orderedDrainDrafts, withBackupHint, withoutFullBackupClaim, backupHint, discardRawSnapshots, saveShadow, lastCompactionEntry, inCooldown, resolveCooldownMs, providerURLFromPatch, resolveProviderBaseURL, spanHidesCallArgs, callArgsHidden, rawName, selectTierMerge, indexCardPaths, cardBackupPath } = extensionModule;
 
 let seq = 0;
 function entry(role, text, extra = {}) {
@@ -1822,4 +1822,128 @@ describe('live compact 1.1.10: 跨题撤退与收尾重写守卫', () => {
   });
 
 
+});
+
+describe('live compact 卡片分层:旧卡片并成索引卡(本仓扩展,默认关闭)', () => {
+  const card = (tag, est = 900) => entry(`[${tag}]`, 'x', {
+    role: 'custom',
+    entryType: 'custom',
+    text: `Spine extract.\n正文 ${tag}\n省略的工具原文在 /tmp/shadow/raw-${tag}.txt。`,
+    est,
+    details: {
+      shadowPath: `/tmp/shadow/raw-${tag}.txt`,
+      shadowedSeqs: [`${tag}-1`, `${tag}-2`],
+      provider: 'local',
+      model: 'spine-extract',
+    },
+  });
+
+  const withEnv = (values, run) => {
+    const saved = {};
+    for (const [key, value] of Object.entries(values)) {
+      saved[key] = process.env[key];
+      process.env[key] = value;
+    }
+    try {
+      return run();
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  };
+
+  it('merges the oldest cards into one index card and keeps the newest ones', () => {
+    withEnv({ SPINE_TIER_CARDS: '1', SPINE_TIER_MERGE_MIN: '3', SPINE_TIER_KEEP_CARDS: '1' }, () => {
+      const entries = [entry('user', 'go'), card('a'), card('b'), card('c'), card('d'), card('e')];
+      const merge = selectTierMerge(entries);
+      expect(merge).not.toBeNull();
+      // 5 张卡、留 1 张:并掉最老的 4 张。
+      expect(merge.indexes).toEqual([1, 2, 3, 4]);
+      expect(merge.card.details.tier).toBe(2);
+      expect(merge.card.details.indexChildren).toHaveLength(4);
+      expect(merge.card.details.indexChildren[0]).toBe('/tmp/shadow/raw-a.txt');
+      expect(merge.card.details.mergedCards).toEqual([1, 2, 3, 4].map((index) => entries[index].id));
+      expect(merge.card.text).toContain('raw-a.txt');
+      expect(merge.card.text).toContain('raw-d.txt');
+      // 索引卡自己必须比被并掉的卡片总和更小,否则只是白改写一遍 prefix。
+      const merged = entries.slice(1, 5).reduce((sum, item) => sum + item.est, 0);
+      expect(merge.card.est).toBeLessThan(merged);
+    });
+  });
+
+  it('does nothing while the card queue is short or the switch is off', () => {
+    // 开关默认关闭:装了扩展不等于自动改写 prefix。
+    expect(selectTierMerge([entry('user', 'go'), card('a'), card('b'), card('c')])).toBeNull();
+    withEnv({ SPINE_TIER_CARDS: '1', SPINE_TIER_MERGE_MIN: '3', SPINE_TIER_KEEP_CARDS: '1' }, () => {
+      expect(selectTierMerge([entry('user', 'go'), card('a'), card('b')])).toBeNull();
+    });
+  });
+
+  it('declines to merge when the index card would not be smaller', () => {
+    withEnv({ SPINE_TIER_CARDS: '1', SPINE_TIER_MERGE_MIN: '3', SPINE_TIER_KEEP_CARDS: '1' }, () => {
+      const tiny = [entry('user', 'go'), card('a', 6), card('b', 6), card('c', 6), card('d', 6)];
+      expect(selectTierMerge(tiny)).toBeNull();
+    });
+  });
+});
+
+describe('live compact 卡片分层:索引卡走 settle 路径', () => {
+  const settle = (root, sessionId, contextEntries, tokens = 60000) => {
+    let handler = null;
+    registerLiveCompact({ on: (name, fn) => { if (name === 'agent_before_settle') handler = fn; } });
+    return handler({ outcome: 'completed', context: { contextEntries } }, {
+      sessionManager: { getSessionId: () => sessionId },
+      getContextUsage: () => ({ tokens }),
+    });
+  };
+  const card = (root, id, tag) => ({
+    messages: [{ role: 'custom', content: `Spine extract.${String.fromCharCode(10)}旧卡片 ${tag}${String.fromCharCode(10)}省略的工具原文在 ${root}/raw-${tag}.txt。`, provider: 'minimax' }],
+    sourceEntry: { id, type: 'custom', details: { shadowPath: `${root}/raw-${tag}.txt`, shadowedSeqs: [`s-${tag}`], provider: 'minimax', model: 'm' } },
+  });
+  const call = (id) => ({ messages: [{ role: 'assistant', content: [{ type: 'toolCall', id, name: 'shell', arguments: {} }], provider: 'minimax' }], sourceEntry: { id: `${id}-a` } });
+  const result = (id, text) => ({ messages: [{ role: 'toolResult', toolCallId: id, content: text, provider: 'minimax' }], sourceEntry: { id: `${id}-r` } });
+
+  it('edits the oldest cards away and appends one index card', () => {
+    const root = mkdtempSync(join(tmpdir(), 'spine-tier-'));
+    const previousRoot = process.env.SPINE_SHADOW_DIR;
+    const previousSwitch = process.env.SPINE_TIER_CARDS;
+    const previousKeep = process.env.SPINE_TIER_KEEP_CARDS;
+    const previousMin = process.env.SPINE_TIER_MERGE_MIN;
+    process.env.SPINE_SHADOW_DIR = root;
+    process.env.SPINE_TIER_CARDS = '1';
+    process.env.SPINE_TIER_KEEP_CARDS = '1';
+    process.env.SPINE_TIER_MERGE_MIN = '3';
+    try {
+      const contextEntries = [
+        { messages: [{ role: 'system', content: 'sys', provider: 'minimax' }], sourceEntry: { id: 's1' } },
+        { messages: [{ role: 'user', content: 'go', provider: 'minimax' }], sourceEntry: { id: 'u1' } },
+        card(root, 'card1', 'a'), card(root, 'card2', 'b'), card(root, 'card3', 'c'), card(root, 'card4', 'd'), card(root, 'card5', 'e'),
+        call('cOld'), result('cOld', 'mid '.repeat(2000)),
+        call('cMid'), result('cMid', 'tail '.repeat(2000)),
+        call('c1'), result('c1', 'a '.repeat(300)),
+        call('c2'), result('c2', 'b '.repeat(300)),
+        call('c3'), result('c3', 'c '.repeat(300)),
+      ];
+      const outcome = settle(root, 'session-tier', contextEntries);
+      expect(outcome).toBeTruthy();
+      const edits = outcome.entries.filter((draft) => draft.type === 'context_edit');
+      const cardEdits = edits.filter((edit) => String(edit.targetId).startsWith('card'));
+      expect(cardEdits.map((edit) => edit.targetId)).toEqual(['card1', 'card2', 'card3', 'card4', 'card5']);
+      expect(edits.every((edit) => edit.replacement === null)).toBe(true);
+      // 这一轮真的切过普通段:索引卡只在已经动过 prefix 的时候搭车。
+      expect(edits.length).toBeGreaterThan(cardEdits.length);
+      const index = outcome.entries.filter((draft) => draft.type === 'custom_message' && draft.details?.tier === 2);
+      expect(index).toHaveLength(1);
+      expect(index[0].details.indexChildren).toEqual(['a', 'b', 'c', 'd', 'e'].map((tag) => `${root}/raw-${tag}.txt`));
+      expect(index[0].details.provider).toBe('local');
+    } finally {
+      if (previousRoot === undefined) delete process.env.SPINE_SHADOW_DIR; else process.env.SPINE_SHADOW_DIR = previousRoot;
+      if (previousSwitch === undefined) delete process.env.SPINE_TIER_CARDS; else process.env.SPINE_TIER_CARDS = previousSwitch;
+      if (previousKeep === undefined) delete process.env.SPINE_TIER_KEEP_CARDS; else process.env.SPINE_TIER_KEEP_CARDS = previousKeep;
+      if (previousMin === undefined) delete process.env.SPINE_TIER_MERGE_MIN; else process.env.SPINE_TIER_MERGE_MIN = previousMin;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
