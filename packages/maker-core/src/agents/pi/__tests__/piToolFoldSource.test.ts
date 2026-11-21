@@ -14,6 +14,7 @@ function loadExtension(env: Record<string, string> = {}) {
   for (const [key, value] of Object.entries(env)) process.env[key] = value;
   // Budget tests must not leak into the rest of the suite: reset what they switch off.
   process.env.CINDY_PI_TOOL_FOLD_ARG_CHARS = env.CINDY_PI_TOOL_FOLD_ARG_CHARS ?? '200';
+  process.env.CINDY_PI_TOOL_FOLD_RECOVERY_CHARS = env.CINDY_PI_TOOL_FOLD_RECOVERY_CHARS ?? '120000';
   const body = CINDY_TOOL_FOLD_EXTENSION_SOURCE.replace(/^export default /m, '');
   const handlers: Record<string, Handler> = {};
   const tools: Record<string, Tool> = {};
@@ -23,7 +24,7 @@ function loadExtension(env: Record<string, string> = {}) {
   };
   new Function('pi', `const extension = ${body};\nextension(pi);`)(pi);
   if (!handlers.context) throw new Error('context handler was not registered');
-  return { context: handlers.context, toolResult: handlers.tool_result, tool: tools.toolfold_read };
+  return { context: handlers.context, toolResult: handlers.tool_result, tool: tools.cindy_toolfold_read };
 }
 
 function call(id: string, name: string, args: Record<string, unknown>): Message {
@@ -84,7 +85,7 @@ describe('cindy-tool-fold extension source', () => {
     }
     const foldedText = String(out[1].content![0].text);
     expect(foldedText).toContain('[folded] ok');
-    expect(foldedText).toContain('toolfold_read("call-0")');
+    expect(foldedText).toContain('cindy_toolfold_read("call-0")');
     expect(foldedText).toContain('step 0 ok');
     // Large arguments are replaced by an id-only pointer; what they said moves to the record.
     expect(out[0].content![0].arguments).toEqual({ __folded: true, call: 'call-0' });
@@ -103,7 +104,7 @@ describe('cindy-tool-fold extension source', () => {
     expect(record).toContain('[folded] ok \u00b7 read');
     // The call block already shows the path; the record stays on the result side.
     expect(record).not.toContain(args.path);
-    expect(record).toContain('toolfold_read("call-0")');
+    expect(record).toContain('cindy_toolfold_read("call-0")');
   });
 
   it('never rewrites arguments when the argument budget is switched off', () => {
@@ -125,6 +126,32 @@ describe('cindy-tool-fold extension source', () => {
     const pointer = out[0].content![0].arguments as Record<string, unknown>;
     expect(pointer).toEqual({ __folded: true, call: 'call-0' });
     expect(JSON.stringify(pointer)).not.toContain('run step 0');
+  });
+
+  it('leaves a batch alone when none of it would actually disappear', () => {
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
+    const messages: Message[] = [];
+    // Small arguments plus a one-word result: the record line is longer than both, so
+    // folding this batch would grow the context instead of shrinking it.
+    for (let index = 0; index < 40; index += 1) {
+      messages.push(call(`call-${index}`, 'read', { path: `packages/maker-core/src/agents/pi/file-${index}.ts` }));
+      messages.push(result(`call-${index}`, 'read', 'ok'));
+    }
+    // Nothing folded: the handler leaves the transcript untouched.
+    expect(projection(context, messages)).toBe(messages);
+  });
+
+  it('folds a large argument even when its own result is smaller than the record', () => {
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
+    const messages: Message[] = [
+      call('call-big', 'write', { path: 'a.ts', content: 'x'.repeat(400) }),
+      result('call-big', 'write', 'ok'),
+      ...pairs(40),
+    ];
+    const out = projection(context, messages);
+    expect(out![0].content![0].arguments).toEqual({ __folded: true, call: 'call-big' });
+    // The tiny result stays verbatim: replacing it would make the projection longer.
+    expect(out![1]).toBe(messages[1]);
   });
 
   it('keeps folds sticky and does not rewrite them again until the next batch', () => {
@@ -157,7 +184,7 @@ describe('cindy-tool-fold extension source', () => {
     expect(out[1]).toBe(messages[1]);
   });
 
-  it('recovers a folded original via toolfold_read and pins it until the next user message', async () => {
+  it('recovers a folded original via cindy_toolfold_read and pins it until the next user message', async () => {
     const { context, tool } = loadExtension();
     const messages = pairs(40);
     projection(context, messages);
@@ -177,6 +204,18 @@ describe('cindy-tool-fold extension source', () => {
     expect(isFolded(released[10])).toBe(true);
   });
 
+  it('slices a large folded record without pinning the whole history back in', async () => {
+    const { context, tool, toolResult } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const big = 'w'.repeat(30000);
+    const messages = [
+      call('huge-write', 'write', { path: 'a.txt', content: big }),
+      toolResult({ toolName: 'write', toolCallId: 'huge-write', content: [{ type: 'text', text: 'wrote 30000 bytes' }] }),
+      ...pairs(3),
+    ];
+    const afterRead = projection(context, messages);
+    expect(afterRead.length).toBeGreaterThan(0);
+  });
+
   it('recovers a folded result that merely quotes the truncation marker text', async () => {
     const { context, tool } = loadExtension();
     const messages = pairs(40);
@@ -186,7 +225,7 @@ describe('cindy-tool-fold extension source', () => {
       role: 'toolResult',
       toolCallId: 'call-5',
       toolName: 'read',
-      content: [{ type: 'text', text: 'docs mention [truncated 100 of 200 chars; toolfold_read("call-0") returns the full text]' }],
+      content: [{ type: 'text', text: 'docs mention [truncated 100 of 200 chars; cindy_toolfold_read("call-0") returns the full text]' }],
     };
     projection(context, messages);
     const recovered = await tool.execute('t1', { call_id: 'call-5' });
@@ -301,7 +340,7 @@ describe('cindy-tool-fold extension source', () => {
       toolResult({ toolName: 'bash', toolCallId: `giant-${index}`, content: [{ type: 'text', text: `body ${'z'.repeat(22000)}` }] });
     }
     // Simulate a resumed session: the transcript holds only the preview of giant-0.
-    const preview = 'body zzz…\n[truncated 20000 of 22009 chars; toolfold_read("giant-0") returns the full text]';
+    const preview = 'body zzz…\n[truncated 20000 of 22009 chars; cindy_toolfold_read("giant-0") returns the full text]';
     const messages = [
       call('giant-0', 'bash', { command: 'make big output' }),
       { role: 'toolResult', toolCallId: 'giant-0', toolName: 'bash', content: [{ type: 'text', text: preview }] },
@@ -330,15 +369,15 @@ describe('cindy-tool-fold extension source', () => {
     expect(() => projection(context, messages)).not.toThrow();
   });
 
-  it('evicts the least-recently-recovered pin when the pin budget is exceeded', async () => {
+  it('keeps an over-budget recovery out of the pin budget instead of exempting it', async () => {
+    // 记录卡本身超过 pin 预算时，恢复结果不能既回灌原文、又被 pin 回下一次请求：
+    // “至少保留一条”的豁免会让同一段文本出现两份，顶穿接近满的上下文。
     const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_PIN_BUDGET: '1' });
     const messages = pairs(40);
     projection(context, messages);
     await tool.execute('t1', { call_id: 'call-2' });
-    await tool.execute('t2', { call_id: 'call-6' }); // budget 1 char -> evicts call-2
     const view = projection(context, messages);
-    expect(isFolded(view[4])).toBe(true); // call-2 re-folded: oldest recovery evicted
-    expect(isFolded(view[12])).toBe(false); // call-6 still pinned
+    expect(isFolded(view[4])).toBe(true);
   });
 
   it('bounds retained giant payloads by aggregate characters, not just entry count', async () => {
@@ -353,7 +392,7 @@ describe('cindy-tool-fold extension source', () => {
     // the registry no longer holds them, so recovery refuses instead of serving a preview.
     projection(context, [
       call('g1', 'bash', { command: 'make g1' }),
-      { role: 'toolResult', toolCallId: 'g1', toolName: 'bash', content: [{ type: 'text', text: 'z'.repeat(2000) + '\n[truncated 58000 of 60000 chars; toolfold_read("g1") returns the full text]' }] } as unknown as { content: Block[] },
+      { role: 'toolResult', toolCallId: 'g1', toolName: 'bash', content: [{ type: 'text', text: 'z'.repeat(2000) + '\n[truncated 58000 of 60000 chars; cindy_toolfold_read("g1") returns the full text]' }] } as unknown as { content: Block[] },
     ]);
     const refused = await tool.execute('t1', { call_id: 'g1' });
     expect(refused.isError).toBe(true);
@@ -387,7 +426,7 @@ describe('cindy-tool-fold extension source', () => {
     const messages = pairs(40);
     messages.splice(0, 0,
       { role: 'assistant', content: [{ type: 'toolCall', id: 'giant-arg', name: 'bash', arguments: { command: 'cat big.txt --flag' } }] },
-      { role: 'toolResult', toolCallId: 'giant-arg', toolName: 'bash', content: [{ type: 'text', text: 'q'.repeat(2000) + '\n[truncated 23000 of 25000 chars; toolfold_read("giant-arg") returns the full text]' }] });
+      { role: 'toolResult', toolCallId: 'giant-arg', toolName: 'bash', content: [{ type: 'text', text: 'q'.repeat(2000) + '\n[truncated 23000 of 25000 chars; cindy_toolfold_read("giant-arg") returns the full text]' }] });
     projection(context, messages);
     const recovered = await tool.execute('t1', { call_id: 'giant-arg' });
     const text = String(recovered.content![0].text);
@@ -405,7 +444,7 @@ describe('cindy-tool-fold extension source', () => {
     const kept = (truncated!.content ?? []).map((b) => String(b.text ?? '')).join('\n');
     expect(kept.startsWith('y'.repeat(2000))).toBe(true);
     expect(kept.length).toBeLessThan(2600);
-    expect(kept).toContain('toolfold_read("giant-1")');
+    expect(kept).toContain('cindy_toolfold_read("giant-1")');
     expect(toolResult({ toolName: 'bash', toolCallId: 'giant-2', content: [{ type: 'text', text: 'small' }] })).toBeUndefined();
     // structuredContent must survive a rewrite (pi drops it when only content is returned).
     const structured = toolResult({ toolName: 'mcp__x__y', toolCallId: 'giant-3', content: [{ type: 'text', text: giant }], structuredContent: { ok: true } }) as { structuredContent?: unknown };
@@ -424,7 +463,7 @@ describe('cindy-tool-fold extension source', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '32', CINDY_PI_TOOL_FOLD_MIN_CHARS: '1000000000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
     // One assistant message with 32 parallel calls: 32 complete pairs in one trip.
     const blocks = Array.from({ length: 32 }, (_, i) => ({ type: 'toolCall', id: `par-${i}`, name: 'bash', arguments: { command: `parallel step ${i} ${'p'.repeat(420)}` } }));
-    const results = blocks.map((b, i) => result(String(b.id), 'bash', `parallel ${i} ok ${'z'.repeat(120)}`));
+    const results = blocks.map((b, i) => result(String(b.id), 'bash', `parallel ${i} ok ${'z'.repeat(800)}`));
     // A newer trailing pair keeps the 32-call trip outside the KEEP=1 resident window.
     const messages: Message[] = [
       { role: 'assistant', content: blocks as Block[] },
@@ -462,7 +501,7 @@ describe('cindy-tool-fold extension source', () => {
     }
     // The transcript keeps only the truncation preview, as pi would store it; the
     // tool_result hook passes it through (small enough), so build it inline.
-    const previewText = 'payload 0 ' + 'g'.repeat(1800) + '\n[truncated 23000 of 25011 chars; toolfold_read("giant-0") returns the full text]';
+    const previewText = 'payload 0 ' + 'g'.repeat(1800) + '\n[truncated 23000 of 25011 chars; cindy_toolfold_read("giant-0") returns the full text]';
     const preview = { role: 'toolResult', toolCallId: 'giant-0', toolName: 'bash', content: [{ type: 'text', text: previewText }] } as unknown as { content: Block[] };
     expect(preview).toBeDefined();
     projection(context, [
@@ -476,6 +515,27 @@ describe('cindy-tool-fold extension source', () => {
     const live = await tool.execute('t2', { call_id: 'giant-8' });
     expect(String(live.content![0].text)).toContain(`payload 8 ${'g'.repeat(25000)}`);
   });
+  it('slices a giant recovery at the per-read limit and resumes from an offset', async () => {
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const big = 'body ' + 'z'.repeat(22000);
+    toolResult({ toolName: 'bash', toolCallId: 'giant-8', content: [{ type: 'text', text: big }] });
+    projection(context, [
+      call('giant-8', 'bash', { command: 'make giant 8' }),
+      { role: 'toolResult', toolCallId: 'giant-8', toolName: 'bash', content: [{ type: 'text', text: 'body zzz…' }] } as unknown as { content: Block[] },
+    ]);
+    const first = await tool.execute('t1', { call_id: 'giant-8' });
+    const firstText = String(first.content![0].text);
+    // 一次回灌 22k 字符会顶穿下一次请求的上下文窗口；切片后必须告诉模型怎么续读。
+    expect(firstText.length).toBeLessThan(big.length);
+    expect(firstText).toContain('remaining');
+    expect(firstText).toContain('offset');
+    const resumeAt = Number(/offset: (\d+)/.exec(firstText)![1]);
+    expect(resumeAt).toBeGreaterThan(0);
+    const rest = await tool.execute('t2', { call_id: 'giant-8', offset: resumeAt });
+    expect(rest.isError).toBeUndefined();
+    expect(String(rest.content![0].text)).not.toContain('past the end');
+  });
+
   it('forwards every knob the extension reads to remote Pi sessions', () => {
     // A knob that exists in the extension but is missing from the forward list is
     // silently ignored on remote sessions (the default applies instead).

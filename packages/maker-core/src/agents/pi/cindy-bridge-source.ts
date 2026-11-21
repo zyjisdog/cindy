@@ -171,6 +171,11 @@ function permissionDenialReason(decision: string | undefined): string {
   return detail ? label + ': ' + detail : label + '.';
 }
 const READONLY_BUILTINS = new Set(['read', 'grep', 'find', 'ls']);
+// 只读 transcript 记录、不碰文件系统也不执行任何东西：Ask/Auto 与 Review 会话都
+// 不该为它弹框或拒绝，否则每次自动恢复折叠结果都变成一次用户交互。
+// 只对「折叠扩展真的在跑」的会话豁免：该扩展启用后会在进程内立 cindy.pi.toolFold。
+// 折叠关闭时同名工具只能是外部注册的（原生扩展也可以叫这个名字），照常走审批。
+const TRANSCRIPT_ONLY_BUILTINS = new Set(['cindy_toolfold_read']);
 const FILE_WRITE_BUILTINS = new Set(['edit', 'write']);
 function isCindyShellTool(toolName: unknown): boolean {
   return toolName === 'bash' || toolName === 'powershell';
@@ -5338,6 +5343,8 @@ export default async function cindyBridge(piApi: any) {
       return { block: true, reason: 'Tools are disabled for this host-owned text-only turn.' };
     }
     const permission = currentPermissionState();
+    // 只读本会话的 transcript 记录：不读写文件、不执行命令，两种权限档都不必打扰用户。
+    if (TRANSCRIPT_ONLY_BUILTINS.has(event.toolName)) return;
     if (permission.reviewOnly) {
       if (
         READONLY_BUILTINS.has(event.toolName)

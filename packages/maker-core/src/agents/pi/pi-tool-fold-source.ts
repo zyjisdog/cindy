@@ -2,7 +2,7 @@
  * cindy-tool-fold —— 写进 pi `internal-extensions/` 的扩展源码（字符串常量）。
  *
  * 把较老的「工具调用 + 结果」折成一行，只保留最近几次原文；巨型结果在入库前截断；
- * 折叠/截断的原文可经 toolfold_read 取回，取回过的钉住到本轮结束。
+ * 折叠/截断的原文可经 cindy_toolfold_read 取回，取回过的钉住到本轮结束。
  *
  * 为什么：pi 每一步都把整段会话重发给模型；一条工具往返从产生到被压缩之前，每一步都重新
  * 计一次费。实测长会话里 87% 的注入内容就是工具往返（命令原文 + 输出），折叠后输入 token
@@ -54,6 +54,7 @@ export const CINDY_TOOL_FOLD_ENV_NAMES = [
   'CINDY_PI_TOOL_FOLD_GIANT_BUDGET',
   'CINDY_PI_TOOL_FOLD_MAX_FOLDED',
   'CINDY_PI_TOOL_FOLD_ARG_CHARS',
+  'CINDY_PI_TOOL_FOLD_RECOVERY_CHARS',
 ] as const;
 
 export const CINDY_TOOL_FOLD_EXTENSION_SOURCE = String.raw`/**
@@ -97,6 +98,10 @@ export default function (pi) {
   var disabled = process.env.CINDY_PI_TOOL_FOLD;
   if (disabled === 'off' || disabled === '0') return;
 
+  // 单次恢复读取上限：整段回灌巨型载荷会顶穿下一次请求的上下文窗口，而原文不在
+  // transcript 里，模型无法靠重读自救。超限就切片，并在尾部告诉它怎么续读。
+  var RECOVERY_READ_MAX_CHARS = intEnv('CINDY_PI_TOOL_FOLD_RECOVERY_CHARS', 120000, 1000, 4000000);
+
   function intEnv(name, fallback, min, max) {
     var raw = Number(process.env[name]);
     if (!Number.isFinite(raw)) return fallback;
@@ -117,6 +122,10 @@ export default function (pi) {
   var LINE = 160;
   var MAX_FOLDED = intEnv('CINDY_PI_TOOL_FOLD_MAX_FOLDED', 4000, 100, 1000000);
   var ARG_FOLD_CHARS = intEnv('CINDY_PI_TOOL_FOLD_ARG_CHARS', 200, 0, 1000000);
+  // A record line (name, counters, head, pointer) is roughly this long. A result shorter
+  // than it would grow the context when folded, so the gate and the projection both
+  // count only payload that actually disappears.
+  var RECORD_ESTIMATE_CHARS = 160;
 
   // Sticky fold marks: toolCallId -> payload chars. Survives requests in this process;
   // a restart simply re-folds on the next batch.
@@ -153,6 +162,7 @@ export default function (pi) {
   function textOf(content) {
     if (typeof content === 'string') return content;
     if (!Array.isArray(content)) return '';
+    if (content.length === 1 && content[0] && content[0].type === 'text' && typeof content[0].text === 'string') return content[0].text;
     var parts = [];
     for (var i = 0; i < content.length; i++) {
       var block = content[i];
@@ -161,20 +171,33 @@ export default function (pi) {
     return parts.join('\n');
   }
 
+  // Scan lines in place: a multi-megabyte payload split into an array of lines per folded
+  // result per turn costs more than everything else in this hook put together.
+  function countLines(text) {
+    var count = 1;
+    for (var at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) count += 1;
+    return count;
+  }
+
   function firstLine(text) {
-    var lines = text.split('\n');
-    for (var i = 0; i < lines.length; i++) {
-      var line = oneLine(lines[i]);
+    var start = 0;
+    while (start <= text.length) {
+      var end = text.indexOf('\n', start);
+      if (end === -1) end = text.length;
+      var line = oneLine(text.slice(start, end));
       if (line) return line;
+      start = end + 1;
     }
     return '';
   }
 
   function lastLine(text) {
-    var lines = text.split('\n');
-    for (var i = lines.length - 1; i >= 0; i--) {
-      var line = oneLine(lines[i]);
+    var end = text.length;
+    while (end > 0) {
+      var start = text.lastIndexOf('\n', end - 1) + 1;
+      var line = oneLine(text.slice(start, end));
       if (line) return line;
+      end = start - 1;
     }
     return '';
   }
@@ -240,10 +263,28 @@ export default function (pi) {
       for (var id in ids) if (ids[id] !== true) complete = false;
       if (!complete) continue;
       var chars = 0;
+      var folds = Object.create(null);
       for (var c2 = 0; c2 < calls.length; c2++) {
-        try { chars += JSON.stringify(calls[c2].arguments || {}).length; } catch (error) { /* ignore */ }
+        var argSize = 0;
+        try { argSize = argChars(calls[c2]); } catch (error) { argSize = 0; }
+        chars += argSize;
+        folds[calls[c2].id] = { args: argSize, result: 0 };
       }
-      for (var r2 = 0; r2 < results.length; r2++) chars += textOf(results[r2].content).length;
+      for (var r2 = 0; r2 < results.length; r2++) {
+        var textSize = textOf(results[r2].content).length;
+        chars += textSize;
+        var sized = folds[String(results[r2].toolCallId)];
+        if (sized) sized.result = textSize;
+      }
+      var removable = 0;
+      var removableCalls = 0;
+      for (var c4 = 0; c4 < calls.length; c4++) {
+        var plan = folds[calls[c4].id];
+        plan.foldArgs = ARG_FOLD_CHARS > 0 && plan.args > ARG_FOLD_CHARS;
+        plan.foldResult = plan.result > RECORD_ESTIMATE_CHARS;
+        removable += (plan.foldArgs ? plan.args : 0) + (plan.foldResult ? plan.result : 0);
+        if (plan.foldArgs || plan.foldResult) removableCalls += 1;
+      }
       var sizes = Object.create(null);
       for (var c3 = 0; c3 < calls.length; c3++) {
         try { sizes[calls[c3].id] = JSON.stringify(calls[c3].arguments || {}).length; } catch (error) { sizes[calls[c3].id] = 0; }
@@ -252,7 +293,7 @@ export default function (pi) {
         var rid = String(results[r3].toolCallId);
         sizes[rid] = (sizes[rid] || 0) + textOf(results[r3].content).length;
       }
-      trips.push({ start: index, end: indexes[indexes.length - 1], calls: calls, callCount: calls.length, chars: chars, sizes: sizes, hasImage: hasImage, results: results, indexes: indexes });
+      trips.push({ start: index, end: indexes[indexes.length - 1], calls: calls, callCount: calls.length, chars: chars, removable: removable, removableCalls: removableCalls, folds: folds, sizes: sizes, hasImage: hasImage, results: results, indexes: indexes });
     }
     return trips;
   }
@@ -268,9 +309,10 @@ export default function (pi) {
     };
   }
 
+  /** Summary record, or null when the record would not be shorter than the payload. */
   function foldedResult(result, call, argsFolded) {
     var text = textOf(result.content);
-    var lines = text ? text.split('\n').length : 0;
+    var lines = text ? countLines(text) : 0;
     var summary = '[folded] ' + (result.isError === true ? 'error' : 'ok');
     if (call && call.name) summary += ' \u00b7 ' + String(call.name);
     if (argsFolded && call) {
@@ -285,8 +327,11 @@ export default function (pi) {
       if (tail && tail !== head) summary += ' \u00b7 last: ' + tail;
     }
     if (typeof result.toolCallId === 'string' && result.toolCallId) {
-      summary += ' \u00b7 full: toolfold_read("' + result.toolCallId + '")';
+      summary += ' \u00b7 full: cindy_toolfold_read("' + result.toolCallId + '")';
     }
+    // Never trade content for a longer summary. Estimating this was wrong once already
+    // (a batch of "ok" results grew); the text is in hand here, so compare exactly.
+    if (summary.length >= text.length) return null;
     return { role: 'toolResult', toolCallId: result.toolCallId, toolName: result.toolName, isError: result.isError, content: [{ type: 'text', text: summary }] };
   }
 
@@ -326,7 +371,7 @@ export default function (pi) {
   // -----------------------------------------------------------------------
   pi.on('tool_result', function (event) {
     var content = event && event.content;
-    if (event && event.toolName === 'toolfold_read') return undefined;
+    if (event && event.toolName === 'cindy_toolfold_read') return undefined;
     if (typeof content === 'string') {
       if (content.length <= INGEST_LIMIT) return undefined;
       var sid = String((event && event.toolCallId) || '');
@@ -335,7 +380,7 @@ export default function (pi) {
       return { content: [{ type: 'text', text: content.slice(0, INGEST_KEEP)
         + '\n[truncated ' + (content.length - INGEST_KEEP) + ' of ' + content.length
         + ' chars; ' + (sidRetained
-          ? 'toolfold_read("' + sid + '") returns the full text]'
+          ? 'cindy_toolfold_read("' + sid + '") returns the full text]'
           : 'full text not retained (call "' + sid + '"); re-run if needed]') }] };
     }
     if (!Array.isArray(content)) return undefined;
@@ -366,7 +411,7 @@ export default function (pi) {
     }
     parts.push({ type: 'text', text: '[truncated ' + truncated + ' of ' + total
       + ' chars; ' + (retained
-        ? 'toolfold_read("' + id + '") returns the full text]'
+        ? 'cindy_toolfold_read("' + id + '") returns the full text]'
         : 'full text not retained (call "' + id + '"); re-run if needed]') });
     var out = { content: parts };
     if (Object.prototype.hasOwnProperty.call(event, 'structuredContent')) out.structuredContent = event.structuredContent;
@@ -408,7 +453,7 @@ export default function (pi) {
               var endsText = resultText.slice(markerEnd + 1).trim().length === 0;
               var tail = shape.exec(markerBody);
               var tailText = tail ? tail[1] : '';
-              var named = 'toolfold_read("' + key + '") returns the full text';
+              var named = 'cindy_toolfold_read("' + key + '") returns the full text';
               var evictedNow = 'full text not retained (call "' + key + '"); re-run if needed';
               if (endsText && (tailText === named || tailText === evictedNow)) truncatedPreview = markerBody;
             }
@@ -435,6 +480,22 @@ export default function (pi) {
     if (giant !== null) bits.push('result:\n' + giant);
     else if (resultMsg) bits.push('result (' + (resultMsg.isError === true ? 'error' : 'ok') + '):\n' + textOf(resultMsg.content));
     return { ok: true, text: bits.join('\n') };
+  }
+
+  function readSlice(id, raw, params) {
+    var offset = typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
+    if (offset >= raw.length && raw.length > 0) {
+      return { content: [{ type: 'text', text: 'Offset ' + offset + ' is past the end of ' + id + ' (' + raw.length + ' chars).' }], isError: true };
+    }
+    var rest = raw.slice(offset);
+    if (rest.length <= RECOVERY_READ_MAX_CHARS) return { content: [{ type: 'text', text: rest }] };
+    var next = offset + RECOVERY_READ_MAX_CHARS;
+    return {
+      content: [{
+        type: 'text',
+        text: rest.slice(0, RECOVERY_READ_MAX_CHARS) + '\n\n[truncated: ' + raw.length + ' chars total, ' + (raw.length - next) + ' remaining. Call cindy_toolfold_read again with offset: ' + next + ' to continue.]',
+      }],
+    };
   }
 
   function pinOriginal(callId) {
@@ -464,13 +525,16 @@ export default function (pi) {
   }
 
   pi.registerTool({
-    name: 'toolfold_read',
+    name: 'cindy_toolfold_read',
     label: 'Read a folded tool result',
     description: 'Return the full original text of one folded or truncated tool round-trip (call arguments plus the complete result). Pass the id shown inside the "[folded]" or "[truncated]" record. The folded original is also restored in the conversation until your next user message, so read once and continue instead of re-running the command.',
     parameters: {
       type: 'object',
       properties: {
-        call_id: { type: 'string', minLength: 1, maxLength: 256, description: 'Tool call id from the folded or truncated record.' },
+        // 上限按 Pi 可能发出的最长调用 id 定：Gemini 历史里出现过 2,000+ 字符的 id，
+        // 折叠/截断提示写的是完整 id，约束必须容得下它，否则提示要求的值取不回原文。
+        call_id: { type: 'string', minLength: 1, maxLength: 4096, description: 'Tool call id from the folded or truncated record.' },
+        offset: { type: 'integer', minimum: 0, description: 'Character offset to continue from when the previous read stopped at the per-read limit.' },
       },
       required: ['call_id'],
       additionalProperties: false,
@@ -487,15 +551,25 @@ export default function (pi) {
             : 'no folded or truncated round-trip with that id exists in this session.';
         return { content: [{ type: 'text', text: 'Cannot recover ' + id + ': ' + reason }], isError: true };
       }
-      if (!giants.has(String(id))) pinOriginal(id);
-      return { content: [{ type: 'text', text: original.text }] };
+      var raw = String(original.text || '');
+      if (!giants.has(String(id))) {
+        // 不超过 pin 预算的记录照旧钉住：下一次请求里看得到原文，这是既有契约。
+        // 超过预算则只转存 giant 注册表、不钉；否则 pinOriginal 会自占一条超出预算的
+        // 名额（“至少保留一条”），同一段文本在下一次请求里就出现两份：恢复结果与钉回的原调用。
+        if (raw.length <= PIN_BUDGET_CHARS) {
+          pinOriginal(id);
+        } else if (!admitGiant(String(id), raw)) {
+          pinOriginal(id);
+        }
+      }
+      return readSlice(String(id), raw, params);
     },
   });
 
   pi.on('context', function (event) {
     var messages = event && Array.isArray(event.messages) ? event.messages : null;
     if (!messages || messages.length === 0) return undefined;
-    // Host text-only turns block every tool, toolfold_read included. Leave the history
+    // Host text-only turns block every tool, cindy_toolfold_read included. Leave the history
     // unfolded for that request so the model never sees a summary it cannot expand.
     if (textOnlyTurnActive()) return undefined;
 
@@ -527,14 +601,14 @@ export default function (pi) {
     var candidateCalls = 0;
     for (var f = 0; f < trips.length; f++) {
       var probe = trips[f];
-      if (probe.end >= boundary || probe.hasImage || probe.chars < 80) continue;
+      if (probe.end >= boundary || probe.hasImage || probe.removable < 80) continue;
       if (allFolded(probe)) continue;
       var already = false;
       for (var pb = 0; pb < probe.calls.length; pb++) if (isFoldedCall(probe.calls[pb])) already = true;
       if (already) continue;
       candidates.push(probe);
-      candidateChars += probe.chars;
-      candidateCalls += probe.callCount;
+      candidateChars += probe.removable;
+      candidateCalls += probe.removableCalls;
     }
     if (candidateCalls >= MIN_PAIRS || candidateChars >= MIN_CHARS) {
       if (foldedSize > MAX_FOLDED) {
@@ -564,7 +638,7 @@ export default function (pi) {
     var out = null;
     for (var g = 0; g < trips.length; g++) {
       var unit = trips[g];
-      if (unit.hasImage || unit.chars < 80) continue;
+      if (unit.hasImage || unit.removable < 80) continue;
       var assistant = messages[unit.start];
       var blocks = assistant.content;
       var nextContent = [];
@@ -575,8 +649,9 @@ export default function (pi) {
         if (block && block.type === 'toolCall' && foldable(String(block.id))) {
           // Fold arguments only past the budget; below it the pointer is larger than the
           // payload and the call block is the shape the model re-sends by accident.
-          var foldArgs = ARG_FOLD_CHARS > 0 && argChars(block) > ARG_FOLD_CHARS;
-          callsById[String(block.id)] = { call: block, argsFolded: foldArgs };
+          var plan = unit.folds[String(block.id)];
+          var foldArgs = Boolean(plan && plan.foldArgs === true);
+          callsById[String(block.id)] = { call: block, argsFolded: foldArgs, foldResult: Boolean(plan && plan.foldResult === true) };
           if (foldArgs) {
             nextContent.push(foldedCall(block));
             argsReplaced = true;
@@ -596,9 +671,11 @@ export default function (pi) {
       for (var r = 0; r < unit.results.length; r++) {
         var result = unit.results[r];
         var entry = callsById[String(result.toolCallId)];
-        if (!entry) continue;
+        if (!entry || !entry.foldResult) continue;
+        var record = foldedResult(result, entry.call, entry.argsFolded);
+        if (!record) continue;
         if (out === null) out = messages.slice();
-        out[unit.indexes[r]] = foldedResult(result, entry.call, entry.argsFolded);
+        out[unit.indexes[r]] = record;
       }
     }
 
