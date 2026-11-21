@@ -145,6 +145,7 @@ it('宿主中断遗言：flushTerminationReports 投「宿主中断」报告，�
   expect(report.persistedContent).toContain('后台命令观察中断');
   // dispose 纯杀树：退出流程在遗言之后调用它，不会产生第二份报告。
   service.dispose();
+  // real-wait: 断言「不再产生第二份报告」是负向观察，杀树到 exit 回调的间隔只能真实等待。
   await new Promise((resolve) => setTimeout(resolve, 400));
   expect(capture).toHaveBeenCalledTimes(1);
 });
@@ -214,6 +215,7 @@ it('暂停队列时退出：遗言没进队列就不删 meta，留给下次启�
   await expect(access(metaPath)).resolves.toBeUndefined();
   expect(capture).not.toHaveBeenCalled();
   service.dispose(); // 杀树触发的 exit 也不删 meta
+  // real-wait: 断言 meta 未被删除是负向观察，需等杀树引发的 exit 回调走完。
   await new Promise((resolve) => setTimeout(resolve, 400));
   await expect(access(metaPath)).resolves.toBeUndefined();
   // 重启（新实例，同一 logDir）+队列恢复：对账补投，一次性。
@@ -324,9 +326,11 @@ it('名额让出后治理仍在：win32 硬顶到点留痕，POSIX 组探测等�
   const warn = vi.fn();
   const capture = vi.fn();
   const service = buildService(capture, undefined, { logger: { info: () => {}, warn } });
+  // 子进程立即退出：硬顶只留“命令已退出”的留痕分支，不把机器负载（首次扫描
+  // 重启后的 node_modules 可能喷发百毫秒）掺进用例成败。
   await service.start({
     sessionId: 'sess-1',
-    command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => process.exit(0), 500)"`,
+    command: `${JSON.stringify(process.execPath)} -e "process.exit(0)"`,
     cwd: logDir,
     timeoutMs: 1_000,
   });
