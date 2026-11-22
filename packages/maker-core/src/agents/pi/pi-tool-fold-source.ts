@@ -127,6 +127,10 @@ export default function (pi) {
   // count only payload that actually disappears.
   var RECORD_ESTIMATE_CHARS = 160;
 
+  // 权限门按名字给 cindy_toolfold_read 免审批；立一个进程内标记，让桥只对「本轮真的加载了
+  // 折叠扩展」的会话豁免。折叠关闭时同名工具只能是外部注册的，必须照常走审批。
+  try { globalThis[Symbol.for('cindy.pi.toolFold')] = true; } catch (markerError) { /* ignore */ }
+
   // Sticky fold marks: toolCallId -> payload chars. Survives requests in this process;
   // a restart simply re-folds on the next batch.
   var foldedIds = Object.create(null);
@@ -136,7 +140,15 @@ export default function (pi) {
   var pinned = new Map();
   var pinnedChars = 0;
   var recoverClock = 0;
-  var userSeen = -1;
+  var userSeen = '';
+
+  // user 消息身份：时间戳 + 长度 + 开头片段。压缩保留尾部消息，所以同一回合内它稳定；
+  // 会话被编辑或换回合时必变。
+  function turnKey(message) {
+    if (!message) return '';
+    var text = textOf(message.content);
+    return String(message.timestamp || '') + '|' + text.length + '|' + text.slice(0, 24);
+  }
   // Raw conversation snapshot from the latest context pass. Recovery reads originals
   // here instead of persisting payloads: pi already holds the full transcript.
   var lastMessages = null;
@@ -169,6 +181,22 @@ export default function (pi) {
       if (block && block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
     }
     return parts.join('\n');
+  }
+
+  // 投影体积只算文本（图片按块计，不按字节），只用来卡「输出不得大于输入」。
+  function contentChars(list) {
+    var total = 0;
+    for (var i = 0; i < list.length; i++) {
+      var content = list[i] && list[i].content;
+      if (typeof content === 'string') { total += content.length; continue; }
+      if (!Array.isArray(content)) continue;
+      for (var j = 0; j < content.length; j++) {
+        var block = content[j];
+        if (block && typeof block.text === 'string') total += block.text.length;
+        else if (block && block.type === 'toolCall' && block.arguments) total += JSON.stringify(block.arguments).length;
+      }
+    }
+    return total;
   }
 
   // Scan lines in place: a multi-megabyte payload split into an array of lines per folded
@@ -328,13 +356,16 @@ export default function (pi) {
   function foldedResult(result, call, argsFolded) {
     var text = textOf(result.content);
     var lines = text ? countLines(text) : 0;
-    var summary = '[folded] ' + (result.isError === true ? 'error' : 'ok');
-    if (call && call.name) summary += ' \u00b7 ' + String(call.name);
+    var status = result.isError === true ? 'error' : 'ok';
+    // Name first, status later: a line that opens with "ok" reads like a result the model
+    // can go on writing, and one model did exactly that (fake "ok" records, no call behind
+    // them). Same byte length as the old prefix, so fold decisions and savings do not move.
+    var summary = '[folded] ' + String((call && call.name) || '?');
     if (argsFolded && call) {
       var subject = callSubject(call);
       if (subject) summary += ' \u00b7 ' + subject;
     }
-    summary += ' \u00b7 ' + lines + ' lines/' + text.length + ' chars';
+    summary += ' \u00b7 ' + status + ' \u00b7 ' + lines + ' lines/' + text.length + ' chars';
     var head = firstLine(text);
     if (head) summary += ' \u00b7 ' + head;
     if (result.isError === true) {
@@ -421,50 +452,46 @@ export default function (pi) {
   // Ingestion truncation: a giant result never enters the transcript in full, so it
   // is never cached and never folded — truncating before the first send is free.
   // -----------------------------------------------------------------------
-  pi.on('tool_result', function (event) {
-    var content = event && event.content;
-    if (event && event.toolName === 'cindy_toolfold_read') return undefined;
-    if (typeof content === 'string') {
-      if (content.length <= INGEST_LIMIT) return undefined;
-      var sid = String((event && event.toolCallId) || '');
-      if (!sid) return undefined;
-      var sidRetained = admitGiant(sid, content);
-      return { content: [{ type: 'text', text: content.slice(0, INGEST_KEEP)
-        + '\n[truncated ' + (content.length - INGEST_KEEP) + ' of ' + content.length
-        + ' chars; ' + (sidRetained
-          ? 'cindy_toolfold_read("' + sid + '") returns the full text]'
-          : 'full text not retained (call "' + sid + '"); re-run if needed]') }] };
-    }
-    if (!Array.isArray(content)) return undefined;
-    var hasImage = false;
+  // 结果限长只在这一处判定：字符串与多块内容走同一条路，门槛（INGEST_LIMIT）与保留
+  // 额度（INGEST_KEEP）只在这里比较。调用点不再各自比长度——「一个地方放行、另一个地方
+  // 截断」正是漏限的温床。图片块原样保留：带图往返本来不折，文本再不限就没人能压它。
+  function clipContent(content, id) {
+    var isString = typeof content === 'string';
+    var blocks = isString ? [{ type: 'text', text: content }] : content;
+    if (!Array.isArray(blocks)) return null;
     var total = 0;
-    for (var i = 0; i < content.length; i++) {
-      var block = content[i];
-      if (!block) continue;
-      if (block.type === 'image') hasImage = true;
-      if (block.type === 'text' && typeof block.text === 'string') total += block.text.length;
+    for (var i = 0; i < blocks.length; i++) {
+      var block = blocks[i];
+      if (block && block.type === 'text' && typeof block.text === 'string') total += block.text.length;
     }
-    if (hasImage || total <= INGEST_LIMIT) return undefined;
-    var id = String((event && event.toolCallId) || '');
-    if (!id) return undefined;
-    var fullText = textOf(content);
-    admitGiant(id, fullText);
-    var retained = giants.get(id) === fullText;
-    var parts = [];
+    if (total <= INGEST_LIMIT) return null;
+    var full = textOf(blocks);
+    admitGiant(id, full);
+    var retained = giants.get(id) === full;
     var kept = 0;
     var truncated = 0;
-    for (var j = 0; j < content.length; j++) {
-      var b = content[j];
+    var parts = [];
+    for (var j = 0; j < blocks.length; j++) {
+      var b = blocks[j];
       if (!b || b.type !== 'text' || typeof b.text !== 'string') { parts.push(b); continue; }
       var room = INGEST_KEEP - kept;
       if (room <= 0) { truncated += b.text.length; continue; }
       if (b.text.length <= room) { kept += b.text.length; parts.push(b); }
-      else { kept = INGEST_KEEP; truncated += b.text.length - room; parts.push({ type: 'text', text: b.text.slice(0, room) }); }
+      else { truncated += b.text.length - room; parts.push({ type: 'text', text: b.text.slice(0, room) }); kept = INGEST_KEEP; }
     }
     parts.push({ type: 'text', text: '[truncated ' + truncated + ' of ' + total
       + ' chars; ' + (retained
         ? 'cindy_toolfold_read("' + id + '") returns the full text]'
         : 'full text not retained (call "' + id + '"); re-run if needed]') });
+    return isString ? [{ type: 'text', text: textOf(parts) }] : parts;
+  }
+
+  pi.on('tool_result', function (event) {
+    if (event && event.toolName === 'cindy_toolfold_read') return undefined;
+    var id = String((event && event.toolCallId) || '');
+    if (!id) return undefined;
+    var parts = clipContent(event && event.content, id);
+    if (parts === null) return undefined;
     var out = { content: parts };
     if (Object.prototype.hasOwnProperty.call(event, 'structuredContent')) out.structuredContent = event.structuredContent;
     return out;
@@ -529,9 +556,17 @@ export default function (pi) {
       bits.push('call: ' + callSummary(callBlock));
       try { bits.push('arguments: ' + JSON.stringify(callBlock.arguments || {})); } catch (error) { /* ignore */ }
     }
-    if (giant !== null) bits.push('result:\n' + giant);
-    else if (resultMsg) bits.push('result (' + (resultMsg.isError === true ? 'error' : 'ok') + '):\n' + textOf(resultMsg.content));
-    return { ok: true, text: bits.join('\n') };
+    // Two halves kept apart: the caller may re-admit only the result (the half that can be
+    // absent from the transcript) while still returning call + arguments above.
+    var resultText = '';
+    if (giant !== null) {
+      resultText = giant;
+      bits.push('result:\n' + giant);
+    } else if (resultMsg) {
+      resultText = textOf(resultMsg.content);
+      bits.push('result:\n' + resultText);
+    }
+    return { ok: true, text: bits.join('\n'), result: resultText };
   }
 
   function readSlice(id, raw, params) {
@@ -605,13 +640,17 @@ export default function (pi) {
       }
       var raw = String(original.text || '');
       if (!giants.has(String(id))) {
-        // 不超过 pin 预算的记录照旧钉住：下一次请求里看得到原文，这是既有契约。
-        // 超过预算则只转存 giant 注册表、不钉；否则 pinOriginal 会自占一条超出预算的
-        // 名额（“至少保留一条”），同一段文本在下一次请求里就出现两份：恢复结果与钉回的原调用。
-        if (raw.length <= PIN_BUDGET_CHARS) {
+        // 只有「这次真的把整段返回」才钉住：读上限比 pin 预算小时，钉住等于把整段
+        // 塞回下一次请求，把读上限直接作废（上下文快满时尤其危险）。部分读取只转存
+        // 结果到 giant 注册表，投影里那条往返继续留在折叠态。
+        // 只存结果那半：giants 是「结果」的注册表，存整段会在下次 findOriginal 里
+        // 再拼一次调用说明与参数（续读的 offset 随之失真）。
+        if (raw.length <= PIN_BUDGET_CHARS && raw.length <= RECOVERY_READ_MAX_CHARS) {
           pinOriginal(id);
-        } else if (!admitGiant(String(id), raw)) {
-          pinOriginal(id);
+        } else if (!admitGiant(String(id), String(original.result || ''))) {
+          // 转存被拒（超出内存预算）时不能退回钉住：那等于让一次取回把整段原文塞回
+          // 上下文，把读上限和 pin 预算一起作废。这里 fail-closed，保持折叠并说明原因。
+          return { content: [{ type: 'text', text: 'Cannot recover ' + id + ': the payload is over the retention budget, so it was not retained; re-run the command instead.' }], isError: true };
         }
       }
       return readSlice(String(id), raw, params);
@@ -625,14 +664,18 @@ export default function (pi) {
     // unfolded for that request so the model never sees a summary it cannot expand.
     if (textOnlyTurnActive()) return undefined;
 
-    // Turn boundary: pins live until the next user message (a compaction resets the
-    // count too, which is fine — compaction drops the pinned entries anyway).
-    var users = 0;
-    for (var u = 0; u < messages.length; u++) if (messages[u] && messages[u].role === 'user') users += 1;
-    if (users !== userSeen) {
+    // Turn boundary: pins live until the next user message. 判定用「最后一条 user 消息的
+    // 身份」而不是条数：压缩会减少保留的 user 消息，条数可能被新回合刚好补平，边界就
+    // 漏判，陈旧的 pin 会跟到新回合里继续占上下文。
+    var lastUser = null;
+    for (var u = messages.length - 1; u >= 0; u--) {
+      if (messages[u] && messages[u].role === 'user') { lastUser = messages[u]; break; }
+    }
+    var userKey = turnKey(lastUser);
+    if (userKey !== userSeen) {
       pinned.clear();
       pinnedChars = 0;
-      userSeen = users;
+      userSeen = userKey;
     }
     lastMessages = messages;
 
@@ -764,6 +807,9 @@ export default function (pi) {
       }
       merged.push(current);
     }
+    // 只允许变小：任何入口将来漏了限额（新内容类型、新的折叠分支、异常回退），都在
+    // 这里退回原样，而不是把上下文撑大。这是投影层的最后一道闸。
+    if (contentChars(merged) > contentChars(messages)) return undefined;
     return { messages: merged };
   });
 }

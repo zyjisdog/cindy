@@ -15,6 +15,7 @@ function loadExtension(env: Record<string, string> = {}) {
   // Budget tests must not leak into the rest of the suite: reset what they switch off.
   process.env.CINDY_PI_TOOL_FOLD_ARG_CHARS = env.CINDY_PI_TOOL_FOLD_ARG_CHARS ?? '200';
   process.env.CINDY_PI_TOOL_FOLD_RECOVERY_CHARS = env.CINDY_PI_TOOL_FOLD_RECOVERY_CHARS ?? '120000';
+  process.env.CINDY_PI_TOOL_FOLD_PIN_BUDGET = env.CINDY_PI_TOOL_FOLD_PIN_BUDGET ?? '64000';
   const body = CINDY_TOOL_FOLD_EXTENSION_SOURCE.replace(/^export default /m, '');
   const handlers: Record<string, Handler> = {};
   const tools: Record<string, Tool> = {};
@@ -103,7 +104,10 @@ describe('cindy-tool-fold extension source', () => {
     expect((resident.content as Block[]).find((block) => block.type === 'toolCall')).toEqual((messages[64].content as Block[])[0]);
     expect(out.slice(out.length - 14)).toEqual(messages.slice(66));
     const first = foldedText.slice(foldedText.indexOf('[folded]'));
-    expect(first).toContain('[folded] ok \u00b7 bash');
+    expect(first).toContain('[folded] bash');
+    // The status trails the subject so the line never opens like a result the model can continue.
+    expect(first).not.toMatch(/^\[folded\] (ok|error)/);
+    expect(first).toContain('\u00b7 ok \u00b7 ');
     expect(first).toContain('cindy_toolfold_read("call-0")');
     expect(first).toContain('run step 0');
     expect(first).toContain('step 0 ok');
@@ -130,7 +134,8 @@ describe('cindy-tool-fold extension source', () => {
     messages[0] = call('call-0', 'read', args);
     const out = projection(context, messages);
     const record = records(out)[0];
-    expect(record).toContain('[folded] ok \u00b7 read');
+    expect(record).toContain('[folded] read');
+    expect(record).toContain('\u00b7 ok \u00b7 ');
     // The path moved into the record; there is no call block left to show it.
     expect(record).toContain(args.path);
     expect(callIds(out)).not.toContain('call-0');
@@ -225,6 +230,13 @@ describe('cindy-tool-fold extension source', () => {
     expect(callIds(out)).toContain('call-32');
   });
 
+  it('never projects more characters than the request carried', () => {
+    const { context } = loadExtension();
+    const messages = pairs(40);
+    const out = projection(context, messages);
+    expect(JSON.stringify(out).length).toBeLessThan(JSON.stringify(messages).length);
+  });
+
   it('keeps folds sticky and does not rewrite them again until the next batch', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const first = projection(context, pairs(40));
@@ -279,16 +291,81 @@ describe('cindy-tool-fold extension source', () => {
     expect(records(released).join('\n')).toContain('call-5');
   });
 
+  it('clears pins when compaction drops a user message and a new turn replaces it', async () => {
+    const { context, tool } = loadExtension();
+    const base = pairs(40);
+    const turn1 = [{ role: 'user', content: [{ type: 'text', text: 'first turn' }] }, ...base];
+    projection(context, turn1);
+    await tool.execute('t2', { call_id: 'call-5' });
+    expect(callIds(projection(context, turn1))).toContain('call-5');
+    // 压缩掉了旧的 user 消息，新回合又补上一条：条数不变，边界仍必须识别出来，
+    // 否则陈旧的 pin 会跟到新回合里继续占上下文。
+    const turn2 = [...base, { role: 'user', content: [{ type: 'text', text: 'second turn' }] }];
+    expect(callIds(projection(context, turn2))).not.toContain('call-5');
+  });
+
+  it('refuses a recovery the retention budget cannot hold instead of pinning it back', async () => {
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_GIANT_BUDGET: '100000' });
+    const messages = pairs(40);
+    messages[22] = call('too-big', 'bash', { command: 'cat huge.log' });
+    messages[23] = result('too-big', 'bash', 'z'.repeat(200000));
+    projection(context, messages);
+    const read = await tool.execute('t3', { call_id: 'too-big' });
+    expect(read.isError).toBe(true);
+    expect(String(read.content![0].text)).toContain('retention budget');
+    // 转存被拒也不能钉住：否则一次取回就把整段原文塞回请求。
+    expect(callIds(projection(context, messages))).not.toContain('too-big');
+  });
+
   it('slices a large folded record without pinning the whole history back in', async () => {
     const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
     const messages = pairs(40);
-    messages[0] = call('huge-write', 'write', { path: 'a.txt', content: 'w'.repeat(30000) });
-    messages[1] = result('huge-write', 'write', 'wrote 30000 bytes');
+    messages[0] = call('huge-write', 'read', { path: 'big.txt' });
+    messages[1] = result('huge-write', 'read', 'w'.repeat(30000));
     projection(context, messages);
     const recovered = await tool.execute('t-slice', { call_id: 'huge-write' });
     const text = String(recovered.content![0].text);
     expect(text.length).toBeLessThan(1200);
     expect(text).toContain('Call cindy_toolfold_read again with offset');
+    // 部分读取不能钉住：钉住会把整段塞回下一次请求，读上限就白设了。
+    const afterSlice = projection(context, messages);
+    expect(callIds(afterSlice)).not.toContain('huge-write');
+    expect(records(afterSlice).join('\n')).toContain('huge-write');
+  });
+
+  // Bug: 超过 pin 预算的记录存进 giants 时存的是“调用说明 + 参数 + 结果”整段，
+  // 下次 findOriginal 又拼一次头部，续读的 offset 于是偏移，全文里出现两份参数。
+  it('keeps continuation stable when a large record is re-admitted instead of pinned', async () => {
+    const { context, tool } = loadExtension({
+      CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000',
+      CINDY_PI_TOOL_FOLD_PIN_BUDGET: '2000',
+    });
+    const messages = pairs(40);
+    const body = 'y'.repeat(3600);
+    messages[22] = call('big-one', 'bash', { command: 'cat big.txt' });
+    messages[23] = result('big-one', 'bash', body);
+    projection(context, messages);
+
+    const readAt = async (offset?: number) => {
+      const read = await tool.execute('t-continue', offset === undefined ? { call_id: 'big-one' } : { call_id: 'big-one', offset });
+      return String(read.content![0].text);
+    };
+    const first = await readAt();
+    const next = Number(/with offset: (\d+)/.exec(first)![1]);
+    const second = await readAt(next);
+    const again = await readAt();
+    // 同一个 id 再读一次必须得到同样的开头：重拼是稳定的（旧写法把整段又塞进 giants，
+    // 第二次拼出的开头带着第二份“调用说明 + 参数”）。
+    expect(again).toBe(first);
+    // 续读从断点接著走：全长里头部只出现一次，结果体连续。
+    const strip = (text: string) => text.replace(/\n\n\[truncated:[\s\S]*$/, '');
+    const joined = strip(first) + strip(second);
+    expect(joined.match(/arguments:/g)).toHaveLength(1);
+    expect(joined.match(/result:/g)).toHaveLength(1);
+    const bodyAt = joined.indexOf(body.slice(0, 64));
+    expect(bodyAt).toBeGreaterThan(0);
+    expect(joined.slice(bodyAt)).toBe(body.slice(0, joined.length - bodyAt));
+    expect(joined.length).toBeGreaterThan(next);
   });
 
   it('recovers a folded result that merely quotes the truncation marker text', async () => {
@@ -535,6 +612,24 @@ describe('cindy-tool-fold extension source', () => {
     messages[1] = { role: 'toolResult', toolCallId: 'call-0', toolName: 'bash', content: [{ type: 'text', text: kept }] };
     const out = projection(context, messages);
     expect(isRecord(out[0])).toBe(true);
+  });
+
+  it('bounds the text of an image-bearing result and keeps the image', async () => {
+    const { toolResult, tool } = loadExtension();
+    const giant = 'z'.repeat(25000);
+    const out = toolResult({
+      toolName: 'mcp__shot__capture',
+      toolCallId: 'img-1',
+      content: [{ type: 'image', data: 'aGk=', mimeType: 'image/png' }, { type: 'text', text: giant }],
+    }) as { content: Block[] } | undefined;
+    expect(out).toBeDefined();
+    const blocks = out!.content ?? [];
+    expect(blocks.some((b) => b.type === 'image')).toBe(true);
+    const kept = blocks.filter((b) => b.type === 'text').map((b) => String(b.text ?? '')).join('\n');
+    expect(kept.length).toBeLessThan(2600);
+    expect(kept).toContain('cindy_toolfold_read("img-1")');
+    const recovered = await tool.execute('t-img', { call_id: 'img-1' });
+    expect(String(recovered.content![0].text)).toContain(giant);
   });
 
   it('counts parallel calls, not messages, toward the pairs gate', () => {
