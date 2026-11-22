@@ -1121,6 +1121,20 @@
       "when": 1795172273030,
       "tag": "0159_close_linked_side_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 160,
+      "version": "6",
+      "when": 1795313450815,
+      "tag": "0160_restore_native_usage_currency",
+      "breakpoints": true
+    },
+    {
+      "idx": 161,
+      "version": "6",
+      "when": 1795316253442,
+      "tag": "0161_native_usage_amount_metadata",
+      "breakpoints": true
     }
   ]
 }

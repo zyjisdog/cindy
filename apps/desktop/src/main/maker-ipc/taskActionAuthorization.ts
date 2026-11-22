@@ -33,6 +33,7 @@ export const TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
   'release_session_queue_hold',
   'archive_sessions',
   'unarchive_sessions',
+  'snooze_sessions',
   'delete_session',
   'fork_session',
   'rewind_session',
