@@ -207,13 +207,8 @@ describe('dynamic lizi MCP session context', () => {
     const first = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
     const second = Object.keys(tools(createOrcaMcpServer(createOrcaDeps(), context)));
 
-<<<<<<< HEAD
     // 21 个 team 工具 + 3 个只读诊断工具。
     expect(first).toHaveLength(24);
-=======
-    // 20 个 team 工具 + 3 个只读诊断工具。
-    expect(first).toHaveLength(23);
->>>>>>> refs/remotes/upstream/pr/10477
     expect(first).toEqual(second);
     expect(first).toContain('create_worker');
     expect(first).toContain('create_workers');

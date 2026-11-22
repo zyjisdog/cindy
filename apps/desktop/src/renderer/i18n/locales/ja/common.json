@@ -15619,13 +15619,9 @@
     },
     "systemCard": {
       "orcaDispatch": {
-<<<<<<< HEAD
         "sent": "{{worker}} に派遣しました",
         "queued": "{{worker}} のキューに追加しました",
-        "unverified": "派遣を確認できません",
-=======
         "unverified": "ターン宣言が未確認",
->>>>>>> refs/remotes/upstream/pr/10477
         "notice": {
           "noDeclaration": "このターンの宣言が提出されていません",
           "declaredNotDispatched": "{{target}} への派遣を宣言していますが、ホストは受理していません",

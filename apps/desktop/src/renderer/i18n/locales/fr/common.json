@@ -15790,13 +15790,9 @@
     },
     "systemCard": {
       "orcaDispatch": {
-<<<<<<< HEAD
         "sent": "Envoyé à {{worker}}",
         "queued": "En file d’attente pour {{worker}}",
-        "unverified": "Envoi non vérifié",
-=======
         "unverified": "Déclaration de tour non vérifiée",
->>>>>>> refs/remotes/upstream/pr/10477
         "notice": {
           "noDeclaration": "Ce tour n'a présenté aucune déclaration d'envoi",
           "declaredNotDispatched": "La déclaration annonce un envoi vers {{target}} que l'hôte n'a jamais accepté",

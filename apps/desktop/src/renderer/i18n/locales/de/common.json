@@ -15648,13 +15648,9 @@
     },
     "systemCard": {
       "orcaDispatch": {
-<<<<<<< HEAD
         "sent": "An {{worker}} gesendet",
         "queued": "Für {{worker}} in der Warteschlange",
-        "unverified": "Übergabe nicht bestätigt",
-=======
         "unverified": "Turn-Erklärung unbestätigt",
->>>>>>> refs/remotes/upstream/pr/10477
         "notice": {
           "noDeclaration": "Für diesen Turn liegt keine Übergabe-Erklärung vor",
           "declaredNotDispatched": "Die Erklärung nennt eine Übergabe an {{target}}, die Cindy nie angenommen hat",
