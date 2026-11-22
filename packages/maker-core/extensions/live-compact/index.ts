@@ -1886,6 +1886,7 @@ function budgetText(message: any): string {
 // 每 4 个汉字 pi 记 1 token,真实约 1.5 字符/token,补 (1/1.5 - 1/4) ≈ 0.4167。
 // 注意:这条对卡片本身同样生效 —— 中文卡片 token 被抬高,更容易撞上
 // `framedTokens >= chunk.tokens` 被拒。中文场景有意偏保守。
+// 1.1.12 原样:正则只认基本汉字区,假名与谚文不进补偿(日韩会话低估约 2 倍),已报上游 #68。
 const CJK_TOKEN_RE = /[\u4e00-\u9fff]/g;
 function estimateTokens(message: any): number {
   const base = estimateMessageTokens(message);
@@ -2845,7 +2846,11 @@ export function selectNewestChunk(
   const nodes = entries.map((_, index) => index);
   if (nodes.length === 0) return warn('empty');
   // 原仓 first = 首个节点是 system 时从 1 开始:system 不应进入切割区,也不应成为下限。
-  const first = entries[0]?.role === 'system' ? 1 : 0;
+  // pi 的 event.entries 里前面还有 system 消息与会话元数据条目:它们不贡献可编辑的模型
+  // 内容,拿它们当切点会被 pi 整批拒掉("does not contribute editable model content",
+  // 实测 2026-11-22 dev 里连续 23 次),所以下限取第一条真正可编辑的模型消息。
+  const first = entries.findIndex((entry) => entry.role !== "system" && entry.text.length > 0);
+  if (first < 0) return warn("no editable entry");
   const { prefixBalanced, suffixBalanced } = balanceIndexes(entries);
   const suffixClean = (end: number) => end + 1 >= entries.length || suffixBalanced[end + 1];
   const engine: SpineEngine = context.engine ?? 'cloud';
