@@ -14425,7 +14425,6 @@
       "regionAria": "전송 대기 중인 메시지 큐",
       "listAria": "큐의 메시지",
       "pausedFooter": "작업 중지됨, 대기열 일시정지",
-
       "steerUnsupportedNotice": "이 엔진은 끼어들기를 지원하지 않습니다. 대기 중인 메시지는 현재 턴이 끝난 후 전송됩니다.",
       "resumeAction": "계속 전송",
       "resumeAria": "대기열 메시지 전송 계속",
@@ -15619,6 +15618,8 @@
     },
     "systemCard": {
       "orcaDispatch": {
+        "sent": "{{worker}}에게 전달했습니다",
+        "queued": "{{worker}}의 대기열에 추가했습니다",
         "unverified": "턴 선언 미확인",
         "notice": {
           "noDeclaration": "이번 턴의 보고 선언이 제출되지 않았습니다",
@@ -15800,19 +15801,6 @@
         "baseline": "기준 브랜치: ",
         "additionalDirectories": "추가: ",
         "unverifiedResult": "아래 결과가 생성되었지만 현재도 유효한지 확인하지 못했습니다."
-      },
-      "orcaDispatch": {
-        "sent": "{{worker}}에게 전달했습니다",
-        "queued": "{{worker}}의 대기열에 추가했습니다",
-        "unverified": "발송이 확인되지 않았습니다",
-        "notice": {
-          "claim": "Lead가 발송했다고 밝혔습니다",
-          "claimTarget": "Lead가 {{target}}에 발송했다고 밝혔습니다",
-          "noDispatch": "하지만 호스트는 이번 턴에 어떤 발송도 받지 않았습니다",
-          "notDispatched": "하지만 호스트에는 이번 턴 {{target}}으로 보낸 기록이 없습니다",
-          "unknownId": "하지만 인용한 대기열 ID {{id}}와 맞는 발송이 없습니다",
-          "body": "{{claim}}. {{reason}}. 인용 출처는 이번 턴의 답변입니다: “{{quote}}”. Lead에 재발송을 요청했습니다."
-        }
       }
     },
     "markdownRenderer": {

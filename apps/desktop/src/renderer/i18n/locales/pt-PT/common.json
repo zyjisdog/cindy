@@ -14596,7 +14596,6 @@
       "regionAria": "Fila de mensagens pendentes",
       "listAria": "Mensagens em fila",
       "pausedFooter": "Tarefa parada, fila em pausa",
-
       "steerUnsupportedNotice": "Este motor não permite orientar. As mensagens em fila serão enviadas quando o turno atual terminar.",
       "resumeAction": "Continuar a enviar",
       "resumeAria": "Continuar a enviar mensagens em fila",
@@ -15790,6 +15789,8 @@
     },
     "systemCard": {
       "orcaDispatch": {
+        "sent": "Enviado para {{worker}}",
+        "queued": "Em fila para {{worker}}",
         "unverified": "Declaração de turno por verificar",
         "notice": {
           "noDeclaration": "Este turno não apresentou declaração de envio",
@@ -15971,19 +15972,6 @@
         "baseline": "Branch base: ",
         "additionalDirectories": "Também: ",
         "unverifiedResult": "O revisor apresentou estas conclusões, mas não foi possível verificar a sua validade."
-      },
-      "orcaDispatch": {
-        "sent": "Enviado para {{worker}}",
-        "queued": "Em fila para {{worker}}",
-        "unverified": "Envio não verificado",
-        "notice": {
-          "claim": "O Lead diz ter enviado",
-          "claimTarget": "O Lead diz ter enviado para {{target}}",
-          "noDispatch": "Mas o host não aceitou nenhum envio neste turno",
-          "notDispatched": "Mas o host não tem envio para {{target}} registado neste turno",
-          "unknownId": "Mas o id de fila citado {{id}} não corresponde a nenhum envio",
-          "body": "{{claim}}. {{reason}}. Citação da resposta deste turno: “{{quote}}”. O Lead foi solicitado a reenviar."
-        }
       }
     },
     "markdownRenderer": {

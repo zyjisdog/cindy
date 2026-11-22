@@ -14425,7 +14425,6 @@
       "regionAria": "待傳送訊息佇列",
       "listAria": "佇列訊息",
       "pausedFooter": "任務已停止，佇列暫停",
-
       "steerUnsupportedNotice": "目前引擎不支援插話，排隊中的訊息會在目前回合結束後送出。",
       "resumeAction": "繼續傳送",
       "resumeAria": "繼續傳送佇列訊息",
@@ -15618,6 +15617,8 @@
     },
     "systemCard": {
       "orcaDispatch": {
+        "sent": "已派給 {{worker}}",
+        "queued": "已排隊給 {{worker}}",
         "unverified": "回合聲明未核實",
         "notice": {
           "noDeclaration": "這一輪沒有交回合聲明",
@@ -15799,19 +15800,6 @@
         "baseline": "基準分支：",
         "additionalDirectories": "另含：",
         "unverifiedResult": "以下結論已產生，但未能驗證是否仍然有效。"
-      },
-      "orcaDispatch": {
-        "sent": "已派給 {{worker}}",
-        "queued": "已排隊給 {{worker}}",
-        "unverified": "派單未經核實",
-        "notice": {
-          "claim": "Lead 稱已派單",
-          "claimTarget": "Lead 稱已派給 {{target}}",
-          "noDispatch": "宿主這一輪沒有接受任何派單",
-          "notDispatched": "宿主這一輪沒有派往 {{target}} 的記錄",
-          "unknownId": "引用的排隊編號 {{id}} 不對應任何派單",
-          "body": "{{claim}}。{{reason}}。引文取自它這輪回覆：「{{quote}}」。已要求 Lead 重派。"
-        }
       }
     },
     "markdownRenderer": {

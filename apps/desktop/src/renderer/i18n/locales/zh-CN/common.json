@@ -14425,7 +14425,6 @@
       "regionAria": "待发送消息队列",
       "listAria": "队列消息",
       "pausedFooter": "任务已停止，队列暂停",
-
       "steerUnsupportedNotice": "当前引擎不支持插话，排队的消息会在当前这一轮结束后发送。",
       "resumeAction": "继续发送",
       "resumeAria": "继续发送队列消息",
@@ -15619,6 +15618,8 @@
     },
     "systemCard": {
       "orcaDispatch": {
+        "sent": "已派给 {{worker}}",
+        "queued": "已排队给 {{worker}}",
         "unverified": "回合声明未核实",
         "notice": {
           "noDeclaration": "这一轮没有交回合声明",
@@ -15800,19 +15801,6 @@
         "baseline": "基线分支：",
         "additionalDirectories": "另含：",
         "unverifiedResult": "以下结论已生成，但未能验证是否仍然有效。"
-      },
-      "orcaDispatch": {
-        "sent": "已派给 {{worker}}",
-        "queued": "已排队给 {{worker}}",
-        "unverified": "派单未经核实",
-        "notice": {
-          "claim": "Lead 称已派单",
-          "claimTarget": "Lead 称已派给 {{target}}",
-          "noDispatch": "宿主这一轮没有接受任何派单",
-          "notDispatched": "宿主这一轮没有派往 {{target}} 的记录",
-          "unknownId": "引用的队列编号 {{id}} 不对应任何派单",
-          "body": "{{claim}}。{{reason}}。引文取自它这轮回复：「{{quote}}」。已要求 Lead 重派。"
-        }
       }
     },
     "markdownRenderer": {

@@ -14479,7 +14479,6 @@
       "regionAria": "Pending message queue",
       "listAria": "Queued messages",
       "pausedFooter": "Task stopped, queue paused",
-
       "steerUnsupportedNotice": "This engine doesn’t support steering. Queued messages will be sent after the current turn.",
       "resumeAction": "Continue sending",
       "resumeAria": "Continue sending queued messages",
@@ -15684,6 +15683,8 @@
     },
     "systemCard": {
       "orcaDispatch": {
+        "sent": "Dispatched to {{worker}}",
+        "queued": "Queued for {{worker}}",
         "unverified": "Turn declaration unverified",
         "notice": {
           "noDeclaration": "This turn carried no report_turn declaration",
@@ -15865,19 +15866,6 @@
         "baseline": "Base branch: ",
         "additionalDirectories": "Also: ",
         "unverifiedResult": "The reviewer produced these findings, but their validity could not be verified."
-      },
-      "orcaDispatch": {
-        "sent": "Dispatched to {{worker}}",
-        "queued": "Queued for {{worker}}",
-        "unverified": "Dispatch not verified",
-        "notice": {
-          "claim": "Lead said it dispatched",
-          "claimTarget": "Lead said it dispatched to {{target}}",
-          "noDispatch": "The host accepted no dispatch this turn",
-          "notDispatched": "The host has no record of dispatching to {{target}} this turn",
-          "unknownId": "The queued message id {{id}} matches no dispatch",
-          "body": "{{claim}}. {{reason}}. Quoted from its reply this turn: “{{quote}}”. Lead has been asked to re-dispatch."
-        }
       }
     },
     "markdownRenderer": {

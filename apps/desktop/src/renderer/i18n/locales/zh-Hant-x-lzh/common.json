@@ -14425,7 +14425,6 @@
       "regionAria": "待遣之訊佇列",
       "listAria": "佇列之訊",
       "pausedFooter": "差事已止，佇列暫停",
-
       "steerUnsupportedNotice": "此引擎不受插話，待遣之訊俟此輪畢乃遣。",
       "resumeAction": "續遣",
       "resumeAria": "續遣佇列之訊",
@@ -15610,6 +15609,8 @@
     },
     "systemCard": {
       "orcaDispatch": {
+        "sent": "已遣往 {{worker}}",
+        "queued": "已列於 {{worker}} 之隊",
         "unverified": "回合之陳未核",
         "notice": {
           "noDeclaration": "此輪未有回合之陳",
@@ -15791,19 +15792,6 @@
         "baseline": "基準分支：",
         "additionalDirectories": "兼有：",
         "unverifiedResult": "以下之論已生，然未能驗其是否仍有效。"
-      },
-      "orcaDispatch": {
-        "sent": "已遣往 {{worker}}",
-        "queued": "已列於 {{worker}} 之隊",
-        "unverified": "遣單無據，待核",
-        "notice": {
-          "claim": "Lead 稱已遣單",
-          "claimTarget": "Lead 稱已遣往 {{target}}",
-          "noDispatch": "然宿未納一單",
-          "notDispatched": "然宿無遣往 {{target}} 之記",
-          "unknownId": "然所引隊號 {{id}} 無對應之單",
-          "body": "{{claim}}。{{reason}}。引文取自其此輪之覆：「{{quote}}」。已命 Lead 重遣。"
-        }
       }
     },
     "markdownRenderer": {
