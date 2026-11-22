@@ -5652,8 +5652,8 @@
       "workerHardLimitHint": "Maximal zulässige Anzahl an Workern. Muss >= dem weichen Limit sein.",
       "idleRelease": "Bei Inaktivität freigeben (Minuten)",
       "idleReleaseHint": "Setze den Wert auf 0, um die automatische Freigabe im Hintergrund zu deaktivieren. Positive Werte geben Worker nach dieser Anzahl inaktiver Minuten frei.",
-      "dispatchClaimVerification": "Übergaben prüfen",
-      "dispatchClaimVerificationHint": "Prüft, ob der Lead wirklich einen Auftrag übergeben hat, bevor er eine Übergabe als erfolgt meldet. Eine unbelegte Angabe wird einmal korrigiert, danach wirst du benachrichtigt."
+      "dispatchClaimVerification": "Turn-Erklärungen prüfen",
+      "dispatchClaimVerificationHint": "Gleiche die Zuweisungen und Übergaben, die Lead am Turn-Ende erklärt, mit den Übergabeaufzeichnungen des Hosts ab. Bei Abweichung gibt es eine Korrektur, danach eine Benachrichtigung."
     },
     "agentResource": {
       "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
@@ -15648,16 +15648,19 @@
     },
     "systemCard": {
       "orcaDispatch": {
+<<<<<<< HEAD
         "sent": "An {{worker}} gesendet",
         "queued": "Für {{worker}} in der Warteschlange",
         "unverified": "Übergabe nicht bestätigt",
+=======
+        "unverified": "Turn-Erklärung unbestätigt",
+>>>>>>> refs/remotes/upstream/pr/10477
         "notice": {
-          "claim": "Laut Lead wurde übergeben",
-          "claimTarget": "Laut Lead wurde an {{target}} übergeben",
-          "noDispatch": "Der Host hat in diesem Turn keine Übergabe angenommen",
-          "notDispatched": "Der Host hat in diesem Turn keine Übergabe an {{target}} verzeichnet",
-          "unknownId": "Die zitierte Queue-ID {{id}} gehört zu keiner Übergabe",
-          "body": "{{claim}}. {{reason}}. Zitat aus der Antwort dieses Turns: „{{quote}}“. Der Lead wurde um eine erneute Übergabe gebeten."
+          "noDeclaration": "Für diesen Turn liegt keine Übergabe-Erklärung vor",
+          "declaredNotDispatched": "Die Erklärung nennt eine Übergabe an {{target}}, die Cindy nie angenommen hat",
+          "dispatchedNotDeclared": "Cindy hat in diesem Turn an {{target}} übergeben, die Erklärung führt es nicht auf",
+          "unknownId": "Die zitierte Warteschlangen-ID {{id}} gehört zu keiner Übergabe",
+          "body": "{{reason}}. Lead wurde gebeten, die Erklärung zu korrigieren."
         }
       },
       "help": {
@@ -15922,8 +15925,8 @@
       "orcaFromWorker": "Nachricht vom Worker",
       "orcaFromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
       "orcaFromWorkerNamed": "Nachricht vom Worker „{{role}}“",
-      "orcaFromHost": "Nachricht vom Host (Orca host)",
-      "orcaHostNoticeDispatchClaim": "Der Host hat in diesem Turn keinen Nachweis für die behauptete Übergabe gefunden; der Lead wurde gebeten, die Queue-ID oder das tatsächliche Ergebnis zu nennen.",
+      "orcaFromHost": "Nachricht von Cindy (Orca host)",
+      "orcaHostNoticeDispatchClaim": "Die Übergabe-Erklärung und die Aufzeichnung von Cindy stimmen in diesem Turn nicht überein; der Lead wurde um Korrektur gebeten.",
       "hookChannelFrom": "Aus {{channel}}",
       "deviceSentMobileNamed": "Vom Smartphone „{{name}}“ gesendet",
       "deviceSentMobile": "Vom Smartphone gesendet",

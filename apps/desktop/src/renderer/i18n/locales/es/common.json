@@ -5670,8 +5670,8 @@
       "workerHardLimitHint": "Máximo de Workers permitidos. Debe ser mayor o igual que el umbral de advertencia.",
       "idleRelease": "Liberación por inactividad (minutos)",
       "idleReleaseHint": "Usa 0 para no liberar Workers automáticamente en segundo plano. Un valor positivo libera los Workers tras ese número de minutos de inactividad.",
-      "dispatchClaimVerification": "Verificar los envíos declarados",
-      "dispatchClaimVerificationHint": "Comprueba que el Lead realmente envió el encargo antes de dar una tarea por enviada. Una afirmación sin respaldo se corrige una vez y después se te avisa."
+      "dispatchClaimVerification": "Verificar declaraciones de turno",
+      "dispatchClaimVerificationHint": "Comprueba las asignaciones y envíos que Lead declara al cerrar el turno con los registros del host. Si no coinciden, hay una corrección y después un aviso."
     },
     "agentResource": {
       "saveFailed": "No se pudo guardar. Inténtalo de nuevo.",
@@ -15790,14 +15790,13 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "unverified": "Envío no verificado",
+        "unverified": "Declaración de turno sin verificar",
         "notice": {
-          "claim": "El Lead afirma haber enviado",
-          "claimTarget": "El Lead afirma haber enviado a {{target}}",
-          "noDispatch": "Pero el host no aceptó ningún envío en este turno",
-          "notDispatched": "Pero el host no tiene ningún envío a {{target}} registrado en este turno",
-          "unknownId": "Pero el id de cola citado {{id}} no corresponde a ningún envío",
-          "body": "{{claim}}. {{reason}}. Cita de su respuesta de este turno: «{{quote}}». Se pidió al Lead que reenvíe."
+          "noDeclaration": "Este turno no presentó declaración de envío",
+          "declaredNotDispatched": "La declaración afirma un envío a {{target}} que el host nunca aceptó",
+          "dispatchedNotDeclared": "El host envió a {{target}} en este turno, pero la declaración lo omite",
+          "unknownId": "El id de cola {{id}} no corresponde a ningún envío",
+          "body": "{{reason}}. Se pidió a Lead que corrija su declaración."
         }
       },
       "help": {
@@ -16076,7 +16075,7 @@
       "orcaFromWorkerBatch": "Informe del sistema: {{count}} resultados de Worker",
       "orcaFromWorkerNamed": "Mensaje del Worker \"{{role}}\"",
       "orcaFromHost": "Mensaje del host (Orca host)",
-      "orcaHostNoticeDispatchClaim": "El host no encontró ningún registro del envío declarado en este turno; se pidió al Lead que indique el id de cola o el resultado real.",
+      "orcaHostNoticeDispatchClaim": "La declaración del turno no coincide con el registro de envíos del host; se pidió al Lead que la corrija.",
       "hookChannelFrom": "De {{channel}}",
       "deviceSentMobileNamed": "Enviado desde el teléfono \"{{name}}\"",
       "deviceSentMobile": "Enviado desde un teléfono",

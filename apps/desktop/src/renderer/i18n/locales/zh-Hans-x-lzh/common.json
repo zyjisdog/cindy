@@ -5569,8 +5569,8 @@
       "workerHardLimitHint": "许创建之 Worker 最大数，须不小于软上限。",
       "idleRelease": "闲时释放（分钟）",
       "idleReleaseHint": "设为 0 则阖后台自动释放；正数谓闲逾此时长即自释放。",
-      "dispatchClaimVerification": "核遣单之议",
-      "dispatchClaimVerificationHint": "Lead 云已遣于 Worker 者，按宿主所记核之。虚言先正一次，再虚则告。"
+      "dispatchClaimVerification": "核回合之陈",
+      "dispatchClaimVerificationHint": "Lead 收口所陈指派与遣发，按宿之遣单核之。不合则正一次，仍未合则告。"
     },
     "agentResource": {
       "saveFailed": "存之未成，请再试。",
@@ -15610,14 +15610,13 @@
     },
     "systemCard": {
       "orcaDispatch": {
-        "unverified": "遣单无据，待核",
+        "unverified": "回合之陳未核",
         "notice": {
-          "claim": "Lead 称已遣单",
-          "claimTarget": "Lead 称已遣往 {{target}}",
-          "noDispatch": "然宿未纳一单",
-          "notDispatched": "然宿无遣往 {{target}} 之记",
-          "unknownId": "然所引队号 {{id}} 无对应之单",
-          "body": "{{claim}}。{{reason}}。引文取自其此轮之覆：「{{quote}}」。已命 Lead 重遣。"
+          "noDeclaration": "此轮未有回合之陈",
+          "declaredNotDispatched": "陈称已遣往 {{target}}，然宿未纳",
+          "dispatchedNotDeclared": "宿于此轮已遣 {{target}}，陈中未载",
+          "unknownId": "所引队号 {{id}} 无对应之单",
+          "body": "{{reason}}。已命 Lead 补陈。"
         }
       },
       "help": {
@@ -15896,7 +15895,7 @@
       "orcaFromWorkerBatch": "系统所报 Worker 结果凡 {{count}}",
       "orcaFromWorkerNamed": "Worker「{{role}}」之讯",
       "orcaFromHost": "宿主（Orca host）来讯",
-      "orcaHostNoticeDispatchClaim": "此单于宿无据，已命 Lead 补其队号或实果。",
+      "orcaHostNoticeDispatchClaim": "此單之陳與宿錄不符，已命 Lead 正之。",
       "hookChannelFrom": "自 {{channel}} 来",
       "deviceSentMobileNamed": "自手机「{{name}}」所遣",
       "deviceSentMobile": "自手机所遣",

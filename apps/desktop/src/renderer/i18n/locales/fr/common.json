@@ -5710,8 +5710,8 @@
       "workerHardLimitHint": "Nombre maximal de Workers autorisés. Doit être >= à la limite souple.",
       "idleRelease": "Libération après inactivité (minutes)",
       "idleReleaseHint": "Définissez 0 pour désactiver la libération automatique en arrière-plan ; une valeur positive libère les Workers après ce nombre de minutes d'inactivité.",
-      "dispatchClaimVerification": "Vérifier les envois annoncés",
-      "dispatchClaimVerificationHint": "Vérifie que le Lead a réellement envoyé le travail avant d’annoncer une tâche comme envoyée. Une affirmation non étayée est corrigée une fois, puis tu es prévenu."
+      "dispatchClaimVerification": "Vérifier les déclarations de tour",
+      "dispatchClaimVerificationHint": "Compare les affectations et envois déclarés par Lead en fin de tour aux enregistrements de l'hôte. En cas d'écart, une correction puis une notification."
     },
     "agentResource": {
       "saveFailed": "Échec de l'enregistrement. Réessayez.",
@@ -15790,16 +15790,19 @@
     },
     "systemCard": {
       "orcaDispatch": {
+<<<<<<< HEAD
         "sent": "Envoyé à {{worker}}",
         "queued": "En file d’attente pour {{worker}}",
         "unverified": "Envoi non vérifié",
+=======
+        "unverified": "Déclaration de tour non vérifiée",
+>>>>>>> refs/remotes/upstream/pr/10477
         "notice": {
-          "claim": "Le Lead affirme avoir envoyé",
-          "claimTarget": "Le Lead affirme avoir envoyé à {{target}}",
-          "noDispatch": "Mais l’hôte n’a accepté aucun envoi ce tour-ci",
-          "notDispatched": "Mais l’hôte n’a aucun envoi vers {{target}} enregistré ce tour-ci",
-          "unknownId": "Mais l’identifiant de file cité {{id}} ne correspond à aucun envoi",
-          "body": "{{claim}}. {{reason}}. Citation de sa réponse de ce tour-ci : «{{quote}}». Le Lead a été prié de renvoyer."
+          "noDeclaration": "Ce tour n'a présenté aucune déclaration d'envoi",
+          "declaredNotDispatched": "La déclaration annonce un envoi vers {{target}} que l'hôte n'a jamais accepté",
+          "dispatchedNotDeclared": "L'hôte a envoyé vers {{target}} ce tour-ci, mais la déclaration l'omet",
+          "unknownId": "L'id de file {{id}} ne correspond à aucun envoi",
+          "body": "{{reason}}. Lead a été invité à corriger sa déclaration."
         }
       },
       "help": {
@@ -16065,7 +16068,7 @@
       "orcaFromWorkerBatch": "Rapport système : {{count}} résultats de Worker",
       "orcaFromWorkerNamed": "Message du Worker « {{role}} »",
       "orcaFromHost": "Message de l’hôte (Orca host)",
-      "orcaHostNoticeDispatchClaim": "L’hôte n’a trouvé aucune trace de l’envoi annoncé pour ce tour ; le Lead a été prié d’indiquer l’identifiant de file ou le résultat réel.",
+      "orcaHostNoticeDispatchClaim": "La déclaration du tour ne correspond pas aux envois enregistrés par l’hôte ; le Lead a été prié de la corriger.",
       "hookChannelFrom": "Depuis {{channel}}",
       "deviceSentMobileNamed": "Envoyé depuis le téléphone « {{name}} »",
       "deviceSentMobile": "Envoyé depuis un téléphone",
