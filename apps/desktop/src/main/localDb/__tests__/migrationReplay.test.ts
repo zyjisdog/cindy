@@ -196,7 +196,9 @@ describeMigrationReplay('existing side-chat teams', () => {
         '0159_close_linked_side_chat.sql',
         '0160_restore_native_usage_currency.sql',
         '0161_native_usage_amount_metadata.sql',
+        '0162_schedule_model_group.sql',
       ]);
+      expect(columnNames(db, 'schedules')).toContain('model_group');
       expect(columnNames(db, 'schedules')).toContain('primary_host_key');
       const reopened = createBetterSqliteDatabase(db.name);
       try {

@@ -190,6 +190,7 @@ import { consumeLearnInvocationGrant } from '../learn-host/invocationGrant.js';
 import { createSkillhubAgentTools } from '../skillhub/agentTools.js';
 import { startGrokDeviceLogin, grokDeviceLoginStatus, cancelGrokDeviceLogin } from '../maker-host/grok-device-login-service.js';
 import { resolveSessionTeammate } from '../maker-ipc/sessionTeammate.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
 
 export interface DesktopMcpProvidersDeps {
   askUserQuestionAsync?: XdtHelperMcpDeps['askUserQuestionAsync'];
@@ -197,6 +198,7 @@ export interface DesktopMcpProvidersDeps {
   runtimeCapabilities?: XdtHelperMcpDeps['runtimeCapabilities'];
   botCapabilities: Pick<ReturnType<typeof createBotCapabilityService>, 'list' | 'select'> & Partial<Pick<ReturnType<typeof createBotCapabilityService>, 'models' | 'setDefaultModel'>>;
   createMediaDownloadContext?: CindyGhostsHostDeps['createMediaDownloadContext'];
+  isStartupToolSessionCurrent?: CindyGhostsHostDeps['isStartupToolSessionCurrent'];
   /** 当前 Desktop 版本，供 Forge 为具体插件包生成默认 minCindyVersion。 */
   getAppVersion?: () => string;
   getMakerMemoryManager: () => MakerMemoryManager;
@@ -736,7 +738,18 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
         },
       },
       // 运行位置与模型:与协同 Worker 的 list_available_models 同一份 host 实现。
-      listModels: wrap((s, params) => s.listAvailableModels(params)),
+      // 本机还列出用户的模型组(模式)，定时任务的 modelGroup 传其 id(model-groups.md §6.3)。
+      listModels: wrap(async (s, params) => {
+        const result = await s.listAvailableModels(params);
+        if (!result.ok || params.agentDeviceId) return result;
+        const modelGroups = readModelGroupsConfig().routes.map((route) => ({
+          id: route.id,
+          name: route.name,
+          strategy: route.strategy,
+          sources: route.candidates.filter((candidate) => !candidate.off).length,
+        }));
+        return modelGroups.length > 0 ? { ...result, modelGroups } : result;
+      }),
       logger: createLogger('mcp/cindy_scheduler'),
     },
     // cindy_ssh: agent 直接在已配置 SSH 主机上执行命令(远端零安装)。
@@ -1886,6 +1899,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           getLiveSessionGrantState: deps.getLiveSessionGrantState,
           requestHostPermission: deps.requestHostPermission,
           createMediaDownloadContext: deps.createMediaDownloadContext,
+          isStartupToolSessionCurrent: deps.isStartupToolSessionCurrent,
         }),
       ),
     }),
