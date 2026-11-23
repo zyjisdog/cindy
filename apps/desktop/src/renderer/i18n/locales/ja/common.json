@@ -5441,6 +5441,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "利用できる補助モデルがありません",
+        "configDescription": "タスクの自動命名、ピン留めタスクの要約、Help、字幕翻訳などのプラグインタスクに影響します。以下の問題を解決するか、「カスタム」で利用できる他のモデルを選択してください。",
+        "runtimeTitle": "補助モデルへのリクエストが続けて失敗しています",
+        "runtimeDescription": "ネットワークやサービスが一時的に不安定な可能性があります。リクエストが成功すると、この通知は自動的に消えます。表示が続く場合は、「カスタム」で利用できる他のモデルを選択してください。",
+        "fallback": "プラグインタスクは一時的に {{model}} を低い推論強度で使用しています。時間がかかり、クォータの消費が増える場合があります。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "プロバイダーを開く",
+        "customize": "補助モデルをカスタマイズ",
+        "issues": {
+          "signed_out": "Cindy へのログインが必要",
+          "provider_disabled": "プロバイダーが無効",
+          "model_disabled": "モデルが無効",
+          "payment_required": "現在のプランまたは残高では利用不可",
+          "no_credential": "ログイン情報またはキーがありません",
+          "unavailable": "現在利用不可"
+        },
+        "toast": {
+          "config": "利用できる補助モデルがありません。タスクの命名、要約、字幕翻訳などのプラグインタスクに影響します。",
+          "runtime": "補助モデルへのリクエストが続けて失敗しています。タスクの命名、要約、字幕翻訳などのプラグインタスクに影響する可能性があります。",
+          "open": "設定を開く"
+        }
       }
     },
     "compaction": {
@@ -6876,7 +6899,15 @@
           "encrypted": "エンドツーエンド暗号化",
           "legacyConnection": "旧接続",
           "encryptionUnknown": "未確認",
-          "legacyEncryptionHint": "旧接続の中継経路はエンドツーエンド暗号化されていません。"
+          "legacyEncryptionHint": "旧接続の中継経路はエンドツーエンド暗号化されていません。",
+          "routePreference": "経路の選択",
+          "routeAuto": "自動",
+          "routeDirect": "直接",
+          "routeRelay": "中継",
+          "routeUnavailable": "利用不可",
+          "routeMeasuring": "計測中…",
+          "routeDirectUnavailableHint": "現在のネットワークではこのデバイスに直接接続できません",
+          "routePreferenceFailed": "ルートの切り替えに失敗しました。もう一度お試しください。"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -12594,6 +12625,7 @@
           "listenPortLabel": "ローカル待受ポート",
           "listenPortPlaceholder": "18747",
           "hint": "ローカルネットワークで BlueBubbles に接続し、選択したチャットのみ処理します。接続前に、これらのチャットの他の自動応答を停止してください。",
+          "automationDenied": "送信時に、macOS が BlueBubbles による「メッセージ」の操作を拒否しました。BlueBubbles を実行している Mac で「システム設定」→「プライバシーとセキュリティ」→「オートメーション」を確認してください。",
           "uncertain": "{{count}} 件の処理結果の確認が必要です。重複を避けるため、再試行前にチャット履歴を確認してください。"
         }
       },
@@ -15163,7 +15195,6 @@
     "runningStatus": {
       "currentRate": "直近の速度",
       "lastRequestRate": "直近のリクエストの平均",
-      "recentTokenRate": "直近 {{rate}} tok/s",
       "waitingSample": "計測中",
       "averageRate": "このターンの平均",
       "rateHistory": "生成速度の推移",
@@ -15948,7 +15979,7 @@
       "viewThread": "スレッドのコンテキストを表示（{{count}}）",
       "memberFromGroup": "{{name}} · {{platform}} グループ「{{group}}」から",
       "memberFromPlatform": "{{name}} · {{platform}} グループから",
-      "guestFromDm": "{{name}} · {{platform}} の DM から（オーナー以外）",
+      "guestFromDm": "{{name}} · {{platform}} の DM から",
       "unknownSender": "グループメンバー"
     },
     "rewind": {

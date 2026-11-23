@@ -5401,6 +5401,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 Flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "辅助模型都不可用",
+        "configDescription": "任务自动命名、置顶任务摘要、Help 和插件任务（如字幕翻译）等功能会受影响。修复下列问题，或自定义其他可用的模型。",
+        "runtimeTitle": "辅助模型最近多次请求失败",
+        "runtimeDescription": "可能是网络或服务暂时异常，恢复后此提示会自动消失。如果一直出现，可以自定义其他可用的模型。",
+        "fallback": "插件任务已临时改用 {{model}}，并使用较低的推理强度，可能更慢、消耗更多配额。",
+        "candidate": "{{model}}：{{reason}}",
+        "openProviders": "打开模型供应商",
+        "customize": "自定义辅助模型",
+        "issues": {
+          "signed_out": "需要登录 Cindy",
+          "provider_disabled": "供应商已停用",
+          "model_disabled": "模型已停用",
+          "payment_required": "当前套餐或余额不支持",
+          "no_credential": "缺少登录信息或密钥",
+          "unavailable": "当前不可用"
+        },
+        "toast": {
+          "config": "辅助模型都不可用，任务命名、摘要和字幕翻译等插件任务会受影响。",
+          "runtime": "辅助模型最近多次请求失败，任务命名、摘要和字幕翻译等插件任务可能受影响。",
+          "open": "去设置"
+        }
       }
     },
     "compaction": {
@@ -6836,7 +6859,15 @@
           "encrypted": "端到端加密",
           "legacyConnection": "旧版连接",
           "encryptionUnknown": "尚未确认",
-          "legacyEncryptionHint": "旧版连接经过中转时，内容未端到端加密。"
+          "legacyEncryptionHint": "旧版连接经过中转时，内容未端到端加密。",
+          "routePreference": "线路选择",
+          "routeAuto": "自动",
+          "routeDirect": "直连",
+          "routeRelay": "中转",
+          "routeUnavailable": "不可用",
+          "routeMeasuring": "测速中…",
+          "routeDirectUnavailableHint": "当前网络无法直连此设备",
+          "routePreferenceFailed": "切换线路失败，请重试"
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -12585,6 +12616,7 @@
           "listenPortLabel": "本机监听端口",
           "listenPortPlaceholder": "18747",
           "hint": "在本地网络连接 BlueBubbles，只处理所选对话。连接前，请先停止这些对话里的其他自动回复程序。",
+          "automationDenied": "发送时，macOS 拒绝了 BlueBubbles 控制“信息”的请求。请在运行 BlueBubbles 的 Mac 上查看“系统设置 → 隐私与安全性 → 自动化”。",
           "uncertain": "有 {{count}} 条消息的处理结果待核对。请先查看对话记录，再决定是否重试，避免重复回复。"
         }
       },
@@ -15163,7 +15195,6 @@
     "runningStatus": {
       "currentRate": "最近速度",
       "lastRequestRate": "上次请求均速",
-      "recentTokenRate": "最近 {{rate}} tok/s",
       "waitingSample": "采样中",
       "averageRate": "本轮平均",
       "rateHistory": "生成速度历史",
@@ -15948,7 +15979,7 @@
       "viewThread": "查看 thread 上下文（{{count}}）",
       "memberFromGroup": "{{name}} · 来自 {{platform}} 群「{{group}}」",
       "memberFromPlatform": "{{name}} · 来自 {{platform}} 群聊",
-      "guestFromDm": "{{name}} · 来自 {{platform}} 私聊（非主人）",
+      "guestFromDm": "{{name}} · 来自 {{platform}} 私聊",
       "unknownSender": "群成员"
     },
     "rewind": {

@@ -5485,6 +5485,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "Kein Hilfsmodell verfügbar",
+        "configDescription": "Betroffen sind automatische Aufgabentitel, Zusammenfassungen angehefteter Aufgaben, die Hilfe und Plugin-Aufgaben wie die Untertitelübersetzung. Behebe die Probleme unten oder wähle unter „Benutzerdefiniert“ andere verfügbare Modelle aus.",
+        "runtimeTitle": "Die letzten Anfragen an Hilfsmodelle sind fehlgeschlagen",
+        "runtimeDescription": "Netzwerk oder Dienst sind möglicherweise vorübergehend nicht erreichbar. Dieser Hinweis verschwindet von selbst, sobald Anfragen wieder gelingen. Wenn er bestehen bleibt, wähle unter „Benutzerdefiniert“ andere verfügbare Modelle aus.",
+        "fallback": "Plugin-Aufgaben verwenden vorübergehend {{model}} mit niedrigerer Denkintensität. Das kann langsamer sein und mehr Kontingent verbrauchen.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "Anbieter öffnen",
+        "customize": "Hilfsmodelle anpassen",
+        "issues": {
+          "signed_out": "Anmeldung bei Cindy erforderlich",
+          "provider_disabled": "Anbieter deaktiviert",
+          "model_disabled": "Modell deaktiviert",
+          "payment_required": "Nicht in deinem Tarif oder Guthaben enthalten",
+          "no_credential": "Anmeldung oder Schlüssel fehlt",
+          "unavailable": "Derzeit nicht verfügbar"
+        },
+        "toast": {
+          "config": "Kein Hilfsmodell verfügbar. Aufgabentitel, Zusammenfassungen und Plugin-Aufgaben wie die Untertitelübersetzung sind betroffen.",
+          "runtime": "Die letzten Anfragen an Hilfsmodelle sind fehlgeschlagen. Aufgabentitel, Zusammenfassungen und Plugin-Aufgaben wie die Untertitelübersetzung können betroffen sein.",
+          "open": "Einstellungen öffnen"
+        }
       }
     },
     "compaction": {
@@ -6920,7 +6943,15 @@
           "encrypted": "Ende-zu-Ende-verschlüsselt",
           "legacyConnection": "Ältere Verbindung",
           "encryptionUnknown": "Nicht bestätigt",
-          "legacyEncryptionHint": "Der Relay-Pfad der älteren Verbindung ist nicht Ende-zu-Ende-verschlüsselt."
+          "legacyEncryptionHint": "Der Relay-Pfad der älteren Verbindung ist nicht Ende-zu-Ende-verschlüsselt.",
+          "routePreference": "Routenwahl",
+          "routeAuto": "Auto",
+          "routeDirect": "Direkt",
+          "routeRelay": "Relay",
+          "routeUnavailable": "Nicht verfügbar",
+          "routeMeasuring": "Wird gemessen…",
+          "routeDirectUnavailableHint": "Direktverbindung ist in diesem Netzwerk derzeit nicht verfügbar",
+          "routePreferenceFailed": "Route konnte nicht gewechselt werden. Bitte erneut versuchen."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -12641,6 +12672,7 @@
           "listenPortLabel": "Lokaler Empfangsport",
           "listenPortPlaceholder": "18747",
           "hint": "Verbinde dich mit deinem BlueBubbles-Server im lokalen Netzwerk. Nur ausgewählte Chats werden verarbeitet. Stoppe vor dem Verbinden alle anderen automatischen Antwortdienste für diese Chats.",
+          "automationDenied": "macOS hat BlueBubbles beim Senden den Zugriff auf Nachrichten verweigert. Prüfe auf dem Mac mit BlueBubbles die Systemeinstellungen unter „Datenschutz & Sicherheit“ → „Automation“.",
           "uncertain": "{{count}} Zustellungen müssen geprüft werden. Prüfe vor einem erneuten Versuch den Chatverlauf, um Duplikate zu vermeiden."
         }
       },
@@ -15191,7 +15223,6 @@
     "runningStatus": {
       "currentRate": "Letzte Geschwindigkeit",
       "lastRequestRate": "Durchschnitt der letzten Anfrage",
-      "recentTokenRate": "Zuletzt {{rate}} tok/s",
       "waitingSample": "Sampling",
       "averageRate": "Durchschnitt dieser Runde",
       "rateHistory": "Verlauf der Generierungsgeschwindigkeit",
@@ -15977,7 +16008,7 @@
       "viewThread": "Thread-Kontext anzeigen ({{count}})",
       "memberFromGroup": "{{name}} · aus der {{platform}}-Gruppe „{{group}}“",
       "memberFromPlatform": "{{name}} · aus einer {{platform}}-Gruppe",
-      "guestFromDm": "{{name}} · aus einer {{platform}}-Direktnachricht (nicht der Eigentümer)",
+      "guestFromDm": "{{name}} · aus einer {{platform}}-Direktnachricht",
       "unknownSender": "Gruppenmitglied"
     },
     "rewind": {

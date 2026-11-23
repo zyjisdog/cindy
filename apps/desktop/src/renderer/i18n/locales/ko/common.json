@@ -5401,6 +5401,29 @@
         "cindyHy3": "Hy3",
         "cindyDeepseekV4Flash": "DeepSeek v4 flash",
         "cindyQwen38Flash": "Qwen 3.8 Flash"
+      },
+      "health": {
+        "configTitle": "사용할 수 있는 보조 모델이 없습니다",
+        "configDescription": "작업 자동 이름 지정, 고정된 작업 요약, Help, 자막 번역 같은 플러그인 작업에 영향을 줍니다. 아래 문제를 해결하거나 「사용자 지정」에서 사용할 수 있는 다른 모델을 선택하세요.",
+        "runtimeTitle": "최근 보조 모델 요청이 계속 실패했습니다",
+        "runtimeDescription": "네트워크나 서비스가 일시적으로 불안정할 수 있습니다. 요청이 성공하면 이 알림은 자동으로 사라집니다. 계속 표시되면 「사용자 지정」에서 사용할 수 있는 다른 모델을 선택하세요.",
+        "fallback": "플러그인 작업이 일시적으로 {{model}}을(를) 낮은 추론 강도로 사용하고 있습니다. 더 느리고 할당량을 더 많이 쓸 수 있습니다.",
+        "candidate": "{{model}}: {{reason}}",
+        "openProviders": "제공자 열기",
+        "customize": "보조 모델 사용자 지정",
+        "issues": {
+          "signed_out": "Cindy 로그인 필요",
+          "provider_disabled": "제공자 비활성화됨",
+          "model_disabled": "모델 비활성화됨",
+          "payment_required": "현재 요금제 또는 잔액으로 사용할 수 없음",
+          "no_credential": "로그인 정보 또는 키 없음",
+          "unavailable": "현재 사용할 수 없음"
+        },
+        "toast": {
+          "config": "사용할 수 있는 보조 모델이 없습니다. 작업 이름 지정, 요약, 자막 번역 같은 플러그인 작업에 영향을 줍니다.",
+          "runtime": "최근 보조 모델 요청이 계속 실패했습니다. 작업 이름 지정, 요약, 자막 번역 같은 플러그인 작업에 영향을 줄 수 있습니다.",
+          "open": "설정 열기"
+        }
       }
     },
     "compaction": {
@@ -6836,7 +6859,15 @@
           "encrypted": "종단 간 암호화",
           "legacyConnection": "이전 연결",
           "encryptionUnknown": "확인되지 않음",
-          "legacyEncryptionHint": "이전 연결의 중계 경로는 종단 간 암호화되지 않습니다."
+          "legacyEncryptionHint": "이전 연결의 중계 경로는 종단 간 암호화되지 않습니다.",
+          "routePreference": "경로 선택",
+          "routeAuto": "자동",
+          "routeDirect": "직접",
+          "routeRelay": "중계",
+          "routeUnavailable": "사용 불가",
+          "routeMeasuring": "측정 중…",
+          "routeDirectUnavailableHint": "현재 네트워크에서는 이 기기에 직접 연결할 수 없습니다",
+          "routePreferenceFailed": "경로를 전환하지 못했습니다. 다시 시도해 주세요."
         },
         "protocol": {
           "agentNet": "Agent-Net",
@@ -12594,6 +12625,7 @@
           "listenPortLabel": "로컬 수신 포트",
           "listenPortPlaceholder": "18747",
           "hint": "로컬 네트워크의 BlueBubbles에 연결하여 선택한 채팅만 처리합니다. 연결 전에 해당 채팅의 다른 자동 응답 프로그램을 중지하세요.",
+          "automationDenied": "전송 중에 macOS가 BlueBubbles의 메시지 앱 제어 요청을 거부했습니다. BlueBubbles가 실행 중인 Mac에서 시스템 설정 → 개인정보 보호 및 보안 → 자동화를 확인하세요.",
           "uncertain": "메시지 {{count}}개의 처리 결과를 확인해야 합니다. 중복을 피하려면 재시도 전에 채팅 기록을 확인하세요."
         }
       },
@@ -15163,7 +15195,6 @@
     "runningStatus": {
       "currentRate": "최근 속도",
       "lastRequestRate": "최근 요청 평균",
-      "recentTokenRate": "최근 {{rate}} tok/s",
       "waitingSample": "측정 중",
       "averageRate": "이번 턴 평균",
       "rateHistory": "생성 속도 추이",
@@ -15948,7 +15979,7 @@
       "viewThread": "스레드 컨텍스트 보기 ({{count}})",
       "memberFromGroup": "{{name}} · {{platform}} 그룹 「{{group}}」에서",
       "memberFromPlatform": "{{name}} · {{platform}} 그룹에서",
-      "guestFromDm": "{{name}} · {{platform}} DM에서 (소유자 아님)",
+      "guestFromDm": "{{name}} · {{platform}} DM에서",
       "unknownSender": "그룹 구성원"
     },
     "rewind": {
