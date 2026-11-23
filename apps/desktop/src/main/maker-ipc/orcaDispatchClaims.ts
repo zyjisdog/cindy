@@ -25,6 +25,24 @@ export interface LeadDispatchFact {
   delivery: OrcaDispatchDelivery;
   queuedMessageId?: string;
   at: number;
+  /**
+   * 写下这条凭据的会话实例。投递落地可能晚于换实例，只靠轮次分不开「新实例第 1 轮」
+   * 与「旧实例迟到的第 1 轮」，所以凭据自带实例身份。
+   */
+  instanceToken?: number;
+}
+
+const instanceTokens = new WeakMap<object, number>();
+let nextInstanceToken = 1;
+
+/** 会话实例的稳定标记：同一个运行时对象始终得到同一个号。 */
+export function sessionInstanceToken(session: object): number {
+  let token = instanceTokens.get(session);
+  if (token === undefined) {
+    token = nextInstanceToken++;
+    instanceTokens.set(session, token);
+  }
+  return token;
 }
 
 /** Lead 声明的一条指派：想让哪个 Worker 做什么。 */
@@ -85,6 +103,8 @@ interface LeadLedger {
    * 所以地板只降不升；一致后清空。
    */
   incidentFloor: number | null;
+  /** 账本属于哪个会话实例。换实例后旧账整体作废，新实例从第一条凭据重新记。 */
+  instanceToken?: number;
 }
 
 const ledgers = new Map<string, LeadLedger>();
@@ -126,14 +146,29 @@ function ledgersReset(ledger: LeadLedger): void {
   ledger.escalated = false;
   ledger.escalatedAt = null;
   ledger.incidentFloor = null;
+  ledger.instanceToken = undefined;
 }
 
 /** 记一条宿主派发凭据。真实派发重置抑制状态：同一个动作值得重新判定。 */
 export function noteLeadDispatchFact(leadSessionId: string, fact: LeadDispatchFact): void {
   const ledger = ledgerFor(leadSessionId);
-  observeGeneration(ledger, fact.turnGeneration);
+  if (
+    fact.instanceToken !== undefined &&
+    ledger.instanceToken !== undefined &&
+    fact.instanceToken !== ledger.instanceToken
+  ) {
+    // 换了会话实例：旧账本连同升级进度作废，并把轮次降到新实例这一轮，
+    // 否则随后的收口按「轮次回退」再清一次，会把这条新凭据一起抹掉。
+    ledgersReset(ledger);
+    ledger.turnGeneration = fact.turnGeneration;
+  }
+  if (fact.instanceToken !== undefined) ledger.instanceToken = fact.instanceToken;
   ledger.facts.push(fact);
   if (ledger.facts.length > MAX_FACTS) ledger.facts.splice(0, ledger.facts.length - MAX_FACTS);
+  // 凭据不参与轮次观察：投递落地可能晚于它所属的轮次收口，迟到的旧凭据既不能抹掉
+  // 当前账本，也不能重新武装唤醒——否则下一轮会在「本轮什么都没派」的情况下再被叫一次。
+  // 只有比这次矛盾更新的轮次里的派发才值得重新判定。
+  if (ledger.incidentFloor !== null && fact.turnGeneration <= ledger.incidentFloor) return;
   ledger.woke = false;
   ledger.escalated = false;
   ledger.escalatedAt = null;
@@ -222,6 +257,8 @@ export function reconcileLeadTurnDeclaration(
     declaration.assignments.find((entry) => entry.workerId === workerId)?.workerId ??
     workerId;
 
+  // 声明指着更早轮次的编号时，本轮同 Worker 的凭据仍然没有被这一句声明覆盖。
+  const uncovered = new Set<string>();
   for (const entry of declaration.dispatched) {
     // 同一个 Worker 可以连着收多条（q1、q2）：按这一轮它全部凭据匹配，不能只看最后一条。
     const bucket = factsByWorker.get(entry.workerId);
@@ -239,6 +276,18 @@ export function reconcileLeadTurnDeclaration(
         (fact) => fact.dispatchId === entry.messageId || fact.queuedMessageId === entry.messageId,
       );
     if (!matched) {
+      // 编号在更早轮次的凭据里存在，就不是「编了个不存在的编号」：这种错没法纠正。
+      // 把它留给下面「本轮有派发没声明」的判定，那条能靠补交声明修好。
+      const seenEarlier = entry.messageId
+        ? ledger.facts.some(
+            (fact) =>
+              fact.dispatchId === entry.messageId || fact.queuedMessageId === entry.messageId,
+          )
+        : false;
+      if (seenEarlier) {
+        uncovered.add(entry.workerId);
+        continue;
+      }
       return {
         consistent: false,
         reason: 'unknown-message-id',
@@ -261,7 +310,7 @@ export function reconcileLeadTurnDeclaration(
   }
 
   for (const fact of facts) {
-    if (declaredWorkers.has(fact.workerId)) continue;
+    if (declaredWorkers.has(fact.workerId) && !uncovered.has(fact.workerId)) continue;
     return {
       consistent: false,
       reason: 'dispatched-not-declared',
@@ -281,13 +330,13 @@ export function describeDeclarationVerdict(verdict: {
 }): string {
   switch (verdict.reason) {
     case 'no-declaration':
-      return 'You dispatched this turn but submitted no report_turn declaration';
+      return 'The host recorded a dispatch that no report_turn declaration covers';
     case 'declared-not-dispatched':
       return `You declared a dispatch to ${verdict.detail} that the host never accepted`;
     case 'dispatched-not-declared':
-      return `The host dispatched to ${verdict.detail} this turn, but your declaration leaves it out`;
+      return `The host dispatched to ${verdict.detail}, but your declaration leaves it out`;
     case 'unknown-message-id':
-      return `The queued message id ${verdict.detail} matches no dispatch of this turn`;
+      return `The queued message id ${verdict.detail} matches no dispatch the host recorded`;
   }
 }
 
