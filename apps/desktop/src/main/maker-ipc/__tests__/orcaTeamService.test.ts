@@ -772,6 +772,13 @@ function createDeps(overrides: Partial<OrcaTeamServiceDeps> = {}) {
   };
 }
 
+const AUTO_BRIDGED_NO_STATE = '[Auto-bridged: 回合结束，未带状态]';
+
+/** 自动回传没有结构化 report：标题直说未申报，正文保持原样，宿主不猜状态。 */
+function autoBridged(text: string): string {
+  return `${AUTO_BRIDGED_NO_STATE}\n\n${text}`;
+}
+
 describe('OrcaTeamService', () => {
   const receiptAgentKinds = ['claude-code', 'codex', 'pi'] as const;
   const receiptCases = receiptAgentKinds.flatMap((from) =>
@@ -914,7 +921,7 @@ describe('OrcaTeamService', () => {
       finalText: '完成了',
     });
 
-    expect(leadMessages).toEqual(['[Auto-bridged: worker 已完成，系统自动回传结果]\n\n完成了']);
+    expect(leadMessages).toEqual([autoBridged('完成了')]);
   });
 
   it('forwards imagePaths through dispatchWorkerTask to the shared primitive', async () => {
@@ -1631,7 +1638,7 @@ describe('OrcaTeamService', () => {
       finalText: '完成了',
     });
 
-    expect(leadMessages).toEqual(['[Auto-bridged: worker 已完成，系统自动回传结果]\n\n完成了']);
+    expect(leadMessages).toEqual([autoBridged('完成了')]);
   });
 
   it('rolls back running status and pending auto-bridge when accepted dispatch returns failure', async () => {
@@ -2066,9 +2073,85 @@ describe('OrcaTeamService', () => {
 
     expect(sendAutoBridgeToLead).toHaveBeenCalledTimes(2);
     expect(leadMessages).toEqual([
-      '[Auto-bridged: worker 已完成，系统自动回传结果]\n\n第一次结果',
-      '[Auto-bridged: worker 已完成，系统自动回传结果]\n\n第二次结果',
+      autoBridged('第一次结果'),
+      autoBridged('第二次结果'),
     ]);
+  });
+
+  // 六态只有 Worker 能声明：无结构化回报的投递一律 open，宿主绝不补第七态。
+  it('routes a bridged delivery without a report state to open', async () => {
+    const leadMessages: string[] = [];
+    const sendAutoBridgeToLead = vi.fn(async (_leadSessionId: string, message: string) => {
+      leadMessages.push(message);
+      return { accepted: true };
+    });
+    const { service } = createDeps({ sendAutoBridgeToLead });
+
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '分析 issue',
+    });
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '没有交报告',
+    });
+
+    expect(leadMessages).toHaveLength(1);
+    expect(leadMessages[0]!.startsWith(AUTO_BRIDGED_NO_STATE)).toBe(true);
+  });
+
+  // 自动回传按定义不带状态：一旦存在「带状态」的头部，就意味着宿主开始替 Worker 推断状态。
+  it('exposes no state-carrying auto-bridge header', async () => {
+    const mod = await import('../orcaTeamService.js');
+
+    expect(mod).not.toHaveProperty('ORCA_AUTO_BRIDGE_STATE_HEADER');
+    expect(mod).toHaveProperty('ORCA_AUTO_BRIDGE_NO_STATE_HEADER');
+  });
+
+  // 漏报是偶发而不是惯例：让它在发生地可见，而不是每单都贴在正文里。
+  it('reminds a worker about its missed report once on the next dispatch', async () => {
+    const leadMessages: string[] = [];
+    const sendAutoBridgeToLead = vi.fn(async (_leadSessionId: string, message: string) => {
+      leadMessages.push(message);
+      return { accepted: true };
+    });
+    const { service, deps } = createDeps({ sendAutoBridgeToLead });
+
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '第一单',
+    });
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '忘了交报告',
+    });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '第二单',
+    });
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '第三单',
+    });
+
+    const payloads = vi.mocked(deps.dispatchWorkerMessage).mock.calls.map(
+      (call) => (call[0] as { message: string }).message,
+    );
+    // 第一单不带提醒（此前没有漏报），第二单带一次，第三单不再带。
+    expect(payloads[0]).not.toContain('没有调用 send_to_lead(report)');
+    const second = payloads.find((text) => text.includes('第二单')) ?? '';
+    const third = payloads.find((text) => text.includes('第三单')) ?? '';
+    expect(second).toContain('没有调用 send_to_lead(report)');
+    expect(third).not.toContain('没有调用 send_to_lead(report)');
+    expect(payloads.filter((text) => text.includes('没有调用 send_to_lead(report)'))).toHaveLength(
+      1,
+    );
   });
 
   // 2026-11-10 Super-agent 结构化回报：六态映射到现有 worker 状态机，且不改变结算不变量。
@@ -2646,7 +2729,7 @@ describe('OrcaTeamService', () => {
     expect(deps.updateWorkerStatus).not.toHaveBeenCalledWith('worker-1', expect.anything(), expect.anything());
 
     await service.handleWorkerTerminalTurn({ sessionId: 'worker-session-1', status: 'done', finalText: '阶段结果' });
-    expect(leadMessages).toEqual(['[Auto-bridged: worker 已完成，系统自动回传结果]\n\n阶段结果']);
+    expect(leadMessages).toEqual([autoBridged('阶段结果')]);
   });
 
   it('keeps the lead report outstanding until every worker report is delivered', async () => {    const onLeadWorkerReportsSettled = vi.fn();
@@ -3375,7 +3458,7 @@ describe('OrcaTeamService', () => {
       capture: replacementCapture,
     });
     expect(leadMessages).toEqual([
-      '[Auto-bridged: worker 已完成，系统自动回传结果]\n\nreplacement output',
+      autoBridged('replacement output'),
     ]);
   });
 
@@ -3463,7 +3546,7 @@ describe('OrcaTeamService', () => {
       capture: service.captureWorkerTerminalTurn('worker-session-1'),
     });
     expect(leadMessages).toEqual([
-      '[Auto-bridged: worker 已完成，系统自动回传结果]\n\nfollow-up output',
+      autoBridged('follow-up output'),
     ]);
   });
 
@@ -3499,7 +3582,7 @@ describe('OrcaTeamService', () => {
       ]);
       expect(leadMessages).toHaveLength(1);
       if (status === 'done') {
-        expect(leadMessages[0]).toBe('[Auto-bridged: worker 已完成，系统自动回传结果]\n\n完成了');
+        expect(leadMessages[0]).toBe(autoBridged('完成了'));
       } else {
         // 出错的 Worker 原样保留：回报末尾告诉 Lead 如何原地继续，而不是归档重建
         // （2026-11-10 现场：五个撞上用量上限的 Worker 被全部归档重建）。
@@ -3563,8 +3646,8 @@ describe('OrcaTeamService', () => {
     });
 
     expect(leadMessages).toEqual([
-      '[Auto-bridged: worker 已完成，系统自动回传结果]\n\n旧输出',
-      '[Auto-bridged: worker 已完成，系统自动回传结果]\n\n(no output captured)',
+      autoBridged('旧输出'),
+      autoBridged('(no output captured)'),
     ]);
   });
 
@@ -3590,7 +3673,61 @@ describe('OrcaTeamService', () => {
       finalText: '',
     });
 
-    expect(leadMessages).toEqual(['[Auto-bridged: worker 已完成，系统自动回传结果]\n\n部分输出']);
+    expect(leadMessages).toEqual([autoBridged('部分输出')]);
+  });
+
+  it('never attaches a worker report state to auto-bridged output', async () => {
+    // 自动回传时 Worker 没有申报状态，宿主无权替它挑一个：既不能写「已完成」，
+    // 也不能编一个 [Orca Worker report: ready]。结构化六态只有 Worker 自己能声明。
+    const leadMessages: string[] = [];
+    const { service } = createDeps({
+      sendAutoBridgeToLead: vi.fn(async (_leadSessionId, message) => {
+        leadMessages.push(message);
+        return { accepted: true };
+      }),
+    });
+
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '做这个',
+    });
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '做完了',
+    });
+
+    expect(leadMessages).toHaveLength(1);
+    expect(leadMessages[0]).toContain(AUTO_BRIDGED_NO_STATE);
+    expect(leadMessages[0]).not.toContain('[Orca Worker report:');
+    expect(leadMessages[0]).not.toContain('已完成');
+  });
+
+  it('keeps the no-state header even when the delivery carries remote dispatch metadata', async () => {
+    const leadMessages: string[] = [];
+    const sendAutoBridgeToLead = vi.fn(async (_leadSessionId: string, message: string) => {
+      leadMessages.push(message);
+      return { accepted: true };
+    });
+    const { service } = createDeps({ sendAutoBridgeToLead });
+
+    await service.sendToWorker({
+      callerLeadSessionId: 'lead-1',
+      targetSessionId: 'worker-session-1',
+      message: '做这个',
+    });
+    await service.handleWorkerTerminalTurn({
+      sessionId: 'worker-session-1',
+      status: 'done',
+      finalText: '做完了',
+      remoteReport: { proxySessionId: 'proxy-1', inputClientIds: ['client-1'] },
+    } as never);
+
+    // 远端投递信息只描述消息怎么送来的,不代表这一轮交了结构化回报。
+    expect(leadMessages).toHaveLength(1);
+    expect(leadMessages[0]!.startsWith(AUTO_BRIDGED_NO_STATE)).toBe(true);
+    expect(leadMessages[0]).not.toContain('[Orca Worker report:');
   });
 
   it('bridges the terminal diagnostic when an errored worker produced no output', async () => {

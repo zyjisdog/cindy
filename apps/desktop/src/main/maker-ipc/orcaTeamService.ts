@@ -185,6 +185,13 @@ export type OrcaOkResult =
 /** Worker 异常终止自动回报的固定开头；撤下过期回报时按它识别。 */
 export const ORCA_AUTO_BRIDGE_FAILURE_HEADER = '[Auto-bridged: worker 异常终止]';
 
+/**
+ * 自动回传只有一种开头。自动回传按定义不带状态：Worker 真交了结构化回报，
+ * 那份报告由 send_to_lead 直接送达 Lead，这一轮不会再走回传。宿主不拿代理
+ * 信息之类旁证去推断状态。
+ */
+export const ORCA_AUTO_BRIDGE_NO_STATE_HEADER = '[Auto-bridged: 回合结束，未带状态]';
+
 /** 回执里带回的异常终止回报正文上限；完整内容仍在 Worker 自己的任务里。 */
 const MAX_WITHDRAWN_FAILURE_NOTICE_TEXT = 1200;
 
@@ -1102,7 +1109,9 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       || turn.diagnostic?.trim() || '(no output captured)';
     const report = turn.status === 'error'
       ? `${ORCA_AUTO_BRIDGE_FAILURE_HEADER}\n\n${finalText}\n\n${buildWorkerFailureRecoveryNote(sessionId)}`
-      : `[Auto-bridged: worker 已完成，系统自动回传结果]\n\n${finalText}`;
+      : `${ORCA_AUTO_BRIDGE_NO_STATE_HEADER}\n\n${finalText}`;
+    // 走到这里说明这一轮没有交结构化回报;真交了报告,那份由 send_to_lead 直接送达。
+    noteUnreportedRound(sessionId);
     let accepted = false;
     try {
       accepted = (await deps.sendAutoBridgeToLead(
@@ -1704,6 +1713,24 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     }
   }
 
+  /**
+   * 漏报的 Worker：结束回合没有交结构化回报时记一笔，下一次派单开头点一次。
+   * 不强制（模型侧强制不住），只让遗漏在发生地可见——它是偶发而非惯例。
+   */
+  const unreportedRounds = new Map<string, number>();
+
+  function noteUnreportedRound(workerSessionId: string): void {
+    unreportedRounds.set(workerSessionId, (unreportedRounds.get(workerSessionId) ?? 0) + 1);
+  }
+
+  function takeUnreportedReminder(workerSessionId: string): string | undefined {
+    const missed = unreportedRounds.get(workerSessionId);
+    if (!missed) return undefined;
+    unreportedRounds.delete(workerSessionId);
+    return `[Orca host] 你上一轮结束时没有调用 send_to_lead(report)，系统直接把你说的话转发给了 Lead，`
+      + `并把这条投递标成「未带状态」。结束一轮时请用 send_to_lead 的 report 声明状态（${missed} 次未报）。`;
+  }
+
   async function sendToWorker(params: {
     callerLeadSessionId: string;
     targetSessionId: string;
@@ -1731,6 +1758,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     delivery?: 'queue' | 'steer';
     imagePaths?: string[];
   }, captured?: () => Promise<void>): Promise<SendToWorkerResult | InterruptWorkerResult> {
+    const unreported = takeUnreportedReminder(params.targetSessionId);
+    if (unreported) params = { ...params, message: `${unreported}\n\n${params.message}` };
     // interrupt 预留路径只支持纯文本; 内部误传图片宁拒勿静默丢。
     if (params.mode === 'interrupt' && params.imagePaths?.length) {
       return {
