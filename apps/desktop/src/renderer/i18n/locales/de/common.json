@@ -5826,9 +5826,7 @@
       "workerHardLimit": "Hartes Worker-Limit",
       "workerHardLimitHint": "Maximal zulässige Anzahl an Workern. Muss >= dem weichen Limit sein.",
       "idleRelease": "Bei Inaktivität freigeben (Minuten)",
-      "idleReleaseHint": "Setze den Wert auf 0, um die automatische Freigabe im Hintergrund zu deaktivieren. Positive Werte geben Worker nach dieser Anzahl inaktiver Minuten frei.",
-      "dispatchClaimVerification": "Turn-Erklärungen prüfen",
-      "dispatchClaimVerificationHint": "Gleiche die Zuweisungen und Übergaben, die Lead am Turn-Ende erklärt, mit den Übergabeaufzeichnungen des Hosts ab. Bei Abweichung gibt es eine Korrektur, danach eine Benachrichtigung."
+      "idleReleaseHint": "Setze den Wert auf 0, um die automatische Freigabe im Hintergrund zu deaktivieren. Positive Werte geben Worker nach dieser Anzahl inaktiver Minuten frei."
     },
     "agentResource": {
       "saveFailed": "Speichern fehlgeschlagen. Versuche es erneut.",
@@ -15926,18 +15924,6 @@
       }
     },
     "systemCard": {
-      "orcaDispatch": {
-        "sent": "An {{worker}} gesendet",
-        "queued": "Für {{worker}} in der Warteschlange",
-        "unverified": "Turn-Erklärung unbestätigt",
-        "notice": {
-          "noDeclaration": "Für diesen Turn liegt keine Übergabe-Erklärung vor",
-          "declaredNotDispatched": "Die Erklärung nennt eine Übergabe an {{target}}, die Cindy nie angenommen hat",
-          "dispatchedNotDeclared": "Cindy hat in diesem Turn an {{target}} übergeben, die Erklärung führt es nicht auf",
-          "unknownId": "Die zitierte Warteschlangen-ID {{id}} gehört zu keiner Übergabe",
-          "body": "{{reason}}. Lead wurde gebeten, die Erklärung zu korrigieren."
-        }
-      },
       "help": {
         "title": "Verfügbare Befehle",
         "builtInCommands": "Integrierte Befehle",
@@ -16201,7 +16187,7 @@
       "orcaFromWorkerBatch": "Systemrückmeldung: {{count}} Worker-Ergebnisse",
       "orcaFromWorkerNamed": "Nachricht vom Worker „{{role}}“",
       "orcaFromHost": "Nachricht von Cindy (Orca host)",
-      "orcaHostNoticeDispatchClaim": "Die Übergabe-Erklärung und die Aufzeichnung von Cindy stimmen in diesem Turn nicht überein; der Lead wurde um Korrektur gebeten.",
+      "orcaHostNoticeDispatchClaim": "Diese Antwort beruft sich auf eine Übergabe, die Cindy nicht verzeichnet hat; der Lead wurde um Korrektur gebeten.",
       "hookChannelFrom": "Aus {{channel}}",
       "deviceSentMobileNamed": "Vom Smartphone „{{name}}“ gesendet",
       "deviceSentMobile": "Vom Smartphone gesendet",

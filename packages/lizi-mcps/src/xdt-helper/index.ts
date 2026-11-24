@@ -79,7 +79,6 @@ export {
   type SteerFallbackReason,
   type SupersededFailureNotice,
 } from './send_to_worker.js';
-export { registerReportTurnTool, type ReportTurnDeps } from './report_turn.js';
 export {
   registerGetWorkerQueueStatusTool,
   type GetWorkerQueueStatusDeps,
