@@ -136,12 +136,15 @@ export function createSessionContextBudget(ports: SessionContextBudgetPorts) {
     const clampedByCatalog = requested !== null && declaredMax !== null
       ? Math.min(requested, declaredMax) : requested;
     const budget = tighterBudget(clampedByCatalog, modelLimit);
+    const budgetValue = typeof budget === 'number' && Number.isFinite(budget) && budget > 0 ? budget : null;
     const verified = resolveVerifiedContextWindow(catalog, agent, source, modelId, budget);
-    if (verified !== null || verification === 'required') return verified;
+    if (verified !== null) return verified;
+    // A handoff/probe contract asks for capacity verified by the catalog or the runtime only.
+    if (verification === 'required') return null;
+    if (budgetValue === null) return null;
     // A saved budget configures the native runtime even if catalog capacity is
     // unknown. It is a working ceiling, not evidence of physical model capacity.
-    return rows.length === 1 && rows[0]!.contextWindowVerified !== true && typeof budget === 'number' && Number.isFinite(budget) && budget > 0
-      ? budget : null;
+    return rows.length === 1 && rows[0]!.contextWindowVerified !== true ? budgetValue : null;
   }
 
   /**
