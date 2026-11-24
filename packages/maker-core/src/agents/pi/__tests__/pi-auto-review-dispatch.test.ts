@@ -4319,7 +4319,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
     handle.setInteractionResolver?.(resolver as never);
 
-    firePermissionInputRequest('subagent-auto', 'subagent', {
+    firePermissionInputRequest('subagent-auto', 'cindy_subagent', {
       agent: 'worker',
       task: 'inspect the repository',
     });
@@ -4337,7 +4337,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
     handle.setInteractionResolver?.(resolver as never);
 
-    firePermissionInputRequest('subagent-fork', 'subagent', {
+    firePermissionInputRequest('subagent-fork', 'cindy_subagent', {
       agent: 'worker',
       task: 'continue the parent investigation',
       context: 'fork',
@@ -4352,7 +4352,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
     handle.setInteractionResolver?.(resolver as never);
 
-    firePermissionInputRequest('subagent-model', 'subagent', {
+    firePermissionInputRequest('subagent-model', 'cindy_subagent', {
       tasks: [{ agent: 'worker', task: 'inspect the repository', model: 'm-next' }],
     });
 
@@ -4365,7 +4365,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
     handle.setInteractionResolver?.(resolver as never);
 
-    firePermissionInputRequest('subagent-current-model', 'subagent', {
+    firePermissionInputRequest('subagent-current-model', 'cindy_subagent', {
       agent: 'worker',
       task: 'inspect the repository',
       model: 'm',
@@ -4380,7 +4380,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
     handle.setInteractionResolver?.(resolver as never);
 
-    firePermissionInputRequest('subagent-ask', 'subagent', {
+    firePermissionInputRequest('subagent-ask', 'cindy_subagent', {
       agent: 'worker',
       task: 'inspect the repository',
     });
@@ -4398,7 +4398,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     const resolver = vi.fn(async () => ({ kind: 'permission', behavior: 'deny' } as const));
     handle.setInteractionResolver?.(resolver as never);
 
-    firePermissionInputRequest('subagent-bypass', 'subagent', {
+    firePermissionInputRequest('subagent-bypass', 'cindy_subagent', {
       agent: 'worker',
       task: 'inspect the repository',
     });

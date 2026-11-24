@@ -98,7 +98,7 @@ import {
   providerOffersModel,
 } from '@cindy/model-providers';
 import type { SubagentRunsListResponse } from '@cindy/maker-shared/subagent-workspace';
-import { useProportionalWidth } from '@/hooks/useProportionalWidth';
+import { STANDARD_CHAT_MESSAGE_WIDTH, useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { useSubagentRunStatusIndex } from '@/hooks/useSubagentRunStatusIndex';
 import {
   Activity,
@@ -278,6 +278,7 @@ import { useSessionTurnActiveTruth } from '@/features/cc-agent/hooks/useSessionT
 import { useHistoryRecoveryNavigation } from '@/features/cc-agent/hooks/useHistoryRecoveryNavigation';
 import { useRemoteSessionLoading } from '@/features/cc-agent/hooks/useRemoteSessionLoading';
 import { RemoteSessionBanner } from './RemoteSessionBanner';
+import { AuxiliaryModelHealthBanner } from './AuxiliaryModelHealthBanner';
 import { WorkingDirectoryTip } from './WorkingDirectoryTip';
 import { decideRemoteSessionExit } from './remoteSessionExit';
 import { RemoteSessionLoading } from './RemoteSessionLoading';
@@ -925,6 +926,7 @@ function CCAgentSessionContent({
   const hasPluginStatusbar = usePluginUiHas('statusbar');
   const { sessionId: paramSessionId } = useParams<{ sessionId: string }>();
   const sessionId = sessionIdProp ?? paramSessionId;
+  const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
   const creationPreview = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
     remoteProjectsStore.getCreationPreview(sessionId));
   const awaitingCreation = !!creationPreview && !creationPreview.handedOff;
@@ -1080,7 +1082,9 @@ function CCAgentSessionContent({
     inputHalfWidth,
     isCompact,
     getMessageWidth,
-  } = useProportionalWidth(914, { compact: isCompactRail });
+  } = useProportionalWidth(STANDARD_CHAT_MESSAGE_WIDTH, {
+    compact: isCompactRail,
+  });
   const controlledBannerMaxWidth = `min(${inputHalfWidth}, ${CONTROLLED_BANNER_MAX_WIDTH}px)`;
   const { sessions: allSessions, refreshSessions, patchLocal: patchLocalSession } = useCCSessions();
   // /ctr 接管态: attached=true 时把 ChatInput 替换为 TakeoverMask, 防止 desktop
@@ -1144,7 +1148,6 @@ function CCAgentSessionContent({
   const voiceModeOpen = voiceCall.open && voiceCall.sessionId === sessionId;
   const activeVoiceCallId = voiceCall.sessionId === sessionId ? voiceCall.callId : null;
   const voiceQuestionBridge = useRef<VoiceQuestionTarget | null>(null);
-  const botChatIdentity = resolveBotChatIdentity(botIdentity, sessionId);
   const companionSettingsOpen = new URLSearchParams(location.search).get('settings') === '1';
   const openVoiceSettings = useCallback(() => {
     const search = new URLSearchParams(location.search);
@@ -1969,6 +1972,7 @@ function CCAgentSessionContent({
     cancelUsageLimitWait,
     errorIsRecoverable,
     errorRetryText,
+    queueHeadRetry,
     errorCanContinue,
     errorPersistId,
     disposedErrorPersistId,
@@ -6154,6 +6158,8 @@ function CCAgentSessionContent({
                 outputLimit={outputLimit}
                 isRecoverable={errorIsRecoverable}
                 retryText={errorRetryText}
+                queuedSendRecovery={queueHeadRetry && !remoteDeviceId && Boolean(session?.agentDeviceId
+                  && !isProviderShareAgentDeviceId(session.agentDeviceId))}
                 onRetry={handleRetry}
                 onContinueAfterError={canContinueError ? handleContinueAfterError : undefined}
                 onSilentStopContinue={handleSilentStopContinue}
@@ -6511,6 +6517,9 @@ function CCAgentSessionContent({
             </div>
           </div>
         )}
+
+        {/* 辅助模型运行状态提示放在会话工具栏/标题之后、消息流之前，不打断当前对话。 */}
+        {viewVisible && sessionId && !remoteDeviceId && !isRemoteWorktreeSession && <AuxiliaryModelHealthBanner sessionId={sessionId} />}
 
         {/* Scroll container — full height, bottom padding reserves space for input overlay.
            key={sessionId}: force a full remount on session switch so scroll state,
@@ -7190,6 +7199,7 @@ function CCAgentSessionContent({
                       />
                     )}
                     <ContextCapacityRing
+                      visible={viewVisible}
                       reportedOnly={pluginEngineTask}
                       isRunning={agentStatus.isRunning}
                       sessionId={sessionId}

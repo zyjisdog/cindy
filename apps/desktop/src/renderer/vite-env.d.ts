@@ -101,6 +101,7 @@ type RemoteHostSnapshot = {
     identityFileName?: string;
     source: 'ssh-config' | 'manual';
     managedByCindy: boolean;
+    managedAliasConflict?: boolean;
   };
   status: import('@cindy/maker-remote-ssh').RemoteStatus;
   lastError?: string;
@@ -1488,7 +1489,7 @@ interface ElectronAPI {
       unsupportedSlots: string[];
       iconDataUrl?: string;
     }>;
-    uninstall: (id: string) => Promise<{ ok: true }>;
+    uninstall: (id: string, confirmed?: import('../shared/ghost').ConfirmedGhostUninstall) => Promise<{ ok: true }>;
     /** 详情页「导出 .cindy」:打包安装目录 → 保存对话框落盘。 */
     export: (
       id: string,
@@ -1822,9 +1823,11 @@ interface ElectronAPI {
 
   /** Plugin Protocol v2 市场；网络、下载与安装全部在 main 进程完成。 */
   pluginMarket: {
+    cancelOfficialModelPlugins: () => Promise<void>;
+    officialModelPlugins: (cursor: string | null) => Promise<import('../shared/pluginMarket').OfficialModelPluginPage>;
     query: (input: import('../shared/pluginMarket').PluginMarketQuery) => Promise<import('../shared/pluginMarket').PluginMarketPage>;
     lookup: (ghostIds: string[]) => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
-    recommendations: () => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
+    recommendations: (pluginIds?: string[]) => Promise<import('../shared/pluginMarket').PluginMarketItem[]>;
     snapshot: () => Promise<import('../shared/pluginMarket').PluginMarketSnapshot>;
     detail: (pluginId: string) => Promise<import('../shared/pluginMarket').PluginMarketDetail>;
     prepareShare: (pluginId: string, options?: import('../shared/share').ShareOptions) => Promise<import('../shared/share').ShareContent>;
@@ -1839,7 +1842,7 @@ interface ElectronAPI {
       pluginId: string,
       options: import('../shared/pluginMarket').PluginMarketInstallOptions,
     ) => Promise<import('../shared/pluginMarket').PluginMarketInstallResult>;
-    uninstall: (pluginId: string) => Promise<{ ok: true }>;
+    uninstall: (pluginId: string, confirmed?: import('../shared/ghost').ConfirmedGhostUninstall) => Promise<{ ok: true }>;
     consumeRemovalNotice: () => Promise<
       import('../shared/pluginMarket').PluginRemovalUserNotice | null
     >;
@@ -2432,6 +2435,7 @@ interface ElectronAPI {
    * `LOG_UPLOAD_EMPTY`(采到 0 条)/ `LOG_UPLOAD_FAILED`(网络)/ `LOG_UPLOAD_BUSY`。
    */
   uploadLogsNow: () => Promise<LogUploadResult>;
+  acceptManualLogUploadConsent: (policyVersion: string) => Promise<LogUploadSettingsPayload>;
   onLogUploadSettingsChange: (callback: (payload: LogUploadSettingsPayload) => void) => () => void;
 
   // ── Profile 编辑(设置 → 用户卡片编辑名字 / 头像;直写服务端,跨设备生效) ──
@@ -2530,6 +2534,8 @@ interface ElectronAPI {
     setConfig: (payload: { token: string; ownerUserId: string }) => Promise<{
       status: TelegramBotTransportStatus;
       saveErrorStatus?: TelegramBotTransportStatus;
+      /** 保存失败只是建连握手超时(界面保留输入、提示重试)。 */
+      saveTimedOut?: boolean;
       ownerUserId: string | null;
       botUsername: string | null;
     }>;
@@ -7079,6 +7085,18 @@ interface ElectronAPI {
       channel?: ImDefaultSettingsChannel,
     ) => Promise<ImDefaultSettingsState>;
     imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel) => Promise<ImDefaultSettingsState>;
+    /** 个人飞书 / Lark 机器人所在的群与各群单独的项目、模型、权限。 */
+    feishuGroupSettingsList: (options?: {
+      /** 用户点了「刷新」：不复用 30 秒内的群名单。 */
+      refresh?: boolean;
+      /** 只给收起时的群数与头像用：不解析项目模型（`project.config` 都是 null）。 */
+      summary?: boolean;
+    }) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsList>;
+    feishuGroupSettingsSet: (
+      chatId: string,
+      patch: import('../shared/feishuGroupSettings').FeishuGroupSettingsPatch,
+      name: string | null,
+    ) => Promise<import('../shared/feishuGroupSettings').FeishuGroupSettingsView>;
 
     /** 子代理模型覆盖。null 表示不注入覆盖，仅对新建 agent 会话生效。 */
     subagentModelSettingsGet: () => Promise<SubagentModelSettingsState>;
@@ -7089,7 +7107,15 @@ interface ElectronAPI {
     auxiliaryModelSettingsGet: () => Promise<AuxiliaryModelSettingsState>;
     auxiliaryModelSettingsSet: (
       patch: AuxiliaryModelSettingsPatch,
-    ) => Promise<AuxiliaryModelSettingsState>;
+    ) => Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSaveResult>;
+    auxiliaryModelSettingsTest: (
+      patch: AuxiliaryModelSettingsPatch,
+    ) => Promise<import('../shared/auxiliaryModelSettings').AuxiliaryModelSettingsTestResult>;
+    auxiliaryModelHealthDismiss: (sessionId: string, noticeId: number) => Promise<void>;
+    auxiliaryModelRouteHealthGet: (sessionId?: string) => Promise<import('../shared/auxiliaryModelHealth').AuxiliaryModelHealthSnapshot[]>;
+    onAuxiliaryModelHealthChanged: (
+      callback: (event: import('../shared/auxiliaryModelHealth').AuxiliaryModelHealthEvent) => void,
+    ) => () => void;
     auxiliaryModelHealthGet: () => Promise<AuxiliaryModelHealth>;
 
     /** Agent 资源占用治理(命令并发上限/进程优先级/工具链限核)。 */

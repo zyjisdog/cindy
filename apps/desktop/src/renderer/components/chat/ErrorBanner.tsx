@@ -93,6 +93,7 @@ interface ErrorBannerProps {
   outputLimit?: OutputLimitDetails | null;
   retryText?: string | null;
   onRetry: (text: string) => void;
+  queuedSendRecovery?: boolean;
   /** 已停止且有任务上下文，但无原始恢复记录：发送现有隐藏续跑指令。 */
   onContinueAfterError?: () => Promise<void>;
   onCancel?: () => void;
@@ -177,6 +178,7 @@ export function ErrorBanner({
   outputLimit,
   retryText,
   onRetry,
+  queuedSendRecovery,
   onContinueAfterError,
   onCancel,
   dismissOnEscape = false,
@@ -495,6 +497,8 @@ export function ErrorBanner({
     // retry alongside settings, without claiming that cached credentials recovered.
     (isCodexLocalOAuthAuthMissing && !independentOpenAiAccount && !openAiConnectionRecoveredSinceError);
   const safeRetryText = !hideRetry && retryText ? retryText : null;
+  const showQueuedSendRecovery = queuedSendRecovery && Boolean(safeRetryText)
+    && !isRecoverable && remoteErrorCode === 'REMOTE_AGENT_UNAVAILABLE';
   const retryAction = safeRetryText
     ? () => onRetry(safeRetryText)
     : !hideRetry && !isRecoverable && !requiresAgentErrorConfigurationChange(error)
@@ -876,9 +880,11 @@ export function ErrorBanner({
       description={
         isAttachmentAccessDenied
           ? t('chat.errorBanner.attachmentAccessDeniedRecovery')
-          : (showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted
-            ? t('chat.errorBanner.readableHistoryRecoveryDescription')
-            : renderProviderErrorExplanation(error, displayError, t)
+          : showQueuedSendRecovery
+            ? t('chat.errorBanner.queuedSendRecovery')
+            : (showHistoryRecovery || showInvalidEncryptedContentRecovery) && onForkStripEncrypted
+              ? t('chat.errorBanner.readableHistoryRecoveryDescription')
+              : renderProviderErrorExplanation(error, displayError, t)
       }
       details={canShowErrorDetails && preconditionMessage !== displayError ? preconditionMessage ?? error : undefined}
       onDiagnose={
