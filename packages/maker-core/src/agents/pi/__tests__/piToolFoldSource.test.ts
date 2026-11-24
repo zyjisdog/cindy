@@ -70,7 +70,9 @@ function recordText(message: Message): string {
 }
 
 function isRecord(message: Message): boolean {
-  return message.role === 'assistant' && recordText(message).startsWith('[folded] ');
+  // 批记录 = 带 {"batch":"r…"} 的那一行，现在是一条 toolResult（模型写不到的角色）。
+  const text = recordText(message);
+  return text.startsWith('[folded] ') && /\{"batch":"r\d+"\}/.test(text);
 }
 
 function callIds(messages: Message[]): string[] {
@@ -87,7 +89,7 @@ function records(messages: Message[]): string[] {
 }
 
 function refsOf(messages: Message[]): string[] {
-  return records(messages).flatMap((line) => Array.from(line.matchAll(/cindy_toolfold_read\(\{ batch: "([^"]+)" \}\)/g), (match) => match[1]));
+  return records(messages).flatMap((line) => Array.from(line.matchAll(/cindy_toolfold_read\(\{"batch":"([^"]+)"\}\)/g), (match) => match[1]));
 }
 
 function textChars(messages: Message[]): number {
@@ -108,8 +110,15 @@ function projection(handler: Handler, messages: Message[]): Message[] {
 }
 
 /** 翻完整批并把页拼回去；每页都不得超过 limit（上限以内的成员 + 至多一条整行放行的缺项说明 + 一条续读提示）。 */
+// 说明行里的调用 id 经 oneLine 限长：空白折叠，超过 LINE 截断加省略号。
+const LINE_CHARS = Number(/var LINE = (\d+);/.exec(CINDY_TOOL_FOLD_EXTENSION_SOURCE)![1]);
+const idShown = (id: string) => {
+  const text = id.replace(/\s+/g, ' ').trim();
+  return text.length > LINE_CHARS ? text.slice(0, LINE_CHARS - 1) + '…' : text;
+};
+
 async function readWholeBatch(tool: Tool, batchId: string, limit: number) {
-  const next = (body: string) => /at: (\d+), offset: (\d+) to continue\.\]$/.exec(body);
+  const next = (body: string) => /"batch":"[^"]+","at":(\d+),"offset":(\d+)\}\) to continue\.\]$/.exec(body);
   const pages: string[] = [];
   let joined = '';
   let params: Record<string, unknown> = { batch: batchId };
@@ -134,29 +143,30 @@ describe('cindy-tool-fold extension source', () => {
     expect(context({ messages: pairs(10) })).toBeUndefined();
   });
 
-  it('collapses the whole backlog into assistant records and keeps the newest 8 pairs verbatim', () => {
+  it('collapses the whole backlog into one tool-result record and keeps the newest 8 pairs verbatim', () => {
     const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '8' });
     const messages = pairs(40);
     const out = projection(context, messages);
-    // Each folded trip loses both halves; the records merge into the next assistant
-    // message so two assistant messages never sit next to each other.
-    expect(out).toHaveLength(16);
-    expect(callIds(out)).toEqual(Array.from({ length: 8 }, (_, index) => `call-${index + 32}`));
+    // Every folded trip loses both halves except the batch's last one: it keeps its call
+    // so the record can take the place of its result. Call and result stay paired.
+    expect(out).toHaveLength(18);
+    expect(callIds(out)).toEqual(Array.from({ length: 9 }, (_, index) => `call-${index + 31}`));
+    expect(out[0]).toMatchObject({ role: 'assistant', content: [{ type: 'toolCall', id: 'call-31', name: 'bash' }] });
+    expect(out[1]).toMatchObject({ role: 'toolResult', toolCallId: 'call-31' });
+    expect(isRecord(out[1])).toBe(true);
     const foldedText = records(out).join('\n');
     // One batch, one line: the per-trip records are gone, so there is nothing shaped like
     // "command -> conclusion" for the model to re-use as its own narration template.
     expect(foldedText.match(/cindy_toolfold_read/g)).toHaveLength(1);
-    // The records ride on the next assistant message, so the resident pair keeps its
-    // original call block while the tail of the window is untouched.
-    // Records ride on the next assistant message, so no two assistant messages end up
-    // adjacent, which providers reject.
+    // No two assistant messages end up adjacent, which providers reject.
     for (let index = 1; index < out.length; index += 1) {
       expect([out[index - 1].role, out[index].role]).not.toEqual(['assistant', 'assistant']);
-    }    const resident = out[out.length - 16];
+    }
+    const resident = out[out.length - 16];
     expect((resident.content as Block[]).find((block) => block.type === 'toolCall')).toEqual((messages[64].content as Block[])[0]);
     expect(out.slice(out.length - 14)).toEqual(messages.slice(66));
     const first = foldedText.slice(foldedText.indexOf('[folded]'));
-    expect(first).toMatch(/^\[folded\] 32 round-trips, bash 32, \d+ chars, read with cindy_toolfold_read\(\{ batch: "r\d+" \}\)$/m);
+    expect(first).toMatch(/^\[folded\] 32 round-trips, bash 32, \d+ chars, read with cindy_toolfold_read\(\{"batch":"r\d+"\}\)$/m);
     // No command text and no per-call statistics survive in assistant position.
     expect(first).not.toContain('run step 0');
     expect(first).not.toContain('ok');
@@ -288,10 +298,12 @@ describe('cindy-tool-fold extension source', () => {
     }
     const out = projection(context, messages);
     // One line per batch, anchored at the batch's tail: the whole span before the user
-    // turn is gone and a single pointer sits after it.
+    // turn is gone; the anchor call and its record sit right after it, inside the turn.
     const at = out.findIndex((message) => message.role === 'user');
     expect(at).toBe(0);
-    expect(isRecord(out[at + 1])).toBe(true);
+    expect(out.slice(at + 1, at + 3).map((message) => message.role)).toEqual(['assistant', 'toolResult']);
+    expect(isRecord(out[at + 2])).toBe(true);
+    expect(out[at + 1]).toMatchObject({ content: [expect.objectContaining({ type: 'toolCall', id: 'call-31' })] });
     expect(records(out).join('\n')).toMatch(/^\[folded\] 32 round-trips,/m);
     expect(callIds(out)).not.toContain('call-0');
   });
@@ -312,9 +324,11 @@ describe('cindy-tool-fold extension source', () => {
     expect(JSON.stringify(again).length).toBe(firstSavings);
     const grown = projection(context, pairs(41));
     // One more pair is not a new batch: the earlier marks stay, the new pair joins the
-    // resident window instead of being folded on its own.
-    expect(callIds(grown)).toEqual(Array.from({ length: 9 }, (_, index) => `call-${index + 32}`));
+    // resident window instead of being folded on its own. The folded batch keeps its
+    // anchor call: the record rides on that call's result.
+    expect(callIds(grown)).toEqual(Array.from({ length: 10 }, (_, index) => `call-${index + 31}`));
     expect(isFolded(grown[grown.length - 4])).toBe(false);
+    expect(records(grown).join('\n')).toBe(records(first).join('\n'));
   });
 
   it('never folds a round-trip that carries an image', () => {
@@ -394,7 +408,7 @@ describe('cindy-tool-fold extension source', () => {
     const recovered = await tool.execute('t-slice', { call_id: 'huge-write' });
     const text = String(recovered.content![0].text);
     expect(text.length).toBeLessThan(1200);
-    expect(text).toContain('Call cindy_toolfold_read again with offset');
+    expect(text).toContain('Call cindy_toolfold_read({"call_id":"huge-write","offset":');
     // 部分读取不能钉住：钉住会把整段塞回下一次请求，读上限就白设了。
     const afterSlice = projection(context, messages);
     expect(callIds(afterSlice)).not.toContain('huge-write');
@@ -419,7 +433,7 @@ describe('cindy-tool-fold extension source', () => {
       return String(read.content![0].text);
     };
     const first = await readAt();
-    const next = Number(/with offset: (\d+)/.exec(first)![1]);
+    const next = Number(/"offset":(\d+)/.exec(first)![1]);
     const second = await readAt(next);
     const again = await readAt();
     // 同一个 id 再读一次必须得到同样的开头：重拼是稳定的（旧写法把整段又塞进 giants，
@@ -445,7 +459,7 @@ describe('cindy-tool-fold extension source', () => {
       role: 'toolResult',
       toolCallId: 'call-5',
       toolName: 'read',
-      content: [{ type: 'text', text: 'docs mention [truncated 100 of 200 chars; cindy_toolfold_read("call-0") returns the full text]' }],
+      content: [{ type: 'text', text: 'docs mention [truncated 100 of 200 chars; cindy_toolfold_read({"call_id":"call-0"}) returns the full text]' }],
     };
     projection(context, messages);
     const recovered = await tool.execute('t1', { call_id: 'call-5' });
@@ -554,7 +568,11 @@ describe('cindy-tool-fold extension source', () => {
       .join('\n');
     expect(text).toContain('PLAN: rerun the flaky test');
     expect(callIds(view)).not.toContain('call-22');
-    expect(text).toContain('read with cindy_toolfold_read(');
+    // The batch record is a tool result: host text never lands in the assistant position,
+    // where the model would read it as something it said itself.
+    expect(records(view)).toHaveLength(1);
+    expect(view.filter((message) => message.role === 'assistant').some(isRecord)).toBe(false);
+    expect(text).not.toContain('[folded] ');
   });
 
   it('names the batch members it could not restore', async () => {
@@ -576,7 +594,7 @@ describe('cindy-tool-fold extension source', () => {
       ...pairs(40),
     ];
     const view = projection(context, messages)!;
-    const batchId = /cindy_toolfold_read\(\{ batch: "([^"]+)" \}\)/.exec(records(view).join('\n'))![1];
+    const batchId = /cindy_toolfold_read\(\{"batch":"([^"]+)"\}\)/.exec(records(view).join('\n'))![1];
     const read = await tool.execute('t-batch', { batch: batchId });
     const text = String(read.content![0].text);
     expect(text).toContain('B ok');
@@ -771,7 +789,8 @@ describe('cindy-tool-fold extension source', () => {
     for (let index = 0; index < 9; index += 1) {
       toolResult({ toolName: 'bash', toolCallId: `giant-${index}`, content: [{ type: 'text', text: `body ${'z'.repeat(22000)}` }] });
     }
-    // Simulate a resumed session: the transcript holds only the preview of giant-0.
+    // Simulate a resumed session: the transcript holds only the preview of giant-0, in the
+    // shape earlier versions persisted (a bare-string call). That shape must still be recognized.
     const preview = 'body zzz…\n[truncated 20000 of 22009 chars; cindy_toolfold_read("giant-0") returns the full text]';
     const messages = [
       call('giant-0', 'bash', { command: 'make big output' }),
@@ -812,7 +831,7 @@ describe('cindy-tool-fold extension source', () => {
     // The recovery was over the per-read budget, so it is not pinned back in: the trip
     // stays collapsed instead of paying twice for the same text.
     expect(callIds(view)).not.toContain('call-2');
-    expect(records(view).join('\n')).toMatch(/read with cindy_toolfold_read\(\{ batch: "r\d+" \}\)/);
+    expect(records(view).join('\n')).toMatch(/read with cindy_toolfold_read\(\{"batch":"r\d+"\}\)/);
   });
 
   it('bounds retained giant payloads by aggregate characters, not just entry count', async () => {
@@ -825,13 +844,17 @@ describe('cindy-tool-fold extension source', () => {
     }
     // g1 and g2 were evicted by the aggregate budget: their records promise recovery but
     // the registry no longer holds them, so recovery refuses instead of serving a preview.
-    projection(context, [
-      call('g1', 'bash', { command: 'make g1' }),
-      { role: 'toolResult', toolCallId: 'g1', toolName: 'bash', content: [{ type: 'text', text: 'z'.repeat(2000) + '\n[truncated 58000 of 60000 chars; cindy_toolfold_read("g1") returns the full text]' }] } as unknown as { content: Block[] },
-    ]);
-    const refused = await tool.execute('t1', { call_id: 'g1' });
-    expect(refused.isError).toBe(true);
-    expect(String(refused.content![0].text)).toContain('no longer available');
+    // Both persisted shapes of the marker must be recognized: the bare-string call that
+    // earlier versions wrote (resumed sessions still carry it) and the JSON form written now.
+    for (const example of ['cindy_toolfold_read("g1")', 'cindy_toolfold_read({"call_id":"g1"})']) {
+      projection(context, [
+        call('g1', 'bash', { command: 'make g1' }),
+        { role: 'toolResult', toolCallId: 'g1', toolName: 'bash', content: [{ type: 'text', text: 'z'.repeat(2000) + '\n[truncated 58000 of 60000 chars; ' + example + ' returns the full text]' }] } as unknown as { content: Block[] },
+      ]);
+      const refused = await tool.execute('t1', { call_id: 'g1' });
+      expect(refused.isError).toBe(true);
+      expect(String(refused.content![0].text)).toContain('no longer available');
+    }
     // The newest payload is still resident and recovers in full.
     const live = await tool.execute('t2', { call_id: 'g3' });
     expect(live.isError).toBeUndefined();
@@ -879,7 +902,7 @@ describe('cindy-tool-fold extension source', () => {
     const kept = (truncated!.content ?? []).map((b) => String(b.text ?? '')).join('\n');
     expect(kept.startsWith('y'.repeat(2000))).toBe(true);
     expect(kept.length).toBeLessThan(2600);
-    expect(kept).toContain('cindy_toolfold_read("giant-1")');
+    expect(kept).toContain('cindy_toolfold_read({"call_id":"giant-1"}) returns the full text');
     expect(toolResult({ toolName: 'bash', toolCallId: 'giant-2', content: [{ type: 'text', text: 'small' }] })).toBeUndefined();
     // structuredContent must survive a rewrite (pi drops it when only content is returned).
     const structured = toolResult({ toolName: 'mcp__x__y', toolCallId: 'giant-3', content: [{ type: 'text', text: giant }], structuredContent: { ok: true } }) as { structuredContent?: unknown };
@@ -891,7 +914,7 @@ describe('cindy-tool-fold extension source', () => {
     const messages = pairs(40);
     messages[1] = { role: 'toolResult', toolCallId: 'call-0', toolName: 'bash', content: [{ type: 'text', text: kept }] };
     const out = projection(context, messages);
-    expect(isRecord(out[0])).toBe(true);
+    expect(isRecord(out[1])).toBe(true);
   });
 
   it('bounds the text of an image-bearing result and keeps the image', async () => {
@@ -907,7 +930,7 @@ describe('cindy-tool-fold extension source', () => {
     expect(blocks.some((b) => b.type === 'image')).toBe(true);
     const kept = blocks.filter((b) => b.type === 'text').map((b) => String(b.text ?? '')).join('\n');
     expect(kept.length).toBeLessThan(2600);
-    expect(kept).toContain('cindy_toolfold_read("img-1")');
+    expect(kept).toContain('cindy_toolfold_read({"call_id":"img-1"}) returns the full text');
     const recovered = await tool.execute('t-img', { call_id: 'img-1' });
     expect(String(recovered.content![0].text)).toContain(giant);
   });
@@ -925,9 +948,11 @@ describe('cindy-tool-fold extension source', () => {
       result('tail-1', 'bash', 'tail ok'),
     ];
     const out = projection(context, messages);
-    expect(isRecord(out[0])).toBe(true);
-    // The whole parallel trip is gone: no pointer left behind for any of its 32 calls.
-    expect(callIds(out)).toEqual(['tail-1']);
+    expect(isRecord(out[1])).toBe(true);
+    // The anchor keeps exactly one of the 32 calls so the record can ride on its result;
+    // the other 31 leave no pointer behind.
+    expect(callIds(out)).toEqual(['par-31', 'tail-1']);
+    expect((out[0].content as Block[]).filter((block) => block.type === 'toolCall')).toHaveLength(1);
     expect(records(out).join('\n')).toMatch(/^\[folded\] 1 round-trip, bash 32,/m);
     expect(records(out).join('\n')).not.toContain('parallel 0 ok');
   });
@@ -951,8 +976,9 @@ describe('cindy-tool-fold extension source', () => {
     const reopened = await Promise.all(refs.map((ref) => tool.execute('t-' + ref, { batch: ref })));
     expect(String(reopened[0].content![0].text)).toContain('run step 0');
     expect(String(reopened[1].content![0].text)).toContain('run step 120');
-    // The newer backlog folds too, and the newest 1 pair stays verbatim (KEEP=1).
-    expect(callIds(second)).toEqual(['call-239']);
+    // The newer backlog folds too; each batch keeps its anchor call and the newest 1 pair
+    // stays verbatim (KEEP=1).
+    expect(callIds(second)).toEqual(['call-118', 'call-238', 'call-239']);
   });
 
   it('rejects recovery of an evicted giant instead of serving the transcript preview', async () => {
@@ -991,11 +1017,160 @@ describe('cindy-tool-fold extension source', () => {
     expect(firstText.length).toBeLessThan(big.length);
     expect(firstText).toContain('remaining');
     expect(firstText).toContain('offset');
-    const resumeAt = Number(/offset: (\d+)/.exec(firstText)![1]);
+    const resumeAt = Number(/"offset":(\d+)/.exec(firstText)![1]);
     expect(resumeAt).toBeGreaterThan(0);
     const rest = await tool.execute('t2', { call_id: 'giant-8', offset: resumeAt });
     expect(rest.isError).toBeUndefined();
     expect(String(rest.content![0].text)).not.toContain('past the end');
+  });
+
+  it('resumes a giant read at the same offset once compaction has dropped its call block', async () => {
+    // 取回的原文由「上下文里的调用头 + 登记表里的结果」现拼。压缩只带走前一半：同一份原文
+    // 变短，上一页给的偏移就落进结果正文中间，跳过的正是还没读过的那一段。
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const big = 'body ' + 'z'.repeat(22000);
+    toolResult({ toolName: 'bash', toolCallId: 'giant-9', content: [{ type: 'text', text: big }] });
+    projection(context, [
+      call('giant-9', 'bash', { command: 'make giant 9' }),
+      { role: 'toolResult', toolCallId: 'giant-9', toolName: 'bash', content: [{ type: 'text', text: 'preview' }] } as unknown as { content: Block[] },
+    ]);
+    const pages: string[] = [];
+    let params: { call_id: string; offset?: number } = { call_id: 'giant-9' };
+    for (;;) {
+      const page = await tool.execute('t', params);
+      expect(page.isError).toBeUndefined();
+      const text = String(page.content![0].text);
+      pages.push(text.replace(/\n\n\[truncated: [^\n]*\]$/, ''));
+      const next = /"offset":(\d+)/.exec(text);
+      if (next === null) break;
+      // 页与页之间发生压缩：调用块离开上下文，全文只剩登记表里那一份。
+      projection(context, [{ role: 'user', content: [{ type: 'text', text: 'summary of the earlier work' }] }]);
+      params = { call_id: 'giant-9', offset: Number(next[1]) };
+    }
+    const whole = pages.join('');
+    const head = whole.slice(0, whole.indexOf('result:\n'));
+    expect(head).toContain('"command":"make giant 9"');
+    expect(whole).toBe(head + 'result:\n' + big);
+  });
+
+  it('keeps a failed giant result marked as an error when read back after compaction', async () => {
+    // 失败是结果内容的一部分。超大结果入库时只有登记表里那一份全文；压缩带走上下文里的结果
+    // 消息后，它是不是失败就只剩登记表知道。
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const big = 'boom ' + 'z'.repeat(22000);
+    toolResult({ toolName: 'bash', toolCallId: 'giant-f', isError: true, content: [{ type: 'text', text: big }] });
+    projection(context, [
+      call('giant-f', 'bash', { command: 'make it fail' }),
+      { role: 'toolResult', toolCallId: 'giant-f', toolName: 'bash', isError: true, content: [{ type: 'text', text: 'preview' }] } as unknown as { content: Block[] },
+    ]);
+    // 压缩：调用块和预览都离开上下文。
+    projection(context, [{ role: 'user', content: [{ type: 'text', text: 'summary of the earlier work' }] }]);
+    const page = await tool.execute('t', { call_id: 'giant-f' });
+    expect(page.isError).toBeUndefined();
+    const text = String(page.content![0].text);
+    expect(text).toContain('result (error):\nboom zzz');
+    expect(text).not.toContain('result:\n');
+  });
+
+  it('resumes a batch read inside a cut member at the same offset once compaction has dropped its call block', async () => {
+    // 同一件事的批读取形态：成员被页尾切开时，续读偏移落在它自己的全文里。成员是入库时
+    // 被登记表收存的巨型结果；压缩后批里只有这类成员还取得到（其余缺项点名），那是另一条规则。
+    const { context, toolResult, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000', CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
+    const body = ['a', 'b', 'c', 'd', 'e'];
+    for (const index of [0, 1, 2, 3, 4]) {
+      // 入库时经过截断钩子：超过入库下限的结果被登记表收存，上下文里只留预览。
+      const clipped = (toolResult({ toolName: 'bash', toolCallId: `m-${index}`, content: [{ type: 'text', text: `member ${index} ` + body[index].repeat(21000) }] }) as { content: Block[] }).content;
+      messages.push(call(`m-${index}`, 'bash', { command: `member ${index}` }));
+      messages.push(result(`m-${index}`, 'bash', String(clipped[0].text)));
+    }
+    const out = projection(context, messages);
+    const batch = refsOf(out)[0];
+    const pages: string[] = [];
+    let cuts = 0;
+    let params: { batch: string; at?: number; offset?: number } = { batch };
+    for (;;) {
+      const page = await tool.execute('t', params);
+      expect(page.isError).toBeUndefined();
+      const text = String(page.content![0].text);
+      pages.push(text.replace(/\n\n\[truncated: [^\n]*\]$/, ''));
+      const next = /"at":(\d+)(?:,"offset":(\d+))?/.exec(text);
+      if (next === null) break;
+      cuts += 1;
+      // 页与页之间发生压缩：调用块全部离开上下文，成员只剩登记表里那一份。
+      projection(context, [{ role: 'user', content: [{ type: 'text', text: 'summary of the earlier work' }] }]);
+      params = { batch, at: Number(next[1]), ...(next[2] === undefined ? {} : { offset: Number(next[2]) }) };
+    }
+    // 每个成员 21k 字符、每页 1000：每个成员都被切开二十来次。
+    expect(cuts).toBeGreaterThan(50);
+    const whole = pages.join('');
+    // 第 0 个成员第一次被切开时调用块还在：之后每一页都切同一份带调用头的字节。
+    expect(whole).toContain('"command":"member 0"}\nresult:\nmember 0 ' + body[0].repeat(21000));
+    // 其余成员（锚点 m-3 在内）第一次被切开时调用块已被压缩带走（没人留有它）：取到的是登记表里的
+    // 结果，同样逐页连续。m-4 在常驻窗口里，不成批。
+    for (const index of [1, 2, 3]) {
+      expect(whole).toContain('result:\nmember ' + index + ' ' + body[index].repeat(21000));
+    }
+  });
+
+  it('reads the anchor back as its own original, never as the batch record', async () => {
+    // 记录占了锚点的结果位，但那只是发给模型的投影：读取走投影前的原始消息，
+    // 锚点取回的必须是它自己的调用与结果。
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000', CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
+    for (const index of [0, 1, 2, 3, 4]) {
+      messages.push(call(`s-${index}`, 'bash', { command: `step ${index}` }));
+      messages.push(result(`s-${index}`, 'bash', `output ${index} ` + 'x'.repeat(600)));
+    }
+    const out = projection(context, messages);
+    const record = out.find(isRecord)!;
+    expect(record.role).toBe('toolResult');
+    expect(recordText(record)).toContain('4 round-trips');
+    const own = await tool.execute('t1', { call_id: 's-3' });
+    expect(own.isError).toBeUndefined();
+    const text = String(own.content![0].text);
+    expect(text).toContain('"command":"step 3"}\nresult:\noutput 3 ');
+    expect(text).not.toContain('round-trips');
+  });
+
+  it("keeps a failed round-trip's error state in its batch record and when read back", async () => {
+    // 错误状态是往返内容的一部分：逐条记录一直带着（error · last: …），批记录换掉锚点结果时
+    // 却丢掉 isError、也不数批内的失败；取回原文同样不带状态，模型读了整批也看不出哪次失败。
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
+    for (const index of [0, 1, 2, 3, 4, 5]) {
+      const failed = index % 2 === 0;
+      messages.push(call(`f-${index}`, 'bash', { command: `step ${index}` }));
+      messages.push(result(`f-${index}`, 'bash', failed ? `step ${index} failed ${'x'.repeat(300)}\nexit code 1` : `step ${index} ok ${'x'.repeat(300)}`, failed));
+    }
+    const out = projection(context, messages);
+    const [record] = records(out);
+    expect(record).toContain('3 failed (');
+    expect(record.match(/bash: exit code 1/g)).toHaveLength(3);
+    // 锚点是最后一条往返，它自己失败了：记录所在的结果位也必须如实标成错误。
+    const recordMessage = out.find((message) => message.role === 'toolResult' && recordText(message) === record)!;
+    expect(recordMessage.isError).toBe(true);
+    const batch = await tool.execute('t', { batch: refsOf(out)[0] });
+    const text = String(batch.content![0].text);
+    expect(Array.from(text.matchAll(/result \(error\):\nstep (\d) failed/g), (match) => match[1])).toEqual(['0', '2', '4']);
+    expect(Array.from(text.matchAll(/result:\nstep (\d) ok/g), (match) => match[1])).toEqual(['1', '3']);
+  });
+
+  it('describes the anchor call alone with isError and names the other failures in the record text', () => {
+    // 结果位的 isError 属于它自己的调用 id：锚点成功就不能标成错误，否则模型会去重跑一条
+    // 其实成功的命令。批内别的成员失败由记录正文点名。
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
+    for (const index of [0, 1, 2, 3, 4, 5]) {
+      const failed = index === 1;
+      messages.push(call(`s-${index}`, 'bash', { command: `step ${index}` }));
+      messages.push(result(`s-${index}`, 'bash', failed ? `boom ${'x'.repeat(300)}\nexit code 2` : `step ${index} ok ${'x'.repeat(300)}`, failed));
+    }
+    const out = projection(context, messages);
+    const [record] = records(out);
+    expect(record).toContain('1 failed (bash: exit code 2)');
+    const recordMessage = out.find((message) => message.role === 'toolResult' && recordText(message) === record)!;
+    expect(recordMessage.isError).toBe(false);
   });
 
   it('forwards every knob the extension reads to remote Pi sessions', () => {
@@ -1046,11 +1221,12 @@ describe('cindy-tool-fold extension source', () => {
         messages.push({ role: 'toolResult', toolCallId: id, toolName: 'bash', isError: rnd(7) === 0, content: blocks } as Message);
       }
       const out = projection(context, messages);
-      // 1) 不放大 2) 不发明调用 3) 粘性 4) 记录里的 ref 都能取回
+      // 1) 不放大 2) 不发明调用 3) 同一份输入再投影一次结果不变 4) 记录里的 ref 都能取回
       expect(textChars(out)).toBeLessThanOrEqual(textChars(messages));
       const before = new Set(callIds(messages));
       for (const id of callIds(out)) expect(before.has(id)).toBe(true);
-      expect(JSON.stringify(projection(context, out))).toBe(JSON.stringify(out));
+      // pi 每次请求都从原始消息投影、不回送投影结果，所以守的是「投影不读自己上一次的输出」。
+      expect(JSON.stringify(projection(context, messages))).toBe(JSON.stringify(out));
       for (const ref of refsOf(out)) {
         const read = await tool.execute('t-' + ref, { batch: ref });
         expect(read.isError).toBeUndefined();
@@ -1104,7 +1280,7 @@ describe('cindy-tool-fold extension source', () => {
     const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '4000' });
     const batchId = refsOf(projection(context, messages)!)[0];
     const page = async (params: Record<string, unknown>) => String((await tool.execute('p' + reads++, params)).content![0].text);
-    const next = (body: string) => /at: (\d+), offset: (\d+) to continue\.\]$/.exec(body);
+    const next = (body: string) => /"batch":"[^"]+","at":(\d+),"offset":(\d+)\}\) to continue\.\]$/.exec(body);
     let reads = 0;
     const first = await page({ batch: batchId });
     expect(first.length).toBeLessThanOrEqual(4300);
@@ -1134,14 +1310,43 @@ describe('cindy-tool-fold extension source', () => {
     expect(afterLoss.startsWith(gone + '\n\n' + full[6].slice(0, 300))).toBe(true);
     // 游标偏移越过成员现有的全文（续读期间它被截短）：偏移作废、页首说明、从头给出，不静默略过。
     const stale = await page({ batch: batchId, at: 7, offset: 1000000 });
-    expect(stale.startsWith('[stale cursor: offset 1000000 is past the end of call-7 (' + full[7].length + ' chars now); shown from the start]\n\n' + full[7])).toBe(true);
+    expect(stale.startsWith('[stale cursor: offset 1000000 is past the end of call-7 (' + full[7].slice(full[7].indexOf('result:\n') + 8).length + ' chars now); shown from the start]\n\n' + full[7])).toBe(true);
     expect((await tool.execute('x', { batch: batchId, at: 99 })).isError).toBe(true);
+  });
+
+  it('bounds every page whatever the length of the ids it has to name', async () => {
+    // 调用 id 是 provider 给的外部字符串：回显它的每一处说明（缺项、陈旧游标、截断）都必须限长。
+    // 否则一条超长 id 就能让一页越过读取上限，与「说明行整行放行」叠加时尤甚。判据是页面大小
+    // 与 id 长度无关：同一页在 6 万字符的 id 下与在短 id 下只差一行限长说明。
+    const pages = async (id: string) => {
+      const messages = pairs(40, 1500);
+      for (const message of messages) {
+        if (message.role === 'toolResult' && message.toolCallId === 'call-7') message.toolCallId = id;
+        if (message.role === 'assistant') {
+          for (const block of message.content as Block[]) if (block.type === 'toolCall' && block.id === 'call-7') block.id = id;
+        }
+      }
+      const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '4000' });
+      const batchId = refsOf(projection(context, messages)!)[0];
+      let reads = 0;
+      const page = async (params: Record<string, unknown>) => String((await tool.execute('b' + reads++, params)).content![0].text);
+      return [await page({ batch: batchId, at: 7, offset: 1000000 }), await page({ batch: batchId, at: 7 })];
+    };
+    const longId = 'call-' + 'x'.repeat(60000);
+    const short = await pages('call-7');
+    const long = await pages(longId);
+    expect(short[0].startsWith('[stale cursor: offset 1000000 is past the end of call-7 (')).toBe(true);
+    expect(long[0].startsWith('[stale cursor: offset 1000000 is past the end of call-xxxx')).toBe(true);
+    for (const index of [0, 1]) {
+      expect(long[index].length - short[index].length).toBeLessThan(200);
+      expect(long[index].includes(longId)).toBe(false);
+    }
   });
 
   it('keeps missing-member lines inside the read budget: a missing member is page content, not a footer', async () => {
     // 回归：缺项清单曾挂在每页页尾、不受读取预算约束——成批缺项配长调用 id 时，一页就越过
     // 读取上限，而且每页重复。取回结果不经入库截断，越界的说明会原样进入下一次请求。
-    const { context, tool } = loadExtension();
+    const { context, tool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
     const ids = Array.from({ length: 100 }, (_, index) => 'call_' + index + '_' + 'z'.repeat(2000));
     const messages: Message[] = [];
     ids.forEach((id, index) => {
@@ -1150,16 +1355,18 @@ describe('cindy-tool-fold extension source', () => {
     });
     const batchId = refsOf(projection(context, messages)!)[0];
     expect(batchId).toBeTruthy();
-    // 压缩把整批成员都删了：100 条缺项、每条 id 2,000 字符，点名本身约 20 万字符。
+    // 压缩把整批成员都删了：96 条缺项。调用 id 在说明行里限长（160 字符），点名不随 id 长度
+    // 增长；读取上限调到 1,000，点名总量（96 条、每条约 224）仍是上限的二十倍。
     projection(context, [{ role: 'user', content: [{ type: 'text', text: 'continue' }] }]);
-    const lines = ids.slice(0, 96).map((id) => '[missing round-trip ' + id + ' (not in this session); re-run that command]');
+    const lines = ids.slice(0, 96).map((id) => '[missing round-trip ' + idShown(id) + ' (not in this session); re-run that command]');
     // 续读游标是位置、不带调用 id：每页只有上限以内的成员、至多一条整行放行的说明、一条续读提示。
-    const { pages, joined } = await readWholeBatch(tool, batchId, 120000 + lines[0].length + 300);
-    expect(pages.length).toBe(2);
+    const { pages, joined } = await readWholeBatch(tool, batchId, 1000 + lines[0].length + 300);
+    expect(pages.length).toBeGreaterThan(1);
+    for (const page of pages) expect(page.length).toBeLessThanOrEqual(1000 + lines[0].length + 300);
     expect(joined).toBe(lines.join('\n\n'));
-    // 最新 4 条仍在上下文里，不进批；第一页点到第 58 条就停，不替后面 38 条点名。
-    expect(pages[0]).toContain(lines[57]);
-    expect(pages[0]).not.toContain(lines[58]);
+    // 最新 4 条仍在上下文里，不进批；第一页放下 4 条、第 5 条整行放行后就停，不替后面点名。
+    expect(pages[0]).toContain(lines[4]);
+    expect(pages[0]).not.toContain(lines[5]);
     expect(joined).not.toContain('call_96_');
   });
 
@@ -1168,7 +1375,8 @@ describe('cindy-tool-fold extension source', () => {
       CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000', CINDY_PI_TOOL_FOLD_KEEP: '1',
       CINDY_PI_TOOL_FOLD_MIN_PAIRS: '1', CINDY_PI_TOOL_FOLD_MIN_CHARS: '1',
     });
-    const ids = ['a' + 'q'.repeat(500), 'b' + 'q'.repeat(1400), 'c' + 'q'.repeat(3000), 'd' + 'q'.repeat(10)];
+    // 常驻窗口是 1：最后一条往返不折，批里是 a–g 七个成员。
+    const ids = Array.from({ length: 8 }, (_, index) => String.fromCharCode(97 + index) + 'q'.repeat(119));
     const messages: Message[] = [];
     ids.forEach((id, index) => {
       messages.push(call(id, 'bash', { command: 'run step ' + index + ' ' + 'c'.repeat(420) }));
@@ -1177,12 +1385,12 @@ describe('cindy-tool-fold extension source', () => {
     const batchId = refsOf(projection(context, messages)!)[0];
     expect(batchId).toBeTruthy();
     projection(context, [{ role: 'user', content: [{ type: 'text', text: 'continue' }] }]);
-    // 说明行 564 / 1,464 / 3,064 字符，预算 1,000：第一条放下后只剩 434，第二条整行放行
-    // （不按偏移切开——否则下一页的「游标成员已不在 → 偏移作废」会让它永远从头重发）；
-    // 第三条另起一页，整行放行。
-    const lines = ids.slice(0, 3).map((id) => '[missing round-trip ' + id + ' (not in this session); re-run that command]');
+    // 每条说明行 183 字符，预算 1,000：放下 5 条后只剩 73，第 6 条整行放行（不按偏移切开——
+    // 否则下一页的「游标成员已不在 → 偏移作废」会让它永远从头重发）；第 7 条另起一页。
+    const lines = ids.slice(0, 7).map((id) => '[missing round-trip ' + id + ' (not in this session); re-run that command]');
     const { pages, joined } = await readWholeBatch(tool, batchId, 1000 + Math.max(...lines.map((line) => line.length)) + 300);
-    expect(pages).toEqual([lines[0] + '\n\n' + lines[1], lines[2]]);
+    expect(pages, pages.map((page) => page.length + ':' + page.slice(0, 30)).join(' || ')).toEqual([lines.slice(0, 6).join('\n\n'), lines[6]]);
+    expect(pages[0].length).toBeGreaterThan(1000);
     expect(joined).toBe(lines.join('\n\n'));
   });
 
@@ -1273,5 +1481,316 @@ describe('cindy-tool-fold extension source', () => {
     expect(hit.keptWithImage).toBeGreaterThan(3);
     expect(hit.fits).toBeGreaterThan(5);
     expect(hit.fitsWithImage).toBeGreaterThan(3);
+  });
+
+  it('writes only call examples that are valid arguments of the read tool', async () => {
+    // 「怎么调用」是契约的一部分：宿主写出的每个示例都由同一处从参数对象渲染成 JSON，
+    // 既是 schema 的实例，照抄执行也能取回。这里把五条输出路径上的示例全部收集起来。
+    const { context, tool, toolResult } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '1', CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const messages: Message[] = [];
+    for (let index = 0; index < 40; index += 1) {
+      messages.push({ role: 'assistant', content: [
+        { type: 'toolCall', id: `par-${index}a`, name: 'bash', arguments: { command: `first ${index} ${'c'.repeat(420)}` } },
+        { type: 'toolCall', id: `par-${index}b`, name: 'bash', arguments: { command: `second ${index} ${'c'.repeat(420)}` } },
+      ] as Block[] });
+      // Trip 0 is the one that ends up pinned. Only a whole recovery pins, so its first call
+      // must return a short result (arguments plus result have to fit one page); its sibling
+      // gets a short first line over a long body, because the per-call shape keeps the first
+      // line as its head and a one-line result has nothing left to fold.
+      messages.push(result(`par-${index}a`, 'bash', index === 0 ? 'a ok\n' + 'x'.repeat(100) : `a ok ${'x'.repeat(2000)}`));
+      messages.push(result(`par-${index}b`, 'bash', index === 0 ? 'b ok\n' + 'x'.repeat(2000) : `b ok ${'x'.repeat(2000)}`));
+    }
+    const batchId = refsOf(projection(context, messages)!)[0];
+    // Pinning one call of a trip leaves the sibling on the per-call shape.
+    await tool.execute('t-pin', { call_id: 'par-0a' });
+    const projected = projection(context, messages)!;
+    const textOf = (list: Block[]) => list.map((block) => String((block as { text?: unknown }).text ?? '')).join('\n');
+    const truncated = toolResult({ toolName: 'bash', toolCallId: 'giant', content: [{ type: 'text', text: 'G'.repeat(30000) }] }) as { content: Block[] };
+    const texts = [
+      ...projected.map((message) => textOf(message.content ?? [])),
+      textOf(truncated.content),
+      String((await tool.execute('t-call', { call_id: 'par-1a' }))?.content?.[0]?.text),
+      String((await tool.execute('t-batch', { batch: batchId }))?.content?.[0]?.text),
+    ].join('\n');
+    const examples = new Set(Array.from(texts.matchAll(/cindy_toolfold_read\((\{[^{}]*\})\)/g), (match) => match[1]));
+    // 不许空转：五条输出路径（批记录、逐条记录、入库标记、两处续读页尾）各留下一枚示例。
+    expect(examples.size).toBeGreaterThanOrEqual(5);
+    // 没有任何一处手写别的形式：裸字符串不是 schema 的实例，关键字叙述不是确切的参数。
+    expect(texts).not.toMatch(/cindy_toolfold_read\("/);
+    expect(texts).not.toMatch(/cindy_toolfold_read again with/);
+    const allowed = Object.keys((tool as unknown as { parameters?: { properties?: Record<string, unknown> } }).parameters?.properties ?? {});
+    for (const example of examples) {
+      const args = JSON.parse(example) as Record<string, unknown>;
+      expect(Object.keys(args).every((key) => allowed.includes(key))).toBe(true);
+      // 照抄执行：模型原样复制示例参数时，读到的必须是一页真正的原文。
+      const followed = await tool.execute('t-example', args);
+      expect(followed?.isError).toBeUndefined();
+      expect(String(followed?.content?.[0]?.text ?? '').length).toBeGreaterThan(0);
+    }
+  });
+
+  it('keeps every record in a tool result and never writes assistant text', () => {
+    // 宿主从不写助手位：助手消息里的每一段文字都必须能在输入里原样找到，记录只出现在
+    // 工具结果里。实测仿写率随记录位置上升（工具结果位 6/29,981，助手位 8/3,483），
+    // 所以「记录在哪」本身是不变量，不靠提示词。
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_KEEP: '4' });
+    const messages: Message[] = [];
+    for (let index = 0; index < 60; index += 1) {
+      const text = index % 7 === 3 ? `plan ${index}` : undefined;
+      const block = { type: 'toolCall', id: `call-${index}`, name: 'bash', arguments: { command: `run step ${index}` } };
+      messages.push({ role: 'assistant', content: text === undefined ? [block] : [{ type: 'text', text }, block] } as Message);
+      messages.push(result(`call-${index}`, 'bash', `step ${index} ok ${'x'.repeat(2000)}`));
+      if (index === 20 || index === 44) messages.push({ role: 'user', content: [{ type: 'text', text: `turn ${index}` }] });
+    }
+    const out = projection(context, messages)!;
+    const texts = (list: Message[]) =>
+      list
+        .filter((message) => message.role === 'assistant')
+        .flatMap((message) => (message.content as Block[]).filter((block) => block.type === 'text').map((block) => String(block.text ?? '')));
+    const kept = texts(out);
+    expect(kept.length).toBeGreaterThan(0);
+    for (const text of kept) expect(texts(messages)).toContain(text);
+    const recordMessages = out.filter((message) => isRecord(message));
+    expect(recordMessages.length).toBeGreaterThan(0);
+    for (const message of recordMessages) expect(message.role).toBe('toolResult');
+    // A record always sits under the call it belongs to: call and result stay paired.
+    expect(out.flatMap((message) => (message.role === 'toolResult' ? [message.toolCallId] : []))).toEqual(
+      out.flatMap((message) => (message.role === 'assistant' ? callIds([message]) : [])),
+    );
+  });
+
+  it('pages over the result alone, so a header too big to retain cannot move the next page', async () => {
+    // 头 + 结果越过收存预算时，头收不进登记表。续读偏移若按「头 + 结果」计，压缩带走调用消息后
+    // 同一个偏移就落到别的字节上，读到的内容静默错位。偏移只寻址结果正文：头只占第一页的额度。
+    const body = 'R'.repeat(60000);
+    const limit = 4000;
+    for (const path of ['call_id', 'batch'] as const) {
+      const { context, tool } = loadExtension({
+        CINDY_PI_TOOL_FOLD_GIANT_BUDGET: '100000', CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: String(limit),
+        CINDY_PI_TOOL_FOLD_KEEP: '1', CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000',
+      });
+      const messages: Message[] = [];
+      for (let index = 0; index < 6; index += 1) {
+        const id = `h-${index}`;
+        messages.push(call(id, 'bash', { command: index === 3 ? 'C'.repeat(60000) : `step ${index}` }));
+        messages.push(result(id, 'bash', index === 3 ? body : `step ${index} ok ${'x'.repeat(2000)}`));
+      }
+      const batchId = refsOf(projection(context, messages)!)[0];
+      const pages: string[] = [];
+      let params: Record<string, unknown> = path === 'call_id' ? { call_id: 'h-3' } : { batch: batchId, at: 3 };
+      let compacted = false;
+      for (let guard = 0; guard < 80; guard += 1) {
+        const read = await tool.execute('p' + guard, params);
+        expect(read.isError).toBeUndefined();
+        const raw = String(read.content![0].text);
+        pages.push(raw.replace(/\n\n\[truncated: [^\n]*\]$/, ''));
+        const again = /Call cindy_toolfold_read\((\{[^\n]*\})\) to continue\.\]$/.exec(raw);
+        if (!again) break;
+        params = JSON.parse(again[1]) as Record<string, unknown>;
+        if (!compacted) {
+          // 压缩带走了那条调用消息：头从上下文里消失。
+          messages.find((message) => message.role === 'assistant' && callIds([message])[0] === 'h-3')!.content = [] as Block[];
+          // 新的请求带来新的消息数组，调用索引随之重建：真实压缩就是这样发生的。
+          context({ messages: messages.slice() });
+          compacted = true;
+        }
+      }
+      expect(compacted).toBe(true);
+      const joined = pages.join('');
+      // 结果正文一字不差、连续出现；头只在开头出现一次。
+      expect(joined.includes(body)).toBe(true);
+      expect(joined.startsWith('call: bash')).toBe(true);
+    }
+  });
+
+  it('emits call examples the schema accepts and the tool can execute, whatever the call id looks like', async () => {
+    // 调用 id 是 provider 生成的外部字符串：长度、字符都不受宿主控制。宿主写进上下文的每个读取
+    // 示例都必须仍是 schema 的实例（pi 先按 schema 校验参数），并且照抄能读。schema 的定义域
+    // 必须容得下 transcript 里可能出现的一切 id，否则提示要求的值取不回原文。
+    const ids = ['a', 'call-' + 'i'.repeat(4091), 'call-' + 'j'.repeat(5000), 'r7', 'batch:call-0', '[folded] 1 round-trip', 'x"}y', 'call-0\n', ' call-0'];
+    // 按字符串边界切出一个 JSON 对象：id 里可以带引号、花括号、换行。
+    const examplesIn = (text: string) => {
+      const found: string[] = [];
+      const marker = 'cindy_toolfold_read(';
+      for (let at = text.indexOf(marker); at !== -1; at = text.indexOf(marker, at + marker.length)) {
+        const rest = text.slice(at + marker.length);
+        if (rest[0] !== '{') { found.push('NOT-JSON:' + rest.slice(0, 24)); continue; }
+        let depth = 0;
+        let inString = false;
+        let end = -1;
+        for (let i = 0; i < rest.length; i += 1) {
+          const ch = rest[i];
+          if (inString) {
+            if (ch === '\\') i += 1;
+            else if (ch === '"') inString = false;
+          } else if (ch === '"') inString = true;
+          else if (ch === '{') depth += 1;
+          else if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) { end = i; break; }
+          }
+        }
+        found.push(end === -1 ? 'UNTERMINATED' : rest.slice(0, end + 1));
+      }
+      return found;
+    };
+    const { tool: schemaTool } = loadExtension({ CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000' });
+    const schemaOf = (schemaTool as unknown as { parameters?: { properties?: Record<string, Record<string, unknown>> } }).parameters?.properties;
+    if (!schemaOf) throw new Error('cindy_toolfold_read schema not declared');
+    const problemsOf = (args: Record<string, unknown>) => {
+      const out: string[] = [];
+      for (const [key, value] of Object.entries(args)) {
+        const rule = schemaOf[key];
+        if (!rule) { out.push(key + ': not in schema'); continue; }
+        if (rule.type === 'string') {
+          if (typeof value !== 'string') out.push(key + ': not a string');
+          else {
+            if (typeof rule.minLength === 'number' && value.length < rule.minLength) out.push(key + ': shorter than minLength');
+            if (typeof rule.maxLength === 'number' && value.length > rule.maxLength) out.push(key + ': longer than maxLength ' + rule.maxLength);
+          }
+        } else if (!Number.isInteger(value)) out.push(key + ': not an integer');
+      }
+      return out;
+    };
+    let emitted = 0;
+    for (const id of ids) {
+      const { context, toolResult, tool } = loadExtension({
+        CINDY_PI_TOOL_FOLD_KEEP: '1', CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: '1000',
+        CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000',
+      });
+      const messages: Message[] = [];
+      for (let index = 0; index < 6; index += 1) {
+        const memberId = index === 3 ? id : `e-${index}`;
+        messages.push(call(memberId, 'bash', { command: `step ${index} ${'c'.repeat(300)}` }));
+        messages.push(result(memberId, 'bash', index === 3 ? 'target ' + 'y'.repeat(3000) : `step ${index} ok ${'x'.repeat(2000)}`));
+      }
+      const batchId = refsOf(projection(context, messages)!)[0];
+      const ingest = toolResult({ toolName: 'bash', toolCallId: id, content: [{ type: 'text', text: 'G'.repeat(30000) }] }) as { content: Block[] };
+      const texts = [
+        ...records(projection(context, messages)!),
+        // 数组内容的入库截断是两个块（预览、标记各一块）。
+        ingest.content.map((block) => String((block as { text?: string }).text ?? '')).join('\n'),
+        String((await tool.execute('t-call', { call_id: id }))?.content?.[0]?.text),
+        String((await tool.execute('t-batch', { batch: batchId, at: 3 }))?.content?.[0]?.text),
+      ].join('\n');
+      // 四条输出路径各留下一枚示例：批记录、入库标记、单次续读页尾、整批续读页尾。
+      const examples = examplesIn(texts);
+      const described = texts.split('\n').map((text) => text.length + '/' + text.includes('cindy_toolfold_read(') + '/' + text.slice(0, 60).replace(/\s+/g, ' '));
+      expect(examples.length, 'id ' + JSON.stringify(id).slice(0, 30) + ': ' + described.join(' || ')).toBeGreaterThanOrEqual(4);
+      for (const example of examples) {
+        expect(example).not.toMatch(/^(NOT-JSON|UNTERMINATED)/);
+        const args = JSON.parse(example) as Record<string, unknown>;
+        expect(problemsOf(args)).toEqual([]);
+        // 照抄执行：读到的必须是一页真正的原文。
+        const followed = await tool.execute('t-example', args);
+        expect(followed?.isError).toBeUndefined();
+        expect(String(followed?.content?.[0]?.text ?? '').length).toBeGreaterThan(0);
+        emitted += 1;
+      }
+    }
+    expect(emitted).toBeGreaterThanOrEqual(4 * ids.length);
+  });
+
+  it('reads every paged member back exactly, however the context changes between pages', async () => {
+    // 续读坐标是对「被切开的那份字节」的坐标。那份字节必须是不依赖上下文的结果正文：调用消息
+    // 在页与页之间被压缩带走，读到的内容要么一字不差，要么明确点名——绝不静默错位。固定种子，
+    // 两种读取路径，参数长度与收存预算随机跨过边界。
+    let seed = 20241125;
+    const rnd = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    const limit = 1000;
+    let exact = 0;
+    for (let scenario = 0; scenario < 24; scenario += 1) {
+      const { context, tool } = loadExtension({
+        CINDY_PI_TOOL_FOLD_RECOVERY_CHARS: String(limit), CINDY_PI_TOOL_FOLD_KEEP: '1',
+        CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '2000',
+        CINDY_PI_TOOL_FOLD_GIANT_BUDGET: String(100000 + rnd(3) * 20000),
+      });
+      const messages: Message[] = [{ role: 'user', content: [{ type: 'text', text: 'task' }] }];
+      const count = 5 + rnd(3);
+      for (let index = 0; index < count; index += 1) {
+        const id = `m-${scenario}-${index}`;
+        // 第一个场景固定落在边界上：参数 + 结果越过收存预算。
+        const args = scenario === 0 ? 'A'.repeat(150000) : rnd(4) === 0 ? 'A'.repeat(20000 + rnd(90000)) : `step ${index}`;
+        const body = rnd(3) === 0 ? `B${index}-` + 'r'.repeat(limit * (1 + rnd(3)) + rnd(400)) : `step ${index} ok ${'x'.repeat(1500 + rnd(600))}`;
+        messages.push(call(id, 'bash', { command: args }));
+        messages.push(result(id, 'bash', body, rnd(6) === 0));
+      }
+      const target = `m-${scenario}-2`;
+      const targetBody = String(messages.find((message) => message.role === 'toolResult' && message.toolCallId === target)?.content?.[0]?.text);
+      const batchId = refsOf(projection(context, messages)!)[0];
+      let params: Record<string, unknown> = scenario % 2 === 0 ? { batch: batchId, at: 2 } : { call_id: target };
+      let compacted = false;
+      let removed = false;
+      let refused = false;
+      const pages: string[] = [];
+      for (let guard = 0; guard < 120; guard += 1) {
+        const read = await tool.execute('g' + guard, params);
+        const raw = String(read.content![0].text);
+        // 读上限是硬约束：取回结果不经入库截断，越界会原样进入下一次请求。
+        expect(raw.length).toBeLessThanOrEqual(limit + 600);
+        if (read.isError) { refused = true; break; }
+        pages.push(raw.replace(/^\[stale cursor:[^\n]*\]\n\n/, '').replace(/\n\n\[truncated: [^\n]*\]$/, ''));
+        const again = /Call cindy_toolfold_read\((\{[^\n]*\})\) to continue\.\]$/.exec(raw);
+        if (!again) break;
+        params = JSON.parse(again[1]) as Record<string, unknown>;
+        if (!compacted) {
+          // 压缩带走调用消息；偶尔连结果消息一起带走。
+          messages.find((message) => message.role === 'assistant' && callIds([message])[0] === target)!.content = [] as Block[];
+          context({ messages: messages.slice() });
+          compacted = true;
+        } else if (!removed && rnd(4) === 0) {
+          messages.splice(messages.findIndex((message) => message.role === 'toolResult' && message.toolCallId === target), 1);
+          context({ messages: messages.slice() });
+          removed = true;
+        }
+      }
+      const joined = pages.join('');
+      if (joined.includes(targetBody)) exact += 1;
+      // 单次读取只有一条成员：它的头至多出现一次，续读页不再重复头。
+      if (scenario % 2 === 1) expect(joined.split('call: bash').length - 1).toBeLessThanOrEqual(1);
+      // 没被移走的成员逐字读回；没读完就被移走的成员必须点名或被拒，不能让半份原文冒充整份。
+      if (!removed) expect(joined).toContain(targetBody);
+      else expect(joined.includes(targetBody) || refused || joined.includes('[missing round-trip ' + target)).toBe(true);
+    }
+    // 不许空转：多数场景走完并逐字核对。
+    expect(exact).toBeGreaterThanOrEqual(12);
+  });
+
+  it('recognizes model-visible text by its ingest marker only, never by shape', () => {
+    // 按字符串形状猜含义是这一扩展历次缺陷的共同来源：`batch:` 前缀劫持真实调用 id、宽泛的
+    // 「[truncated 」匹配把普通正文当成预览、`[folded] ` 前缀让真实结果永不折叠。唯一例外是入库
+    // 标记：落盘后身份丢失，只能靠它自己的原文认回来，发出与识别共用一份定义。
+    const idioms: Array<[RegExp, string]> = [
+      [/\.\s*startsWith\(\s*['"/]/g, 'startsWith'],
+      [/\.slice\(\s*0\s*,\s*\d+\s*\)\s*===?\s*['"]/g, 'slice(0, n) ==='],
+      [/\.indexOf\(\s*'[^']*'\s*\)\s*===?\s*0\b/g, "indexOf('…') === 0"],
+      [/\/\^\\\[/g, '/^[…/ literal'],
+    ];
+    const offenders: string[] = [];
+    for (const [pattern, name] of idioms) {
+      for (const match of CINDY_TOOL_FOLD_EXTENSION_SOURCE.matchAll(pattern)) {
+        const owner = Array.from(CINDY_TOOL_FOLD_EXTENSION_SOURCE.slice(0, match.index).matchAll(/^ {2}function (\w+)\(/gm)).pop()?.[1] ?? '(top level)';
+        if (owner !== 'resolve') offenders.push(name + ' in ' + owner);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('keeps a batch record far smaller than the round-trips it replaces, even when most of them failed', () => {
+    // 失败清单是记录里唯一随成员数增长的部分：几百条短失败的结果合计刚过成批门槛，逐条点名
+    // 会让记录比它替换的内容还长——折叠反而放大上下文。记录只点名前几条，其余读批自取。
+    const { context } = loadExtension({ CINDY_PI_TOOL_FOLD_MIN_PAIRS: '4', CINDY_PI_TOOL_FOLD_MIN_CHARS: '20000', CINDY_PI_TOOL_FOLD_KEEP: '1' });
+    const messages: Message[] = [];
+    for (let index = 0; index < 300; index += 1) {
+      messages.push(call(`f-${index}`, 'bash', { command: `run ${index}` }));
+      messages.push(result(`f-${index}`, 'bash', `boom ${index} ${'e'.repeat(600)}`, true));
+    }
+    const record = records(projection(context, messages)!)[0];
+    expect(record).toMatch(/299 round-trips/);
+    expect(record).toContain('299 failed');
+    expect(record.length).toBeLessThan(1200);
   });
 });
