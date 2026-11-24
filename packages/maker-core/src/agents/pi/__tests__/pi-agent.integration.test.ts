@@ -486,8 +486,10 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       expect(events.filter(event => event.type === 'error')).toEqual([]);
       const requests = seenRequests.slice(offset).map(request => JSON.parse(request.body));
       expect(requests).toHaveLength(2);
+      // pi may append its own usage note to a tool description (e.g. the codemode
+      // hint); the synthetic description only has to be present.
       expect(requests[0].tools).toContainEqual(expect.objectContaining({
-        name: 'subagent', description: 'SYNTHETIC_USER_SUBAGENT_11339',
+        name: 'subagent', description: expect.stringContaining('SYNTHETIC_USER_SUBAGENT_11339'),
       }));
       expect(JSON.stringify(requests[1].messages)).toContain('synthetic-user-result-11339');
       if (enabled) expect(requests[0].tools).toContainEqual(expect.objectContaining({ name: 'cindy_subagent' }));
