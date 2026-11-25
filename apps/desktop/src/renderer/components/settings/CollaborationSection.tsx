@@ -38,7 +38,7 @@ export function CollaborationSection() {
       });
   }, []);
 
-  const persist = (key: CollaborationSettingKey, value: number | boolean) => {
+  const persist = (key: CollaborationSettingKey, value: number) => {
     setSettings((prev) => (prev ? { ...prev, [key]: value, isCustomized: true } : prev));
     void window.electronAPI.localDb.orcaWorkflows
       .setCollaborationSetting?.(key, value)
