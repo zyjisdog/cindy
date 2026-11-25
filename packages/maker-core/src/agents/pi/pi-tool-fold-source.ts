@@ -127,7 +127,9 @@ export default function (pi) {
   var MIN_CHARS = intEnv('CINDY_PI_TOOL_FOLD_MIN_CHARS', 36000, 1, 1000000000);
   var PIN_BUDGET_CHARS = intEnv('CINDY_PI_TOOL_FOLD_PIN_BUDGET', 64000, 2000, 100000000);
   var INGEST_LIMIT = intEnv('CINDY_PI_TOOL_FOLD_INGEST_LIMIT', 20000, 4000, 100000000);
-  var INGEST_KEEP = intEnv('CINDY_PI_TOOL_FOLD_INGEST_KEEP', 2000, 500, 32000);
+  // 关闭条件：预览（正文加标记）必须仍低于入库阈值，否则扩展自己写的预览下一次投影会被
+  // 当成新的巨型结果再截一次，原文被预览顶掉。所以保留额度必须给标记留出位置。
+  var INGEST_KEEP = Math.min(intEnv('CINDY_PI_TOOL_FOLD_INGEST_KEEP', 2000, 500, 32000), INGEST_LIMIT - 1024);
   var GIANT_KEEP = intEnv('CINDY_PI_TOOL_FOLD_GIANTS', 64, 8, 512);
   var GIANT_BUDGET_CHARS = intEnv('CINDY_PI_TOOL_FOLD_GIANT_BUDGET', 2000000, 100000, 1000000000);
   var LINE = 160;
@@ -184,22 +186,33 @@ export default function (pi) {
     return ('\n\n[truncated: ' + 999999999999999 + ' chars remaining. Call ' + readCall(widest) + ' to continue.]').length + 2;
   }
 
-  // The endings an ingest marker can have. Emitting and recognizing share this
-  // one definition. legacyNamed is the shape earlier versions persisted:
-  // resumed sessions still carry it, and not recognizing it would make
-  // resolve() hand the truncated preview back as if it were the full text.
+  // 入库标记的尾部。唯一没有上界的是回显的调用 id，而标记长度有一条硬约束：预览
+  // （不超过 INGEST_KEEP 的正文加上这条标记）必须仍低于 INGEST_LIMIT。这不是讲究——入库
+  // 只按长度放行，标记超了上限，下一次投影就会把扩展自己写的预览当成新的巨型结果再截一次，
+  // 原文被预览顶掉。上限靠构造保证，不靠事后识别。
+  var MARKER_ROOM = Math.max(64, INGEST_LIMIT - INGEST_KEEP - 32);
   function truncationTails(id) {
     var key = String(id);
     var named = readCall({ call_id: key }) + ' returns the full text';
-    var evicted = 'full text not retained (call "' + key + '"); re-run if needed';
-    // 标记跟着预览进入每一次请求。调用 id 比预览额度还长时不能再原样重复：降级为点名（限长）。
-    var tooLong = named.length > INGEST_KEEP;
-    return {
-      named: tooLong ? 'call id ' + oneLine(key) + ' (' + key.length + ' chars) is too long to repeat; re-run that command, or pass the id as "call_id" to ' + READ_TOOL + ' (needs CINDY_PI_TOOL_FOLD_RECOVERY_CHARS of at least ' + singleReadFloor(key) + ')' : named,
-      legacyNamed: READ_TOOL + '("' + key + '") returns the full text',
-      evicted: tooLong ? 'full text not retained (call id ' + oneLine(key) + ', ' + key.length + ' chars); re-run if needed' : evicted,
-    };
+    var evicted = 'full text not retained (call "' + key + '"); it already ran';
+    if (singleReadFloor(key) <= RECOVERY_READ_MAX_CHARS && named.length <= MARKER_ROOM && evicted.length <= MARKER_ROOM) return { named: named, evicted: evicted };
+    // 两条硬上界，任一不满足就改成不重复全文 id 的说法：页尾必须放得进单次读取上限（否则
+    // 一页连 id 都放不下，游标永远不前进），预览加标记必须放得进入库阈值。
+    // 装不下就降级：点名只回显开头，长度要求给出数字而不是把 id 再抄一遍。
+    var head = clipText(oneLine(clipText(key, 120)), 48);
+    var tooLongNamed = 'call id "' + head + '" (' + key.length + ' chars) is too long to repeat; it already ran, or pass the full id as "call_id" to ' + READ_TOOL + ' (needs CINDY_PI_TOOL_FOLD_RECOVERY_CHARS of at least ' + singleReadFloor(key) + ')';
+    var tooLongEvicted = 'full text not retained (call id "' + head + '", ' + key.length + ' chars); it already ran';
+    if (tooLongNamed.length <= MARKER_ROOM) return { named: tooLongNamed, evicted: tooLongEvicted };
+    var bare = 'it already ran; the call id (' + key.length + ' chars) is too long to repeat';
+    return { named: bare, evicted: bare };
   }
+  // 入库这一步截过谁、给它留没留原文，只有这本账知道。取回时按它判断「上下文里那份
+  // 结果是不是预览」，不看内容形状。按形状推断等于让任一工具输出用字面量冒充标记，
+  // 代价是丢掉一份本来放得下的结果——这正是本扩展要防的失效，不能自己制造。
+  // 账与 giants 同寿：重启之后没有原文可取，取回就把上下文里的字节原样交出。
+  var clippedHidden = new Map();
+  var CLIPPED_KEEP = 4096;
+
   // Pins: callId -> { ts, chars }. ts is a monotonic recovery clock so the eviction
   // victim is the least-recently-recovered entry, not the earliest-pinned one.
   var pinned = new Map();
@@ -212,7 +225,7 @@ export default function (pi) {
   function turnKey(message) {
     if (!message) return '';
     var text = textOf(message.content);
-    return String(message.timestamp || '') + '|' + text.length + '|' + text.slice(0, 24);
+    return String(message.timestamp || '') + '|' + text.length + '|' + clipText(text, 24);
   }
   // Raw conversation snapshot from the latest context pass. Recovery reads originals
   // here instead of persisting payloads: pi already holds the full transcript.
@@ -239,10 +252,18 @@ export default function (pi) {
     return foldedBatch[String(id)] || String(id);
   }
 
+  // 缩短外部字符串只有这一个原语：它只经 cutBefore 落刀，绝不切开代理对。任何一处裸
+  // slice 都可能把表情符号切成两半，让扩展自己写出的提示成为乱码——那是本扩展要防的
+  // 失效，不能自己制造。0x20 之外的可读字符（含代理对）都按整字符保留。
+  function clipText(value, limit) {
+    var text = typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value);
+    return text.length > limit ? text.slice(0, cutBefore(text, limit)) : text;
+  }
+
   function oneLine(value) {
     if (typeof value !== 'string') return '';
     var text = value.replace(/\s+/g, ' ').trim();
-    return text.length > LINE ? text.slice(0, cutBefore(text, LINE - 1)) + '\u2026' : text;
+    return text.length > LINE ? clipText(text, LINE - 1) + '\u2026' : text;
   }
 
   function textOf(content) {
@@ -501,12 +522,64 @@ export default function (pi) {
     return batchId;
   }
 
+  // 前缀放回至少要能装下一段有用的正文；低于这个额度就整份留作预览，别把预算切碎。
+  var PARTIAL_FLOOR_CHARS = 512;
+
   function textOnlyTurnActive() {
     try { return globalThis[Symbol.for('cindy.pi.textOnlyTurn')] === true; } catch (err) { return false; }
   }
 
   // 文本回合禁用了所有工具：被 ingest 截断、原文还留在 giants 里的结果，模型既看不到
   // 全文也调不了取回，只能瞎猜。放回时用入库时的块结构，图片与文字的位置关系不变。
+  // 预算按「优先级 + 前缀」分配：最新结果整份放不下时给能放下的前缀，而不是跳过它、
+  // 把预算花在更旧的载荷上——这一回合工具全禁，模型正要用的是最新那份，而它连取回的
+  // 机会都没有。后缀永远读不到，所以只放前缀，并在末尾说明这是预览。
+  // keep 是「总共保留多少字符」，不是「还能新增多少」：额度是按已显示的预览之上算出的
+  // 增量，拿它当总量会把一份更短的文本盖在已有正文上（恢复反而变短）。
+  // 末尾那行预览说明也算进预算（不然放回量会超出 pin 预算一个说明的宽度），非文字块按
+  // 序列化字节计入——和入库的账本是同一把尺；带图的那份放不进预算时不带图，只放文字。
+  function prefixBlocks(blocks, keep, total, id) {
+    var tail = truncationTails(String(id)).named;
+    var nonText = 0;
+    for (var j = 0; j < blocks.length; j++) {
+      var part = blocks[j];
+      if (part && !(part.type === 'text' && typeof part.text === 'string')) {
+        try { nonText += JSON.stringify(part).length; } catch (error) { /* ignore */ }
+      }
+    }
+    // 恢复只能追加：预览里已经有的非文本块一律保留，超出的部分只从文字里扣。
+    // 丢掉图片这类块会让模型在禁用工具的回合永久失去它，而那条结果是它唯一的一次交付。
+    var textBudget = Math.max(0, keep - nonText);
+    var out = [];
+    var shown = 0;
+    var trailer = '';
+    for (var pass = 0; pass < 3; pass++) {
+      out = [];
+      shown = 0;
+      var room = Math.max(0, textBudget - trailer.length);
+      for (var i = 0; i < blocks.length; i++) {
+        var block = blocks[i];
+        if (!block) continue;
+        if (block.type !== 'text' || typeof block.text !== 'string') {
+          out.push(block);
+          continue;
+        }
+        var text = block.text;
+        var roomNow = room - shown;
+        if (roomNow <= 0) continue;
+        if (text.length <= roomNow) { out.push(block); shown += text.length; continue; }
+        var end = cutBefore(text, roomNow);
+        if (end > 0) { out.push({ type: 'text', text: text.slice(0, end) }); shown += end; }
+      }
+      var next = '[truncated ' + shown + ' of ' + total + ' chars; ' + tail + ']';
+      if (next.length === trailer.length) break;
+      trailer = next;
+    }
+    if (shown === 0) return null;
+    out.push({ type: 'text', text: trailer });
+    return out;
+  }
+
   function expandRetained(messages) {
     var picks = [];
     var left = PIN_BUDGET_CHARS;
@@ -518,14 +591,25 @@ export default function (pi) {
       var giant = giants.get(String(message.toolCallId));
       if (!giant || !Array.isArray(giant.blocks) || giant.blocks.length === 0) continue;
       var added = giant.bytes - costOfContent(message.content);
-      if (!(added > 0) || added > left) continue;
-      left -= added;
-      picks.push({ at: i, blocks: giant.blocks });
+      if (!(added > 0)) continue;
+      if (added <= left) { left -= added; picks.push({ at: i, blocks: giant.blocks }); continue; }
+      if (picks.length === 0 && left >= PARTIAL_FLOOR_CHARS) {
+        // 已显示多少 + 还能新增多少 = 这一段总共保留多少字符；调用方按这两者之和截取，
+        // 所以恢复只会追加，不会用更短的前缀覆盖已有正文。
+        picks.push({ at: i, blocks: giant.blocks, add: left, have: textChars(message.content), total: textChars(giant.blocks) });
+        left = 0;
+      }
     }
     if (picks.length === 0) return undefined;
     var out = messages.slice();
     for (var p = 0; p < picks.length; p++) {
-      out[picks[p].at] = Object.assign({}, messages[picks[p].at], { content: picks[p].blocks });
+      var pick = picks[p];
+      var content = pick.blocks;
+      if (pick.add !== undefined) {
+        content = prefixBlocks(pick.blocks, pick.have + pick.add, pick.total, messages[pick.at].toolCallId);
+        if (content === null) continue;
+      }
+      out[pick.at] = Object.assign({}, messages[pick.at], { content: content });
     }
     return out;
   }
@@ -534,8 +618,15 @@ export default function (pi) {
    * 登记一次删除：返回稳定的 refId。成员集合只用来让同一批在后续投影里复用同一个 id，
    * 身份本身在这里分配（不能复用真实调用 id，否则会被它遮住；也不截断拼接，否则撞名）。
    */
+  // 批身份的键：成员 id 由 provider 生成，含分隔符时 join 会把两个不同的批次并成同一个键，
+  // 后一个批次就复用前一个的 ref（取回拿到别人的成员）。JSON 会转义分隔符，任意 id 下
+  // 单射；登记与剪枝重建两处都调它，避免同一个键各拼一次。
+  function refKey(ids) {
+    return JSON.stringify(ids);
+  }
+
   function admitRef(ids) {
-    var key = ids.join('\u0000');
+    var key = refKey(ids);
     var known = refByKey[key];
     if (known !== undefined) return known;
     var refId;
@@ -576,13 +667,27 @@ export default function (pi) {
     return total;
   }
 
+  // 纯文本字符数（非文本块不计）。标记里「N of M chars」和放回额度都按这把尺。
+  function textChars(content) {
+    if (typeof content === 'string') return content.length;
+    if (!Array.isArray(content)) return 0;
+    var total = 0;
+    for (var i = 0; i < content.length; i++) {
+      var block = content[i];
+      if (block && block.type === 'text' && typeof block.text === 'string') total += block.text.length;
+    }
+    return total;
+  }
+
   /** Admit a giant payload; evict oldest entries until the aggregate bound holds. */
   function admitGiant(id, blocks, makeText, error) {
     // error：这条结果是不是失败。压缩后结果消息没了，取回时仍要知道它——登记表是唯一还记着
     // 的地方，所以它是写入的必填项，由两个写入点各自显式给出。
     var cost = costOfContent(blocks);
     if (cost > GIANT_BUDGET_CHARS) return false; // a single payload over budget is never retained
-    // 先按大小决定收不收，再要全文：被拒的载荷不该先付一整份副本的内存。
+    // 收不收只看大小。曾经在这里按内容形状判断「这是不是预览」：那个判断可以被结果
+    // 自己的字面量伪造，而伪造的代价是把一份放得下的原文换成不可恢复的预览。预览不会
+    // 回到这里——入库标记的长度有上限，成形的预览永远低于入库阈值。
     var text = makeText();
     if (giants.has(id)) {
       giantBytes -= giants.get(id).bytes;
@@ -618,6 +723,9 @@ export default function (pi) {
     }
     if (total <= INGEST_LIMIT) return null;
     var retained = admitGiant(id, blocks, function () { return textOf(blocks); }, isError === true);
+    clippedHidden.delete(id);
+    clippedHidden.set(id, retained ? 'retained' : 'dropped');
+    if (clippedHidden.size > CLIPPED_KEEP) clippedHidden.delete(clippedHidden.keys().next().value);
     var kept = 0;
     var truncated = 0;
     var parts = [];
@@ -688,36 +796,14 @@ export default function (pi) {
     var resultMsg = site && site.result ? site.result : null;
     var giantEntry = giants.has(key) ? giants.get(key) : null;
     var giant = giantEntry === null ? null : giantEntry.text;
-    var truncatedPreview = null;
-    // Ingestion truncation appends exactly one marker and it is the last thing in
-    // the result. Only that full shape, naming this call id, counts as a preview: a
-    // result that merely quotes the wording stays recoverable.
-    if (giant === null && resultMsg) {
-      var resultText = textOf(resultMsg.content);
-      var marker = '[truncated ';
-      var shape = /^\[truncated \d+ of \d+ chars; (.+)\]$/;
-      var tails = truncationTails(key);
-      var markerAt = resultText.indexOf(marker);
-      while (markerAt !== -1) {
-        var markerEnd = resultText.indexOf(']', markerAt);
-        // 结果正文本身以「[truncated 」收尾且后面没有右括号：不是入库标记，也不能原地打转。
-        if (markerEnd === -1) break;
-        var markerBody = resultText.slice(markerAt, markerEnd + 1);
-        var endsText = resultText.slice(markerEnd + 1).trim().length === 0;
-        var tail = shape.exec(markerBody);
-        var tailText = tail ? tail[1] : '';
-        if (endsText && (tailText === tails.named || tailText === tails.legacyNamed || tailText === tails.evicted)) truncatedPreview = markerBody;
-        markerAt = resultText.indexOf(marker, markerAt + 1);
-      }
-    }
     // The registry holds the FULL text of an ingestion-truncated payload (the transcript
     // only has the preview). Prefer it, and combine it with the call block so recovery
     // returns arguments + result as the tool promises.
-    // Evicted/lost giant with only the truncation preview in context (the marker ends
-    // the text): refuse rather than serve the preview as the original.
-    if (giant === null && truncatedPreview) {
-      return { ok: false, reason: truncatedPreview.indexOf('not retained') !== -1 ? 'not-retained' : 'evicted' };
-    }
+    // 原文不在登记表里时，判断「上下文那份是预览还是原文」只查入库账：账说截过、原文
+    // 又没了，就明说取不到；账上没有这条（别的进程、别的会话），上下文里的字节就是全部
+    // 存在的东西，照原样交出。
+    if (giant === null && clippedHidden.get(key) === 'dropped') return { ok: false, reason: 'not-retained' };
+    if (giant === null && clippedHidden.get(key) === 'retained') return { ok: false, reason: 'evicted' };
     // 调用还在、结果消息已不在、登记表里也没有：没有可取回的正文。只交出头会让模型把
     // 「结果为空」当成原文——按缺项点名。
     if (!resultMsg && giant === null) return { ok: false, reason: 'missing' };
@@ -784,6 +870,22 @@ export default function (pi) {
   }
 
   // 一页原文。part 为空表示从这条往返的开头读起；"result" 的偏移只在头整份交出之后才发出。
+  // 游标的解码与编码各只有一处：写出的参数和读回来的解释必须互逆。分成两处手写时，
+  // 「省略即默认」会让一段读完后的游标被解释成从头再来，续读就原地打转。
+  function cursorFrom(params) {
+    var p = params || {};
+    var offset = typeof p.offset === 'number' && p.offset > 0 ? Math.floor(p.offset) : 0;
+    var part = p.part === 'call' ? 'call' : p.part === 'result' ? 'result' : offset > 0 ? 'result' : '';
+    return { part: part, offset: offset };
+  }
+  function cursorTo(args, part, offset) {
+    if (part) {
+      args.part = part;
+      args.offset = offset;
+    }
+    return args;
+  }
+
   function pageOriginal(src, part, offset, budget) {
     var head = String(src.head || '');
     var result = String(src.result || '');
@@ -805,8 +907,9 @@ export default function (pi) {
   }
 
   function readSlice(id, src, params) {
-    var part = params && params.part === 'call' ? 'call' : params && (params.part === 'result' || (typeof params.offset === 'number' && params.offset > 0)) ? 'result' : '';
-    var offset = params && typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
+    var cursor = cursorFrom(params);
+    var part = cursor.part;
+    var offset = cursor.offset;
     var limit = RECOVERY_READ_MAX_CHARS;
     var page = pageOriginal(src, part, offset, limit);
     var notice = '';
@@ -821,15 +924,13 @@ export default function (pi) {
     // 页尾先占位：按这条调用可能出现的最长页尾预留（数字按最宽计），页就不越过读取上限。
     var footMax = singleReadFloor(id);
     page = pageOriginal(src, part, offset, limit - footMax);
-    var args = { call_id: String(id) };
-    if (page.cursor.part === 'call') args.part = 'call';
-    args.offset = page.cursor.offset;
+    var args = cursorTo({ call_id: String(id) }, page.cursor.part, page.cursor.offset);
     var footer = '\n\n[truncated: ' + page.rest + ' chars remaining. Call ' + readCall(args) + ' to continue.]';
     // 拒绝只有两个成因，说法共用同一个数：页越过上限，或页里放不下任何正文（游标不前进）。
     var stalled = page.text.length === 0 && page.cursor !== null && page.cursor.part !== 'result';
     if (stalled || page.text.length + footer.length > limit) {
       return {
-        text: notice + 'Cannot page ' + oneLine(id) + ': its call id (' + String(id).length + ' chars) does not fit the read limit (' + limit + ' chars) once repeated in the continuation. Raise CINDY_PI_TOOL_FOLD_RECOVERY_CHARS to at least ' + (singleReadFloor(id) + notice.length) + ', or re-run the command.',
+        text: notice + 'Cannot page ' + oneLine(id) + ': its call id (' + String(id).length + ' chars) does not fit the read limit (' + limit + ' chars) once repeated in the continuation. Raise CINDY_PI_TOOL_FOLD_RECOVERY_CHARS to at least ' + (singleReadFloor(id) + notice.length) + '.',
         isError: true,
       };
     }
@@ -848,8 +949,9 @@ export default function (pi) {
     if (at >= ids.length) {
       return { text: 'cannot continue at ' + at + ': batch ' + key + ' has ' + ids.length + ' members. Read the batch again without "at".', recovered: 0 };
     }
-    var part = params && params.part === 'call' ? 'call' : params && (params.part === 'result' || params.offset > 0) ? 'result' : '';
-    var skip = params && typeof params.offset === 'number' && params.offset > 0 ? Math.floor(params.offset) : 0;
+    var cursor = cursorFrom(params);
+    var part = cursor.part;
+    var skip = cursor.offset;
     var widest = { batch: key, at: 99999999, part: 'call', offset: 999999999999999 };
     var footMax = ('\n\n[truncated: ' + 99999999 + ' round-trips not shown in batch ' + key + '. Call ' + readCall(widest) + ' to continue.]').length;
     var room = RECOVERY_READ_MAX_CHARS - footMax;
@@ -899,9 +1001,7 @@ export default function (pi) {
     }
     var text = (stale === null ? '' : stale + '\n\n') + parts.join('\n\n');
     if (next !== null) {
-      var again = { batch: key, at: next.at };
-      if (next.part !== '') again.part = next.part;
-      if (next.offset > 0) again.offset = next.offset;
+      var again = cursorTo({ batch: key, at: next.at }, next.part, next.offset);
       text += '\n\n[truncated: ' + (ids.length - next.at) + ' round-trips not shown in batch ' + key + '. Call ' + readCall(again) + ' to continue.]';
     }
     // 出口核对：页尾先留了位、内容按余量填，装好后仍越过上限就是分页器的错，不许把越界的页发出去。
@@ -914,7 +1014,7 @@ export default function (pi) {
     var why = one.reason === 'evicted' ? 'full text evicted'
       : one.reason === 'not-retained' ? 'full text not retained'
         : 'not in this session';
-    return '[missing round-trip ' + oneLine(memberId) + ' (' + why + '); re-run that command]';
+    return '[missing round-trip ' + oneLine(memberId) + ' (' + why + '); it already ran]';
   }
 
   function pinOriginal(callId) {
@@ -946,7 +1046,7 @@ export default function (pi) {
   pi.registerTool({
     name: READ_TOOL,
     label: 'Read a folded tool result',
-    description: 'Return the full original text of one folded or truncated tool round-trip (call arguments plus the complete result). Pass the id shown inside the "[folded]" record: a batch id returns the round-trips of that batch, a single call id returns just that one. A long read stops at the per-read limit and ends with the exact arguments for the next page. The folded original is also restored in the conversation until your next user message, so read once and continue instead of re-running the command.',
+    description: 'Return the full original text of one folded or truncated tool round-trip (call arguments plus the complete result). Pass the id shown inside the "[folded]" record: a batch id returns the round-trips of that batch, a single call id returns just that one. A long read stops at the per-read limit and ends with the exact arguments for the next page. The folded original is also restored in the conversation until your next user message, so read once and continue.',
     parameters: {
       type: 'object',
       properties: {
@@ -981,9 +1081,9 @@ export default function (pi) {
       var original = findOriginal(id);
       if (!original || original.ok !== true) {
         var reason = original && original.reason === 'not-retained'
-          ? 'its full text was not retained (payload over the retention budget); re-run the command instead.'
+          ? 'its full text was not retained (payload over the retention budget); it already ran.'
           : original && original.reason === 'evicted'
-            ? 'its full text is no longer available (registry evicted or lost on resume); re-run the command instead.'
+            ? 'its full text is no longer available (registry evicted or lost on resume); it already ran.'
             : 'no folded or truncated round-trip with that id exists in this session.';
         return { content: [{ type: 'text', text: 'Cannot recover ' + oneLine(id) + ': ' + reason }], isError: true };
       }
@@ -999,7 +1099,7 @@ export default function (pi) {
         } else if (!admitGiant(String(id), [{ type: 'text', text: result }], function () { return result; }, original.error === true)) {
           // 转存被拒（超出内存预算）时不能退回钉住：那等于让一次取回把整段原文塞回
           // 上下文，把读上限和 pin 预算一起作废。这里 fail-closed，保持折叠并说明原因。
-          return { content: [{ type: 'text', text: 'Cannot recover ' + oneLine(id) + ': the payload is over the retention budget, so it was not retained; re-run the command instead.' }], isError: true };
+          return { content: [{ type: 'text', text: 'Cannot recover ' + oneLine(id) + ': the payload is over the retention budget, so it was not retained; it already ran.' }], isError: true };
         }
       }
       var page = readSlice(String(id), original, params);
@@ -1090,7 +1190,7 @@ export default function (pi) {
         });
         refByKey = Object.create(null);
         refs.forEach(function (entry, refId) {
-          refByKey[entry.ids.join('\u0000')] = refId;
+          refByKey[refKey(entry.ids)] = refId;
         });
       }
       var batchIds = [];
