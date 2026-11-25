@@ -19,6 +19,13 @@ export interface LeadDispatchFact {
   dispatchId: string;
   turnGeneration: number;
   delivery: OrcaDispatchDelivery;
+  /**
+   * 凭据落地时 Lead 已经收口过几次。
+   *
+   * 回合归属靠它，不靠代次：代次由事件推出来，Stop hook 可能在本轮事件投递前触发，
+   * 那时用代次比较会把本轮的派发漏掉，把一句真话判成假话。
+   */
+  settlesAtAccept?: number;
   queuedMessageId?: string;
   at: number;
   /**
@@ -47,10 +54,7 @@ interface LeadLedger {
   facts: LeadDispatchFact[];
   /** 已经就哪一轮的不实凭据提醒过。同一轮只提醒一次，避免空转。 */
   remindedGeneration: number | null;
-  /**
-   * 已经提醒过的凭据身份（`kind:token`）及时间。纠正会开启新一轮、轮次号前进，
-   * 只按轮次去重会让同一条假凭据在每一轮被重新提醒一次。
-   */
+  /** 已经提醒过的声称身份（假编号 / 被点名的 worker 批），避免一句复述每轮被纠一次。 */
   remindedClaims: Map<string, number>;
   /** 账本属于哪个会话实例。换实例后旧账整体作废，新实例从第一条凭据重新记。 */
   instanceToken?: number;
@@ -59,9 +63,10 @@ interface LeadLedger {
 const ledgers = new Map<string, LeadLedger>();
 /** 派发凭据只在本轮有用，留一天足够覆盖跨重启的收口。 */
 const FACT_RETENTION_MS = 24 * 60 * 60 * 1000;
-/** 同一条不实凭据的重复提醒窗口：纠正会让轮次号前进，只按轮次去重挡不住复述。 */
-const CLAIM_REMINDER_RETENTION_MS = 30 * 60 * 1000;
 const MAX_FACTS = 200;
+/** 同一个声称只纠正一次的时间窗：复述同一件事不算新问题，换一件事才重新判。 */
+const CLAIM_REMINDER_RETENTION_MS = 30 * 60 * 1000;
+const MAX_REMINDED_CLAIMS = 32;
 
 function ledgerFor(leadSessionId: string): LeadLedger {
   let ledger = ledgers.get(leadSessionId);
@@ -77,13 +82,18 @@ function ledgerFor(leadSessionId: string): LeadLedger {
   return ledger;
 }
 
-/** 轮次回退 = 换了会话实例，旧账本不能继续用（否则上一实例的提醒状态会压住新实例）。 */
+/** 轮次回退 = 换了会话实例，只作废旧实例的提醒额度，凭据留着。 */
 function observeGeneration(ledger: LeadLedger, turnGeneration: number): void {
+  // 轮次未知（Stop hook 可能在本轮事件投递前触发）：既不算前进也不算回退。
+  if (turnGeneration <= 0) return;
   if (turnGeneration >= ledger.turnGeneration) {
     ledger.turnGeneration = turnGeneration;
     return;
   }
-  ledgersReset(ledger);
+  // 回退通常只是实例重建，凭据还在 Lead 自己的上下文里；跟着清掉的话，
+  // 它引用一个真实存在的编号就会被判成无中生有。只清额度。
+  ledger.remindedGeneration = null;
+  ledger.remindedClaims.clear();
   ledger.turnGeneration = turnGeneration;
 }
 
@@ -145,17 +155,24 @@ export interface UnbackedDispatchClaim {
 
 /** 派发结果值闭集：这些值只可能来自工具返回。 */
 const WAKE_KIND_PATTERN = /\bwake_kind\s*[=:]\s*`?([a-z][a-z-]{2,20})`?/i;
-/** 宿主签发编号的协议标签：只认这几个标签，不猜裸 id。 */
-const LABELED_ID_ALL_PATTERN =
-  /\b(queued_message_id|message_id|dispatch_id)\s*[=:]\s*`?([A-Za-z0-9_-]{8,64})`?/gi;
+
+/**
+ * 宿主会发出的 wake_kind 值（`send_to_worker` / `send_to_session` 的返回闭集）。
+ *
+ * 不在这个集合里的值不可能来自任何一次派发——账本里有多少条都一样。
+ */
+const ISSUED_WAKE_KINDS = new Set(['resumed', 'already-active', 'queued', 'created']);
+/** 宿主签发编号的协议标签：只认派发编号，不猜裸 id。入站排队编号由宿主自己印在输入里，拿来核对只会拦下真话。 */
+const LABELED_ID_ALL_PATTERN = /\b(dispatch_id)\s*[=:]\s*`?([A-Za-z0-9_-]{8,64})`?/gi;
 
 /**
  * 找出回复里「引用了宿主没有的派发凭据」的第一处。
  *
- * - `wake_kind=<值>` 断言了一次派发结果，而账本里一条凭据都没有 → 无中生有。
- * - `queued_message_id: <编号>` 等标签后的编号必须命中账本里某个派发/排队编号。
+ * - `wake_kind=<值>` 断言了一次派发结果：值不在协议闭集里，或账本里一条凭据都没有 → 无中生有。
+ * - `dispatch_id: <编号>` 必须命中账本里某个派发编号。`queued_message_id` / `message_id`
+ *   是**入站**回报的编号（宿主自己印进 Lead 输入），复述它们是正常行为，不核对。
  *
- * 账本非空时 `wake_kind` 不判：那时分不清它复述的是哪一次派发，误判代价高。
+ * 账本非空且 wake_kind 是合法值时不管：那时分不清它复述的是哪一次派发，误判代价高。
  */
 export function findUnbackedDispatchClaim(
   leadSessionId: string,
@@ -165,8 +182,11 @@ export function findUnbackedDispatchClaim(
   const facts = ledger ? ledger.facts : [];
 
   const wakeKind = text.match(WAKE_KIND_PATTERN);
-  if (wakeKind && facts.length === 0) {
-    return { kind: 'wake-kind', token: wakeKind[1]!, label: 'wake_kind' };
+  if (wakeKind) {
+    const token = wakeKind[1]!.toLowerCase();
+    // 协议里不存在的值，账本再多也证明不了它：先判这一条，与账本无关。
+    if (!ISSUED_WAKE_KINDS.has(token)) return { kind: 'wake-kind', token, label: 'wake_kind' };
+    if (facts.length === 0) return { kind: 'wake-kind', token, label: 'wake_kind' };
   }
 
   // 一条回复里可能列出多个编号：逐个核对，只要有一个查不到就拦住。
@@ -184,23 +204,35 @@ export function findUnbackedDispatchClaim(
 }
 
 /**
- * 同一轮只提醒一次。返回 true 表示这次可以用掉提醒额度。
- * 换成 true 之后再调用同一轮会返回 false，避免模型坚持不改时来回空转。
+ * 额度分两层：同一轮一次；同一个声称在窗口内一次。
+ *
+ * 同一轮只提醒一次，避免模型坚持不改时来回空转。同一个声称（同一条假编号、
+ * 同一批被点名的 worker）在窗口内也只提醒一次——改成「每轮都提醒」会让一句
+ * 复述在接下来每一轮都被纠正一遍，那正是「一单纠正四次」的形态。
+ *
+ * claimKey 省略时只做按轮去重：调用点还没算出身份时不能凭轮次冒充身份。
  */
 export function consumeDispatchClaimReminder(
   leadSessionId: string,
   turnGeneration: number,
-  claim?: { kind: string; token: string },
+  claimKey?: string,
 ): boolean {
   const ledger = ledgerFor(leadSessionId);
   observeGeneration(ledger, turnGeneration);
+  // 轮次未知时不能当作新的一轮：那会把同一句声称每轮纠一遍。
+  if (turnGeneration <= 0) return false;
   if (ledger.remindedGeneration === turnGeneration) return false;
-  if (claim) {
-    const key = `${claim.kind}:${claim.token}`;
+  if (claimKey) {
     const now = Date.now();
-    const last = ledger.remindedClaims.get(key);
-    if (last !== undefined && now - last < CLAIM_REMINDER_RETENTION_MS) return false;
-    ledger.remindedClaims.set(key, now);
+    for (const [key, at] of ledger.remindedClaims) {
+      if (now - at > CLAIM_REMINDER_RETENTION_MS) ledger.remindedClaims.delete(key);
+    }
+    if (ledger.remindedClaims.has(claimKey)) return false;
+    if (ledger.remindedClaims.size >= MAX_REMINDED_CLAIMS) {
+      const oldest = ledger.remindedClaims.keys().next().value;
+      if (oldest !== undefined) ledger.remindedClaims.delete(oldest);
+    }
+    ledger.remindedClaims.set(claimKey, now);
   }
   ledger.remindedGeneration = turnGeneration;
   return true;

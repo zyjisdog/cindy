@@ -5,7 +5,7 @@ import {
   consumeDispatchClaimReminder,
   dispatchFactsForTurn,
   findUnbackedDispatchClaim,
-  sessionInstanceToken,
+  resetDispatchClaimState,
   type UnbackedDispatchClaim,
 } from './orcaDispatchClaims.js';
 
@@ -17,48 +17,32 @@ const log = createLogger('orca-turn-gate');
  */
 const JUDGE_TIMEOUT_MS = 10_000;
 const JUDGE_MAX_TOKENS = 8;
-/** 只判断尾,长回复的结论都在末尾。 */
-const JUDGE_TEXT_CHARS = 2000;
-const MAX_TRACKED_TURNS = 512;
-
-type TurnKey = `${string}:${number}`;
-
-interface TurnCounts {
-  tools: number;
-  orcaTools: number;
-  /** 会话实例标记：换实例后同一会话 id 与代次会重用，旧计数不能继承。 */
-  instance?: number;
-}
-
 /**
- * Orca 自身的工具名。闸门只看「有没有碰过派发面」：读了几个文件不影响判断，
- * 而一旦调过任何一个 Orca 工具，凭据层就已经能核对，不需要语义判定。
+ * 判官必须看到**整段**回复：要么全文，要么不判。
+ *
+ * 这里不能取窗口，也不能切块。取末尾 2000 字押「结论在末尾」；取首尾两段押
+ * 「声称在两端」；切块押「切点不落在句子中间」——三种都是赌位置，而声称可以
+ * 出现在任何地方（先跑测试、中途派单、再收尾一大段）。切成两半的「没有派单」
+ * 还可能被读成声称，把真话纠一遍。所以判据只有一条：送全文。
+ *
+ * 超过上限时不抽样、不推断，按不可用放行并在日志里留下长度——让「没读」是
+ * 可见的事实，而不是悄悄变成 quiet。
  */
-const ORCA_TOOL_NAMES = new Set([
-  'send_to_worker',
-  'send_to_lead',
-  'create_worker',
-  'list_workers',
-  'update_worker',
-  'interrupt_worker',
-  'move_queued_message',
-  'get_worker_queue_status',
-  'switch_focus',
-  'wait_for_workers',
-  'report_progress',
-]);
+const JUDGE_TEXT_LIMIT = 48_000;
+const MAX_TRACKED_ENTRIES = 512;
+const MAX_PRIOR_DISPATCH_LINES = 8;
 
-const countsByTurn = new Map<TurnKey, TurnCounts>();
-const judgedByTurn = new Map<string, 'claim' | 'quiet' | 'unavailable'>();
 /** 每个会话当前回合号：Stop hook 只拿得到 sessionId，没有事件里的代次。 */
 const currentGeneration = new Map<string, number>();
-/** 引擎侧已经判过的回合，宿主 settle 不再重判——一个会话只能有一个否决点。 */
-const handledByTurn = new Map<TurnKey, number | undefined>();
-/** 每个会话最后一次看到的回合号与实例标记，用来发现「换了实例、代次从头数」。 */
+/** 每个会话最后一次看到的回合号，用来发现「换了实例、代次从头数」。 */
 const lastGeneration = new Map<string, number>();
-const instanceOf = new Map<string, number>();
-
-const turnKey = (sessionId: string, generation: number): TurnKey => `${sessionId}:${generation}`;
+/** 已经判过的收口文本：一个会话只能有一个否决点，两个出口不能各判一次。 */
+const handledBySession = new Map<string, Set<string>>();
+/** 判定结果缓存：同一回合同一段文本只问一次模型。 */
+const judgedByTurn = new Map<string, 'claim' | 'quiet'>();
+/** Lead 收口计数与最后一次收口文本：欠账按「过了几个回合」计时。 */
+const leadSettles = new Map<string, number>();
+const lastSettleFingerprint = new Map<string, string>();
 
 function trimTracked(map: Map<string, unknown>, limit: number): void {
   while (map.size > limit) {
@@ -68,8 +52,23 @@ function trimTracked(map: Map<string, unknown>, limit: number): void {
   }
 }
 
-/** 每个事件都调：记住当前回合号，Stop hook 才能按代次取到凭据与本轮计数。 */
-export function noteTurnGeneration(sessionId: string, generation: number): void {
+/** 收口文本的指纹：同一段结论被两个出口各送一次时，只算一次。 */
+function fingerprint(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let at = 0; at < text.length; at += 1) {
+    hash ^= text.charCodeAt(at);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${text.length}.${hash.toString(16)}`;
+}
+
+/** 每个事件都调一次：记住当前回合号，Stop hook 才能按代次取到凭据账。 */
+export function noteTurnEvent(sessionId: string, generation: number): void {
+  const previous = lastGeneration.get(sessionId);
+  // 代次回退＝会话实例重建：旧实例记的「已判」与计数都不能继承，
+  // 否则新实例的第 3 回合会被当成判过而静默放过。
+  if (previous !== undefined && generation < previous) forgetTurnGate(sessionId);
+  lastGeneration.set(sessionId, generation);
   currentGeneration.set(sessionId, generation);
 }
 
@@ -78,97 +77,40 @@ export function currentTurnGeneration(sessionId: string): number | undefined {
 }
 
 /**
- * 收口闸门的单写点：每个事件都调一次。代次总是记录（无工具回合也要记），
- * 只有真的带工具名时才累加计数——两件事拆成两个函数就会出现
- * 「只在 tool_use 时更新代次」这种断点。
- */
-export function noteTurnEvent(
-  sessionId: string,
-  generation: number,
-  toolName?: string,
-  instance?: number,
-): void {
-  const previous = lastGeneration.get(sessionId);
-  // 实例标记变了、或代次回退，都说明会话被重建过：旧实例同一代次的计数必须丢掉，
-  // 否则新实例第 1 轮会被当成「调过工具」而跳过判定。
-  const regressed =
-    previous !== undefined &&
-    (generation < previous || (instance !== undefined && instanceOf.get(sessionId) !== instance));
-  if (regressed) forgetTurnGate(sessionId);
-  lastGeneration.set(sessionId, generation);
-  if (instance !== undefined) instanceOf.set(sessionId, instance);
-  currentGeneration.set(sessionId, generation);
-
-  if (!toolName) return;
-  const key = turnKey(sessionId, generation);
-  const stored = regressed ? undefined : countsByTurn.get(key);
-  const counts =
-    stored && stored.instance === instance ? stored : { tools: 0, orcaTools: 0, instance };
-  counts.tools += 1;
-  if (isOrcaTool(toolName)) counts.orcaTools += 1;
-  countsByTurn.set(key, counts);
-  trimTracked(countsByTurn, MAX_TRACKED_TURNS);
-}
-
-/** 当前会话实例标记：Hook 与 settle 两个出口都要按同一个实例写账。 */
-export function currentTurnInstance(sessionId: string): number | undefined {
-  return instanceOf.get(sessionId);
-}
-
-/**
- * Orca 工具名判定。MCP 侧可能带命名空间（`mcp__cindy__send_to_worker`、`cindy/send_to_worker`），
- * 所以只比最后一段，避免换一种拼接就整体失效。
- */
-function isOrcaTool(toolName: string): boolean {
-  if (ORCA_TOOL_NAMES.has(toolName)) return true;
-  const tail = toolName.split('__').pop()?.split('/').pop() ?? toolName;
-  return ORCA_TOOL_NAMES.has(tail);
-}
-
-export function turnToolUseCount(sessionId: string, generation: number, instance?: number): number {
-  const counts = countsByTurn.get(turnKey(sessionId, generation));
-  return counts && counts.instance === instance ? counts.tools : 0;
-}
-
-/** 本回合碰过 Orca 工具的次数。0 表示它没碰过派发面。 */
-export function turnOrcaToolUseCount(
-  sessionId: string,
-  generation: number,
-  instance?: number,
-): number {
-  const counts = countsByTurn.get(turnKey(sessionId, generation));
-  return counts && counts.instance === instance ? counts.orcaTools : 0;
-}
-
-/** 标记该回合已由引擎侧闸门判过（无论结论是拦还是放）。 */
-export function markTurnGateHandled(
-  sessionId: string,
-  generation: number,
-  instance?: number,
-): void {
-  handledByTurn.set(turnKey(sessionId, generation), instance);
-  trimTracked(handledByTurn, MAX_TRACKED_TURNS);
-}
-
-export function turnGateHandled(
-  sessionId: string,
-  generation: number,
-  instance?: number,
-): boolean {
-  const key = turnKey(sessionId, generation);
-  if (!handledByTurn.has(key)) return false;
-  return handledByTurn.get(key) === instance;
-}
-
-/**
- * Lead 收口计数，用来给欠账计时。
+ * 标记这段收口文本已判过（结论是拦还是放都算）。
  *
- * 用「又过了几个 Lead 回合」而不是墙钟或代次：欠账的意义是「还在等，而且没人动」，
- * 换个说法就是连续几轮都没处理；代次在换实例时会跳变，墙钟会让空闲会话误触发。
+ * 身份用文本而不是代次：Stop hook 可能在本轮事件到达前触发，那时宿主手里的代次
+ * 还停在上一轮；按代次记会让两个出口各判一次，也会把「把握到本轮的派发」漏掉。
  */
-export function noteLeadSettle(sessionId: string): number {
-  const next = (leadSettles.get(sessionId) ?? 0) + 1;
+export function markTurnGateHandled(sessionId: string, textFingerprint: string): void {
+  const seen = handledBySession.get(sessionId) ?? new Set<string>();
+  seen.add(textFingerprint);
+  handledBySession.set(sessionId, seen);
+  while (seen.size > MAX_TRACKED_ENTRIES) {
+    const oldest = seen.values().next();
+    if (oldest.done) return;
+    seen.delete(oldest.value);
+  }
+  trimTracked(handledBySession, MAX_TRACKED_ENTRIES);
+}
+
+export function turnGateHandled(sessionId: string, textFingerprint: string): boolean {
+  return handledBySession.get(sessionId)?.has(textFingerprint) ?? false;
+}
+
+/**
+ * 记一次 Lead 收口，返回已收口的次数。
+ *
+ * 同一段收口文本被数两次，「连续两个回合没回答」就变成一个回合——引擎 Stop hook
+ * 与宿主 settle 都会调这里。
+ */
+export function noteLeadSettle(sessionId: string, textFingerprint: string): number {
+  if (lastSettleFingerprint.get(sessionId) === textFingerprint) {
+    return leadSettleCount(sessionId);
+  }
+  const next = leadSettleCount(sessionId) + 1;
   leadSettles.set(sessionId, next);
+  lastSettleFingerprint.set(sessionId, textFingerprint);
   return next;
 }
 
@@ -192,11 +134,12 @@ export interface WorkerArrears {
 }
 
 const arrearsByWorker = new Map<string, WorkerArrears>();
-const leadSettles = new Map<string, number>();
 /** 欠账满两个 Lead 回合还没被处理，就该说话。一轮留给 Lead 正常向用户澄清。 */
 const ARREARS_SETTLE_THRESHOLD = 2;
+const MAX_TRACKED_ARREARS = 256;
 
-const arrearsKey = (leadSessionId: string, workerId: string): string => `${leadSessionId}:${workerId}`;
+const arrearsKey = (leadSessionId: string, workerId: string): string =>
+  `${leadSessionId}:${workerId}`;
 
 /** 记一条欠账；worker 报了非 waiting 状态就说明它不再等，撤销。 */
 export function noteWorkerReportArrears(input: {
@@ -220,6 +163,7 @@ export function noteWorkerReportArrears(input: {
     settlesAtReport: leadSettleCount(input.leadSessionId),
     nudged: false,
   });
+  trimTracked(arrearsByWorker, MAX_TRACKED_ARREARS);
 }
 
 /** Lead 真的给了它活（派发被接受），欠账就算处理过。 */
@@ -251,36 +195,43 @@ export function arrearsCount(leadSessionId: string): number {
 
 /** 会话结束或重建时清账,避免旧代次的计数被新一轮读到。 */
 export function forgetTurnGate(sessionId?: string): void {
+  // 会话结束了，它那本派发账也一起丢掉：账本永不清会被会话键一直占着内存。
+  resetDispatchClaimState(sessionId);
   if (!sessionId) {
-    countsByTurn.clear();
-    judgedByTurn.clear();
-    arrearsByWorker.clear();
-    leadSettles.clear();
     currentGeneration.clear();
-    handledByTurn.clear();
     lastGeneration.clear();
-    instanceOf.clear();
+    handledBySession.clear();
+    judgedByTurn.clear();
+    leadSettles.clear();
+    lastSettleFingerprint.clear();
+    arrearsByWorker.clear();
     return;
   }
   const prefix = `${sessionId}:`;
-  for (const key of countsByTurn.keys()) if (key.startsWith(prefix)) countsByTurn.delete(key);
   for (const key of judgedByTurn.keys()) if (key.startsWith(prefix)) judgedByTurn.delete(key);
   for (const key of arrearsByWorker.keys()) if (key.startsWith(prefix)) arrearsByWorker.delete(key);
-  for (const key of handledByTurn.keys()) if (key.startsWith(prefix)) handledByTurn.delete(key);
-  leadSettles.delete(sessionId);
   currentGeneration.delete(sessionId);
   lastGeneration.delete(sessionId);
-  instanceOf.delete(sessionId);
+  handledBySession.delete(sessionId);
+  leadSettles.delete(sessionId);
+  lastSettleFingerprint.delete(sessionId);
 }
 
-function judgePrompt(workerLabels: string[], finalText: string): string {
-  const workers = workerLabels.length ? workerLabels.join(', ') : '(none registered)';
+function judgePrompt(workerLabels: string[] | undefined, priorDispatches: string[], finalText: string): string {
+  const workers = workerLabels?.length ? workerLabels.join(', ') : '(none registered)';
+  const prior = priorDispatches.length
+    ? priorDispatches.map((line) => (line.startsWith('  ') ? line : `  ${line}`)).join('\n')
+    : '  (none)';
   return [
-    'One assistant turn ended with no tool call and no accepted dispatch.',
+    'One assistant turn ended with no dispatch accepted in that turn.',
     `Workers that could receive work: ${workers}.`,
-    "Decide whether this closing text asserts that work was already handed to a worker.",
-    'Answer "claim" only for an explicit assertion that work was already given, dispatched, queued, or is being done by a worker.',
-    'Answer "quiet" for summaries, plans, questions, status of user-facing work, or anything that does not assert that a handoff already happened.',
+    'Handoffs the host already accepted earlier in this session, most recent first:',
+    prior,
+    'Decide whether this closing text asserts that work was already handed to a worker.',
+    'Answer "claim" only for an explicit assertion that work was given, dispatched or queued to a worker and that this handoff is not one of the recorded handoffs above.',
+    'Text that reports or refers back to a recorded handoff (answering a question about it, or restating it) is a restatement, not a claim.',
+    'Denials such as "this turn dispatched nothing" are not claims.',
+    'Answer "quiet" for summaries, plans, questions, status of user-facing work, restatements without a named worker, or anything that does not assert that a new handoff already happened.',
     'When unsure, answer "quiet".',
     'Reply with exactly one word: claim or quiet.',
     '',
@@ -290,35 +241,64 @@ function judgePrompt(workerLabels: string[], finalText: string): string {
 }
 
 export type DispatchClaimVerdict = 'claim' | 'quiet' | 'unavailable';
+
 /**
- * 只剩「纯口语声称已派」这一格需要语义判定:凭据(L0)已经由账本比对处理。
+ * 只剩「纯口语声称已派」这一格需要语义判定:凭据已经由账本比对处理。
  * 判定失败、超时、无法解析一律返回 unavailable 并放行。
  */
 export async function judgeDispatchClaim(params: {
   leadSessionId: string;
   turnGeneration: number;
   finalText: string;
-  workerLabels: string[];
+  workers?: Array<{ label: string; status: string }>;
+  workerLabels?: string[];
+  priorDispatches?: string[];
 }): Promise<DispatchClaimVerdict> {
   const text = params.finalText.trim();
   if (!text) return 'quiet';
 
-  const key = `${turnKey(params.leadSessionId, params.turnGeneration)}:${text.length}:${text.slice(-64)}`;
+  const key = `${params.leadSessionId}:${params.turnGeneration}:${fingerprint(text)}`;
   const cached = judgedByTurn.get(key);
   if (cached) return cached;
 
-  let verdict: DispatchClaimVerdict = 'unavailable';
+  if (text.length > JUDGE_TEXT_LIMIT) {
+    // 宁可放过，不拿半段文本下结论：抽样恰好漏掉声称比不判更坏。
+    // 不写缓存：下一出口/下一回合还能再试。
+    log.info('orca turn gate skipped an oversized turn', { chars: text.length });
+    return 'unavailable';
+  }
+
+  const verdict = await judgeOneText({
+    workerLabels: params.workerLabels ?? params.workers?.map((worker) => worker.label),
+    priorDispatches: params.priorDispatches,
+    text,
+    timeoutMs: JUDGE_TIMEOUT_MS,
+  });
+
+  // 只缓存真结论：把「没读成」缓存成 quiet 等于把一次超时变成一个回合永久免检。
+  if (verdict !== 'unavailable') {
+    judgedByTurn.set(key, verdict);
+    trimTracked(judgedByTurn, MAX_TRACKED_ENTRIES);
+  }
+  return verdict;
+}
+
+/** 判一次：送整段文本，一次调用出结论。 */
+async function judgeOneText(params: {
+  workerLabels?: string[];
+  priorDispatches?: string[];
+  text: string;
+  timeoutMs: number;
+}): Promise<DispatchClaimVerdict> {
   try {
-    // 整个判定必须在一个截止时间内完成:辅助链有多候选模型,单次请求的超时
-    // 挡不住「第一个耗尽后换下一个」,那样收口会被拖到几十秒。
-    // 动态取 maker:静态 import 会把整棵 maker-host 模块图拉进任何间接引用
-    // 本模块的测试里(它们的 orcaTeamStore mock 不全),collect 阶段就会失败。
+    // 动态取 maker：静态 import 会把整棵 maker-host 模块图拉进任何间接引用
+    // 本模块的测试里（它们的 orcaTeamStore mock 不全），collect 阶段就会失败。
     const { getMaker } = await import('../maker-host/index.js');
     const result = await requestUtilityTextWithinTimeout(
       (signal) =>
         requestUtilityText(
           getMaker(),
-          judgePrompt(params.workerLabels, text.slice(-JUDGE_TEXT_CHARS)),
+          judgePrompt(params.workerLabels, params.priorDispatches ?? [], params.text),
           {
             source: 'orca-turn-gate',
             maxTokens: JUDGE_MAX_TOKENS,
@@ -326,38 +306,83 @@ export async function judgeDispatchClaim(params: {
             signal,
           },
         ),
-      JUDGE_TIMEOUT_MS,
+      params.timeoutMs,
       undefined,
       () => ({ ok: false, reason: 'timeout', attempts: [] }),
     );
     // 只接受单值回答：`no claim`、`claim or quiet` 这类都不是结论，按不可用放行。
-    if (result.ok) {
-      const answer = result.text.trim().replace(/^[`'"*]+|[`'"*.]+$/g, '').toLowerCase();
-      if (answer === 'claim') verdict = 'claim';
-      else if (answer === 'quiet') verdict = 'quiet';
-    }
+    if (!result.ok) return 'unavailable';
+    const answer = result.text.trim().replace(/^[`'"*]+|[`'"*.]+$/g, '').toLowerCase();
+    if (answer === 'claim') return 'claim';
+    if (answer === 'quiet') return 'quiet';
+    return 'unavailable';
   } catch (error) {
     log.info('orca turn gate judge unavailable', {
       error: error instanceof Error ? error.message : String(error),
     });
+    return 'unavailable';
   }
-
-  judgedByTurn.set(key, verdict);
-  trimTracked(judgedByTurn, MAX_TRACKED_TURNS);
-  return verdict;
 }
 
-/** 拦下收口时回灌给模型的说明。L0 与 L1 用同一段结构，只有第一句不同。 */
+/** 拦下收口时回灌给模型的说明。 */
 function unbackedClaimReason(claim: UnbackedDispatchClaim): string {
-  const detail =
-    claim.kind === 'wake-kind'
-      ? `You wrote \`${claim.label}=${claim.token}\`, but the host accepted no dispatch for this session.`
-      : `You wrote \`${claim.label}: ${claim.token}\`, but no such dispatch exists in this session.`;
   return [
     '[Orca host] You cited a dispatch record the host does not have.',
-    detail,
+    `You wrote \`${claim.label}=${claim.token}\`, but the host accepted no dispatch for this session.`,
     'Either dispatch now with send_to_worker, or say plainly that nothing was dispatched.',
   ].join('\n');
+}
+
+/**
+ * 把账本里已成立的派发写成判官能读的几行：判官靠它把「复述」与「新声称」分开。
+ *
+ * 少了这段，判官只有「本回合有没有派发」这一个量，「我上一轮派过了」与「我刚派了」
+ * 在它眼里一模一样，真话会被当成假话纠正。
+ */
+/**
+ * 文本里是否点名了这个 Worker。
+ *
+ * 用词边界而不是子串：Worker 叫 `research` 时，`researcher` 不该算出点名——
+ * 名字参与去重键，子串命中会把两个不同的声称并成一个，桥掉后面的纠正。
+ */
+function mentionsLabel(text: string, label: string): boolean {
+  const lowered = text.toLowerCase();
+  const needle = label.toLowerCase();
+  const wordChar = /[a-z0-9_]/;
+  let at = lowered.indexOf(needle);
+  while (at !== -1) {
+    const before = lowered[at - 1] ?? '';
+    const after = lowered[at + needle.length] ?? '';
+    if (!wordChar.test(before) && !wordChar.test(after)) return true;
+    at = lowered.indexOf(needle, at + 1);
+  }
+  return false;
+}
+
+function describePriorDispatches(input: {
+  leadSessionId: string;
+  turnGeneration: number;
+  workers: Array<{ label: string; status: string }>;
+  settleIndex: number;
+  text: string;
+}): string[] {
+  const statuses = new Map(input.workers.map((worker) => [worker.label, worker.status]));
+  const facts = dispatchFactsForTurn(input.leadSessionId, input.turnGeneration).sort(
+    (a, b) => b.at - a.at,
+  );
+  // 先给这段文本点到的 Worker：复述的往往就是最近提到的那个，被裁掉的恰好是
+  // 「我上一轮派给 research 了」这句真话的依据。剩下的按时间补足行数。
+  const cited = facts.filter((fact) => mentionsLabel(input.text, fact.workerLabel));
+  const rest = facts.filter((fact) => !cited.includes(fact));
+  return [...cited, ...rest]
+    .slice(0, MAX_PRIOR_DISPATCH_LINES)
+    .map((fact) => {
+      const closesAgo =
+        fact.settlesAtAccept === undefined ? 1 : input.settleIndex - fact.settlesAtAccept;
+      const when = closesAgo <= 0 ? 'this turn' : `${closesAgo} turn(s) earlier`;
+      const status = statuses.get(fact.workerLabel) ?? 'unknown';
+      return `  ${fact.workerLabel} — accepted ${when}, delivery ${fact.delivery}, worker status ${status}`;
+    });
 }
 
 const JUDGED_CLAIM_REASON = [
@@ -366,79 +391,120 @@ const JUDGED_CLAIM_REASON = [
 ].join('\n');
 
 /**
+ * 「派/安排/交给」这类动词的粗筛：命中才值得付一次模型调用。
+ *
+ * 绝大多数收口是普通汇报，没有这类词就直接放行；这不是判据，只是省钱。
+ */
+const DISPATCH_WORD_PATTERN =
+  /派|安排|交给|交办|转交|让.{0,8}(做|跑|改|查)|已发出|hand(?:ed|s)?\s+(?:it\s+|this\s+)?off|dispatch|delegat|assign|sent to|queued to/i;
+
+/**
  * 收口闸门的唯一判定入口。返回 reason 表示不允许收口（引擎 Stop hook 会据此 block）；
  * 返回 undefined 表示放行。
  *
  * 两个出口共用这里的判定、上限与文案：
  * - Claude Code：注册在引擎自己的 Stop 里，和用户 hook 同场评估、一次续跑；
  * - Codex / pi：宿主 settle 里调（Codex 的 hooks 在 Cindy 下是关闭的，不存在叠加）。
- *
- * 每回合最多拦一次，记在 `consumeDispatchClaimReminder` 里，两个出口共享同一本账。
  */
 export async function evaluateTurnGate(input: {
   leadSessionId: string;
   turnGeneration: number;
   finalText: string | undefined;
-  workerLabels: string[];
-  /** 会话实例标记；换实例后代次重用，计数与凭据都不能沿用。 */
-  instance?: number;
+  workers: Array<{ label: string; status: string }>;
 }): Promise<string | undefined> {
   const text = input.finalText?.trim() ?? '';
-  markTurnGateHandled(input.leadSessionId, input.turnGeneration, input.instance);
   if (!text) return undefined;
 
+  const textFingerprint = fingerprint(text);
+  // 一个会话一个否决点：引擎侧判过这段收口，宿主 settle 不再判第二遍。
+  if (turnGateHandled(input.leadSessionId, textFingerprint)) return undefined;
+
+  const settleIndex = noteLeadSettle(input.leadSessionId, textFingerprint);
+
+  // L2 欠账：有 Worker 报了 waiting 并留了问题，之后连续两个 Lead 回合没人理它。
+  // 判据是状态（谁在等、等了几轮），不是文本；沉默的没做同样命中。
+  const due = arrearsDue(input.leadSessionId);
+  if (due.length > 0) {
+    const arrear = due[0]!;
+    markArrearsNudged(arrear.leadSessionId, arrear.workerId);
+    markTurnGateHandled(input.leadSessionId, textFingerprint);
+    log.info('orca arrears reminder', {
+      leadSessionId: input.leadSessionId,
+      worker: arrear.workerId,
+      turns: settleIndex - arrear.settlesAtReport,
+    });
+    return [
+      `[Orca host] Worker ${arrear.workerLabel} has been waiting ${settleIndex - arrear.settlesAtReport} turns and nothing has been sent to it since:`,
+      arrear.question,
+      'Answer it with send_to_worker, or tell the user what you are waiting for.',
+    ].join('\n');
+  }
+
+  // L0 凭据层：引用了宿主没有的派发凭据。
   const claim = findUnbackedDispatchClaim(input.leadSessionId, text);
   if (claim) {
-    if (
-      !consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration, {
-        kind: claim.kind,
-        token: claim.token,
-      })
-    ) {
+    if (!consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration, `${claim.kind}:${claim.token}`)) {
       return undefined;
     }
+    markTurnGateHandled(input.leadSessionId, textFingerprint);
     return unbackedClaimReason(claim);
   }
 
-  // 只剩「纯口语声称已派」这一格需要语义判定：本回合零派发、且没碰过任何 Orca 工具。
-  // 用「零 Orca 工具」而不是「零工具」：读了几个文件再说已派同样可疑，
-  // 而那正是 Claude Code 用户最常见的形态。
-  // 派发数在这里自己数：交给调用方算，就会有人把「整本账」当成「本回合」，
-  // 于是历史上派过一次之后，后面零派发的回合永远跳过判定。
-  const turnDispatches = dispatchFactsForTurn(input.leadSessionId, input.turnGeneration).filter(
-    (fact) => fact.turnGeneration === input.turnGeneration,
+  // 只剩「纯口语声称已派」这一格需要语义判定。
+  //
+  // 免检的判据只有一条：**这个回合自己派发过**。归属看「上一次收口之后落地」
+  // （settlesAtAccept），不看代次等值——代次由事件推出来，Stop hook 触发时可能
+  // 还停在上一轮，把握到本轮的派发漏掉，就会把一句真话判成假话。
+  //
+  // 「碰过 Orca 工具」不构成免检：调用两次都报错、第三次才成的形态真实存在，
+  // 那种回合里说「已派出去了」同样是假话。
+  const dispatchedThisTurn = dispatchFactsForTurn(input.leadSessionId, input.turnGeneration).some(
+    (fact) =>
+      fact.settlesAtAccept === undefined
+        ? fact.turnGeneration === input.turnGeneration
+        : fact.settlesAtAccept >= settleIndex - 1,
   );
-  if (
-    turnDispatches.length > 0 ||
-    turnOrcaToolUseCount(input.leadSessionId, input.turnGeneration, input.instance) > 0
-  ) {
+  if (dispatchedThisTurn) {
+    markTurnGateHandled(input.leadSessionId, textFingerprint);
     return undefined;
   }
+
+  // 没有派发、也没有这类动词：普通汇报，不付模型调用。
+  if (!DISPATCH_WORD_PATTERN.test(text)) {
+    markTurnGateHandled(input.leadSessionId, textFingerprint);
+    return undefined;
+  }
+
   const verdict = await judgeDispatchClaim({
     leadSessionId: input.leadSessionId,
     turnGeneration: input.turnGeneration,
     finalText: text,
-    workerLabels: input.workerLabels,
+    workerLabels: input.workers.map((worker) => worker.label),
+    priorDispatches: describePriorDispatches({
+      leadSessionId: input.leadSessionId,
+      turnGeneration: input.turnGeneration,
+      workers: input.workers,
+      settleIndex,
+      text,
+    }),
   });
-  if (verdict !== 'claim') return undefined;
-  if (
-    !consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration, {
-      kind: 'judge',
-      // 额度绑定到「这一次声称」而不是整个会话：常量键会把后续 30 分钟里
-      // 所有判定纠正一起压掉，换一段话再声称就再也叫不醒。
-      token: claimFingerprint(text),
-    })
-  ) {
+  if (verdict !== 'claim') {
+    markTurnGateHandled(input.leadSessionId, textFingerprint);
+    return undefined;
+  }
+
+  // 声称的身份 = 它点名的 worker 名单；没点名时用文本指纹，避免把所有不点名的
+  // 声称合并成一个 key（那会让第一句拦下后，窗口内的假声称全部静默放行）。
+  const named = input.workers
+    .map((worker) => worker.label)
+    .filter((label) => mentionsLabel(text, label))
+    .sort();
+  const claimKey = named.length > 0 ? `spoken:${named.join('|')}` : `spoken:unnamed:${textFingerprint}`;
+  markTurnGateHandled(input.leadSessionId, textFingerprint);
+  if (!consumeDispatchClaimReminder(input.leadSessionId, input.turnGeneration, claimKey)) {
     return undefined;
   }
   return JUDGED_CLAIM_REASON;
 }
 
-/** 一段回复的指纹：同文本重复声称不重复纠正，换文本算新问题。 */
-function claimFingerprint(text: string): string {
-  let hash = 5381;
-  for (let index = 0; index < text.length; index += 1) {
-    hash = ((hash << 5) + hash + text.charCodeAt(index)) >>> 0;
-  }
-  return `${text.length}-${hash.toString(36)}`;
-}
+export { MAX_PRIOR_DISPATCH_LINES, JUDGE_TEXT_LIMIT };

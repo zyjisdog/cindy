@@ -12,22 +12,17 @@ import type {
 } from './collabSendOutcome.js';
 import { AcceptedCallbackDispatchCancelled } from './acceptedCallbackRunner.js';
 import {
-  dispatchFactsForTurn,
   dropLeadDispatchFact,
   noteLeadDispatchFact,
   resetDispatchClaimState,
   sessionInstanceToken,
 } from './orcaDispatchClaims.js';
 import {
-  arrearsDue,
   clearWorkerArrears,
   currentTurnGeneration,
-  currentTurnInstance,
   evaluateTurnGate,
   forgetTurnGate,
-  markArrearsNudged,
-  noteLeadSettle,
-  turnGateHandled,
+  leadSettleCount,
 } from './orcaTurnGate.js';
 import { setOrcaTurnGateEvaluator } from '../maker-host/claude-hooks/orca-turn-gate-hook.js';
 import { rebuildQueuedOrcaLeadMessage } from './orcaInterAgentDispatcher.js';
@@ -839,35 +834,13 @@ async function evaluateLeadTurnGateFor(
   const workers = await deps.listWorkersByLead(params.leadSessionId);
   if (workers.length === 0) return undefined;
 
-  const settleIndex = noteLeadSettle(params.leadSessionId);
-  // L2 欠账闸门:有 Worker 在等回答,而它连续两个回合没收到任何东西。
-  // 判据是状态(谁在等、等了几个回合),不是文本;沉默的没做同样命中。
-  const due = arrearsDue(params.leadSessionId);
-  if (due.length > 0) {
-    const arrear = due[0];
-    markArrearsNudged(arrear.leadSessionId, arrear.workerId);
-    deps.log.info('orca arrears reminder', {
-      leadSessionId: params.leadSessionId,
-      worker: arrear.workerId,
-      turns: settleIndex - arrear.settlesAtReport,
-    });
-    return [
-      `[Orca host] Worker ${arrear.workerLabel} has been waiting ${settleIndex - arrear.settlesAtReport} turns and nothing has been sent to it since:`,
-      arrear.question,
-      'Answer it with send_to_worker, or tell the user what you are waiting for.',
-    ].join('\n');
-  }
-
-  // 读一次凭据：推进轮次观察并清掉过期项，核对本身看整本账。
-  // 推进轮次观察并清掉过期项（evaluateTurnGate 内部自己数本回合的派发）。
-  dispatchFactsForTurn(params.leadSessionId, params.turnGeneration);
   return evaluateTurnGate({
     leadSessionId: params.leadSessionId,
     turnGeneration: params.turnGeneration,
     finalText: text,
-    workerLabels: workers
-      .map((worker) => worker.label)
-      .filter((label): label is string => Boolean(label)),
+    workers: workers
+      .filter((worker): worker is typeof worker & { label: string } => Boolean(worker.label))
+      .map((worker) => ({ label: worker.label, status: worker.status })),
   });
 }
 
@@ -1724,6 +1697,8 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
       noteLeadDispatchFact(link.leadSessionId, {
         dispatchId: result.clientId,
         turnGeneration: dispatchTurnGeneration,
+        // 收口次数比代次可靠：代次由事件推出来，可能还停在上一轮；这个不等事件顺序。
+        settlesAtAccept: leadSettleCount(link.leadSessionId),
         workerId: target.id,
         workerLabel,
         delivery,
@@ -2921,19 +2896,6 @@ export function createOrcaTeamService(deps: OrcaTeamServiceDeps): OrcaTeamServic
     turnGeneration: number;
     finalText?: string;
   }): Promise<void> {
-    if (
-      turnGateHandled(
-        params.leadSessionId,
-        params.turnGeneration,
-        currentTurnInstance(params.leadSessionId),
-      )
-    ) {
-      deps.log.info('orca turn gate skipped after engine hook', {
-        leadSessionId: params.leadSessionId,
-        turnGeneration: params.turnGeneration,
-      });
-      return;
-    }
     const reason = await evaluateLeadTurnGateFor(deps, params);
     if (!reason) return;
     const delivered = await deps
