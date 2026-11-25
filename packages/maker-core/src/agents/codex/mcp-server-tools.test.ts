@@ -17,10 +17,11 @@ describe('Codex thread MCP server tools', () => {
     ['authenticationRequired', 'needs-auth'], ['cancelled', 'disabled'], ['disabled', 'disabled'],
     ['future-native-state', 'pending'],
   ])('honors native %s despite tools returned by catalog discovery', async (runtimeStatus, state) => {
-    const { invoke } = requestFor({ first: { nextCursor: null, data: [{
+    const { request, invoke } = requestFor({ first: { nextCursor: null, data: [{
       name: 'cindy_helper', runtimeStatus, tools: { list_tools: {}, call_tool: {} },
     }] } });
     expect(await readCodexThreadMcpServerTools(invoke, 'thread-1', 'cindy_helper')).toEqual({ state, tools: [] });
+    expect(request.mock.calls[0]![1]).toMatchObject({ threadId: 'thread-1', serverName: 'cindy_helper' });
   });
 
   // #11380: explicit null after a config change has no exact runtime yet.
@@ -72,12 +73,9 @@ describe('Codex thread MCP server tools', () => {
   });
 
   // Gateway recovery must see a failed plugin client even beside a healthy
-  // helper, without confusing missing legacy state. One request selects one
-  // server, so every name is asked for separately under one shared deadline;
-  // the assertions pin the selector so no caller can widen it back to a
-  // catalog-wide request that stalls behind an unrelated server.
+  // helper, without multiplying status RPCs or confusing missing legacy state.
   // Unit tier, production reader; the servers straddle two native status pages.
-  it('reads independent gateway states per requested server', async () => {
+  it('reads independent gateway states in one paginated traversal', async () => {
     const { request, invoke } = requestFor({
       first: { nextCursor: 'next', data: [{ name: 'cindy_helper', runtimeStatus: 'connected', tools: { list_tools: {}, call_tool: {} } }] },
       next: { nextCursor: null, data: [{ name: 'cindy', runtimeStatus: 'failed', tools: { ghost_info: {} } }] },
@@ -86,8 +84,7 @@ describe('Codex thread MCP server tools', () => {
     expect(reports.get('cindy_helper')).toMatchObject({ state: 'connected' });
     expect(reports.get('cindy')).toEqual({ state: 'failed', tools: [] });
     expect(reports.get('missing')).toEqual({ state: 'not-mounted', tools: [] });
-    const calls = request.mock.calls.map(([, params]) => params as { cursor: string | null; serverName?: unknown });
-    expect(calls.map((params) => params.cursor)).toEqual([null, null, 'next', null, 'next']);
-    expect(calls.map((params) => params.serverName)).toEqual(['cindy_helper', 'cindy', 'cindy', 'missing', 'missing']);
+    expect(request.mock.calls.map(([, params]) => params.cursor)).toEqual([null, 'next']);
+    expect(request.mock.calls.map(([, params]) => 'serverName' in params)).toEqual([false, false]);
   });
 });

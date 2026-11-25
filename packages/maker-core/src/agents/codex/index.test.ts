@@ -37781,8 +37781,9 @@ describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverNa
   // Exercise the next ordinary send and both task-visible notice channels.
   it.each(['connected', 'failed'] as const)('rechecks an inconclusive probe and reports only a confirmed failure (%s)', async state => {
     let checks = 0;
-    const { agent, host, handle } = await setup(asked => {
-      if (asked !== serverName) return 'connected';
+    // #12647 shares one traversal per read, so the fixture fails the whole
+    // response: the target server's row is what the probe could not read.
+    const { agent, host, handle } = await setup(() => {
       if (checks++ === 0) throw new Error('fixture transient status failure');
       return state;
     });
@@ -37929,7 +37930,7 @@ describe.each(['cindy_helper', 'cindy'])('failed expected %s recovery', serverNa
     expect(events.filter(event => event.type === 'text' && event.standaloneText
       && (event.data as { code?: string }).code === 'CINDY_EXPECTED_HELPER_UNAVAILABLE')).toHaveLength(serverName === 'cindy_helper' ? 1 : 0);
     expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadResume)).toHaveLength(1);
-    expect(host.request.mock.calls.filter(([m]) => m === Method.McpServerStatusList)).toHaveLength((finalState === 'failed' ? 3 : 2) * (serverName === 'cindy' ? 2 : 1));
+    expect(host.request.mock.calls.filter(([m]) => m === Method.McpServerStatusList)).toHaveLength(finalState === 'failed' ? 3 : 2);
     await agent.dispose();
   });
   it('backs off repeated failures and stops after two recovery attempts', async () => {
