@@ -233,6 +233,7 @@ import { PiAgent, pickSupportedEffort } from "../index.js";
 import { PiRpcRequestTimeoutError } from "../rpc-client.js";
 import {
   PiNativeProviderProxyNotReadyError,
+  PiByomRouteAbsentError,
   MAIN_OWNED_SEND_CONTEXT,
   type AgentDeps,
   type PiNativeProvidersResult,
@@ -6679,9 +6680,10 @@ describe("Pi provider-aware model routing", () => {
         model: "local-model",
         providerId: "my-local",
       }),
-    ).rejects.toThrow(
-      /BYOM provider 'my-local' cannot serve model 'local-model'/,
-    );
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/BYOM provider 'my-local' cannot serve model 'local-model'/),
+      cause: expect.not.objectContaining({ name: "PiByomRouteAbsentError" }),
+    });
     // 未走到 spawn(--provider 参数从未拼装)。
     expect(captured.args).toEqual([]);
   });
@@ -6711,9 +6713,10 @@ describe("Pi provider-aware model routing", () => {
         model: "local-model",
         providerId: "my-local",
       }),
-    ).rejects.toThrow(
-      /cannot serve model 'local-model'.*refusing to fall back/s,
-    );
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/cannot serve model 'local-model'.*refusing to fall back/s),
+      cause: expect.not.objectContaining({ name: "PiByomRouteAbsentError" }),
+    });
     expect(captured.args).toEqual([]);
   });
 
@@ -6739,7 +6742,10 @@ describe("Pi provider-aware model routing", () => {
         model: "local-model",
         providerId: "my-local",
       }),
-    ).rejects.toThrow(/refusing to fall back to the Cindy gateway/);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/refusing to fall back to the Cindy gateway/),
+      cause: expect.any(PiByomRouteAbsentError),
+    });
     expect(captured.args).toEqual([]);
   });
 
@@ -6798,6 +6804,8 @@ describe("Pi provider-aware model routing", () => {
       model: "local-model",
       providerId: "native-a",
     });
+    await expect(handle.previewModelSwitch!("ghost-model", { providerId: "native-a" }))
+      .resolves.toMatchObject({ action: "unavailable", modelNotOffered: true });
     await expect(
       handle.setModel!("ghost-model", { providerId: "native-a" }),
     ).rejects.toThrow(/does not offer model 'ghost-model'/);

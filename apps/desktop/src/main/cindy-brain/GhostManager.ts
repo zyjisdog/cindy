@@ -118,6 +118,7 @@ import {
   assertManagedPluginParentSync,
   approvedCindyModelActionsField,
   approvedHarnessesField,
+  approvedFileOpenerExtensionsField,
   createGhostInstallReceipt,
   effectiveInstallOrigin,
   legacyFirstPartyEligibilityAfterUpdate,
@@ -3225,6 +3226,7 @@ export class GhostManager {
           enabled: !retired && enabled,
           ...(retirement ? { retirement } : {}),
           approval: { state: 'approved', revision: receipt.revision },
+          ...(receipt.packageSha256 ? { installedPackageSha256: receipt.packageSha256 } : {}),
           ...(receipt.taskCapabilityApproved === true ? { taskCapabilityApproved: true as const } : {}),
           ...(receipt.uiCapabilityApproved === true && pluginHasToolUi(localizedManifest) ? { uiCapabilityApproved: true as const } : {}),
           ...(receipt.targetCapabilityApproved === true ? { targetCapabilityApproved: true as const } : {}),
@@ -3235,6 +3237,7 @@ export class GhostManager {
           ...(receipt.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
           ...approvedCindyModelActionsField(receipt.approvedCindyModelActions, receipt.manifest),
           ...approvedHarnessesField(receipt.approvedHarnesses, receipt.manifest),
+          ...approvedFileOpenerExtensionsField(receipt.approvedFileOpenerExtensions, receipt.manifest),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
             ? {
@@ -4194,6 +4197,7 @@ export class GhostManager {
       approvedCindyModelActions?: readonly string[];
       /** Task engines whose permission row the user saw in this confirmation. */
       approvedHarnesses?: readonly string[];
+      approvedFileOpenerExtensions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4232,6 +4236,7 @@ export class GhostManager {
       approvedCindyModelActions?: readonly string[];
       /** Task engines whose permission row the user saw in this confirmation. */
       approvedHarnesses?: readonly string[];
+      approvedFileOpenerExtensions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       initiallyEnabled?: boolean;
@@ -4414,6 +4419,7 @@ export class GhostManager {
           ...(opts?.approvedAutoTools?.length ? { approvedAutoTools: opts.approvedAutoTools } : {}),
           approvedCindyModelActions: opts?.approvedCindyModelActions,
           approvedHarnesses: opts?.approvedHarnesses,
+          approvedFileOpenerExtensions: opts?.approvedFileOpenerExtensions,
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
           trust,
@@ -4550,6 +4556,7 @@ export class GhostManager {
       approvedCindyModelActions?: readonly string[];
       /** Task engines whose permission row the user saw in this confirmation. */
       approvedHarnesses?: readonly string[];
+      approvedFileOpenerExtensions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4593,6 +4600,7 @@ export class GhostManager {
       approvedCindyModelActions?: readonly string[];
       /** Task engines whose permission row the user saw in this confirmation. */
       approvedHarnesses?: readonly string[];
+      approvedFileOpenerExtensions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
       expectedInstalledApproval: string;
@@ -4932,6 +4940,11 @@ export class GhostManager {
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedCindyModelActions ?? [] : []),
         ],
         // 执行引擎同口径：同实例延续已批准 id(按新 manifest 过滤)，本次确认新显示的并入，换源不继承。
+        approvedFileOpenerExtensions: [
+          ...(opts.approvedFileOpenerExtensions ?? []),
+          ...(archiveId === undefined && approvalResult.state === 'approved'
+            ? approvalResult.receipt.approvedFileOpenerExtensions ?? [] : []),
+        ],
         approvedHarnesses: [
           ...(opts.approvedHarnesses ?? []),
           ...(archiveId === undefined && approvalResult.state === 'approved' ? approvalResult.receipt.approvedHarnesses ?? [] : []),
@@ -5371,6 +5384,7 @@ export class GhostManager {
         approvedCindyModelActions: current.state === 'approved' ? current.receipt.approvedCindyModelActions : undefined,
         // 随包种子与控制节点同口径：Cindy 自己发布，声明的执行引擎随版本视为已批准。
         approvedHarnesses: declaredGhostHarnesses(approvedManifest).map((harness) => harness.id),
+        approvedFileOpenerExtensions: approvedManifest.fileOpener?.extensions,
         ...(current.state === 'approved' && current.receipt.observeCapabilityApproved === true &&
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&

@@ -462,6 +462,12 @@ export async function loadAllCommands(
      * read `/…` themselves, so offering Claude Code / Codex / Pi commands there would be wrong.
      */
     skipAgentCommands?: boolean;
+    /**
+     * List the Skills the plugin engine on the listing computer expands (`maker:list-agent-skills` as
+     * `acp`, maker-core `acp/skill-invocation.ts`), listed and sent by their human name. Computers
+     * without that support return no Skills, as their engines would not expand them.
+     */
+    pluginEngineSkills?: boolean;
     sessionId?: string;
     allowManagedPiPackagePreview?: boolean;
     onPiRuntimeStatus?: (status: PiPackageCommandRuntimeStatus) => void;
@@ -469,6 +475,7 @@ export async function loadAllCommands(
   deviceId?: string,
 ): Promise<UnifiedCommand[]> {
   if (opts?.contextReady === false) return [];
+  const skillAgentKind: AgentKind | 'acp' = opts?.pluginEngineSkills ? 'acp' : agentKind;
   const api = window.electronAPI.maker;
   // 用 unknown[] 收口三源的不同原生形状(隧道返 unknown、本地返各自命令/技能类型),
   // 末尾统一 `as UnifiedCommand[]`(与改造前同款收口)。
@@ -522,15 +529,20 @@ export async function loadAllCommands(
         // Cross-session reuse happens one layer down, where the unfiltered
         // scan is cached per generation.
         opts
-          ? JSON.stringify([agentKind, deviceId || null, workingDir || null, opts.sessionId || null])
+          ? JSON.stringify([
+              skillAgentKind,
+              deviceId || null,
+              workingDir || null,
+              opts.sessionId || null,
+            ])
           : null,
         opts?.forceReload === true,
         () => deviceId
           ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-skills', [
-              agentKind,
+              skillAgentKind,
               skillParams,
             ]) as Promise<SkillListResult>)
-          : api.listAgentSkills(agentKind, skillParams),
+          : api.listAgentSkills(skillAgentKind, skillParams),
       )
     : Promise.resolve({ success: true, skills: [] });
 

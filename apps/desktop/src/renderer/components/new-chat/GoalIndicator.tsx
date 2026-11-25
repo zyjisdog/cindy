@@ -123,7 +123,7 @@ function GoalEditor({
           type="button"
           aria-label={t('goal.editGoal.trigger')}
           title={t('goal.editGoal.trigger')}
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:bg-[var(--surface-elevated)]"
+          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-elevated)]"
           style={{ color: attention ? 'var(--error-fg)' : 'var(--text-tertiary)' }}
         >
           <SquarePen size={12} strokeWidth={2} />
@@ -322,7 +322,7 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
             type="button"
             aria-label={t('goal.pause')}
             title={t('goal.pause')}
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:bg-[var(--surface-elevated)]"
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-elevated)]"
             style={{ color: 'var(--text-tertiary)' }}
             onClick={() => {
               void goalApiFor(sessionId).pauseGoal(sessionId);
@@ -340,7 +340,7 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
             type="button"
             aria-label={t(waiting ? 'goal.wake' : 'goal.resume')}
             title={t(waiting ? 'goal.wake' : 'goal.resume')}
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:opacity-80"
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors hover:opacity-80"
             style={{ color: 'var(--accent-cta-bg)' }}
             onClick={() => {
               void goalApiFor(sessionId).resumeGoal(sessionId);
@@ -354,7 +354,7 @@ export function GoalIndicator({ sessionId }: GoalIndicatorProps): React.ReactEle
           type="button"
           aria-label={t('goal.clear')}
           title={t('goal.clear')}
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded transition-colors hover:bg-[var(--surface-elevated)]"
+          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-elevated)]"
           style={{ color: 'var(--text-tertiary)' }}
           onClick={() => {
             void goalApiFor(sessionId).clearGoal(sessionId);
