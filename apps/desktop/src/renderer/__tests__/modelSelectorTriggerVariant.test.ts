@@ -44,6 +44,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.loading': '正在读取模型…',
+        'newChat.modelSelector.preparation.preparing': '准备中…',
+        'newChat.modelSelector.preparation.failed': '切换失败',
         'newChat.modelSelector.trigger.unresolved': '模型信息暂不可用',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
@@ -548,6 +550,26 @@ describe('resolveRemoteModelListStatus', () => {
         providers: { loading: false, error: 'timeout', unsupported: false },
       }),
     ).toBe('error');
+  });
+
+  // Gap (2026-11-23 field report): one timeout reading the task computer's catalog made the pill
+  // show the red load-failure mark until the picker was opened, although the last catalog was still
+  // within its trust budget. Minimal input: a temporary error with and without a retained snapshot.
+  it('does not report a temporary failure while a bounded snapshot is still on screen', () => {
+    const base = { deviceId: 'dev-mini', agentKind: 'codex' as const, cc: ready, pi: ready };
+    const timeout = '[DEVICE_LINK_TIMEOUT] remote did not answer';
+    expect(resolveRemoteModelListStatus({ ...base, codex: { capabilities: {}, error: timeout },
+      providers: { error: timeout, providers: [{ id: 'openai' }] } })).toBe('ready');
+    // Nothing on screen yet: the failure is real for this view.
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready,
+      providers: { error: timeout, providers: [] } })).toBe('error');
+    expect(resolveRemoteModelListStatus({ ...base, codex: { capabilities: null, error: timeout },
+      providers: { error: null, providers: [{ id: 'openai' }] } })).toBe('error');
+    // Expired budgets and refusals are not temporary even with a snapshot.
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready, providers: {
+      error: '[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired', providers: [{ id: 'openai' }] } })).toBe('error');
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready, providers: {
+      error: '[DEVICE_LINK_ACCESS_REVOKED] revoked', providers: [{ id: 'openai' }] } })).toBe('error');
   });
 
   it('only treats an unsupported provider channel as a compatible flat-list fallback', () => {
@@ -1404,6 +1426,12 @@ describe('ModelSelector trigger variants', () => {
       expect(trigger.querySelector('[data-model-selection-pending]')).not.toBeNull();
       expect(Boolean(trigger.querySelector('[data-composer-engine-mark="codex"]'))).toBe(!ultra);
       expect(trigger.querySelector('.lucide-zap')).toBeNull();
+      // The real selector must distinguish failed/preparing targets from an
+      // applied route; current/next context remains available in both states.
+      view.rerender(React.createElement(ModelSelector, { ...props, selectionPreparation: 'preparing' }));
+      expect(screen.getByRole('status').textContent).toBe('准备中…');
+      view.rerender(React.createElement(ModelSelector, { ...props, selectionPreparation: 'failed' }));
+      expect(screen.getByRole('status').textContent).toBe('切换失败');
       view.rerender(React.createElement(ModelSelector, { ...props, agentIdentity: resolveModelSelectorAgentIdentity('codex', null) }));
       expect(screen.getByRole('button').title).not.toContain('Next message:');
       expect(screen.getByRole('button').querySelector('[data-model-selection-pending]')).toBeNull();
@@ -3175,10 +3203,9 @@ describe('ModelSelector trigger variants', () => {
       name: 'newChat.modelSelector.search.placeholderAll',
     });
     expect(searchInput.hasAttribute('disabled')).toBe(true);
+    // Shared SearchInput disabled state (DESIGN.md §4 input/text: 60% opacity, not-allowed cursor).
     expect(searchInput.className).toContain('cursor-not-allowed');
-    expect(searchInput.className).toContain('text-[var(--text-disabled)]');
-    expect(searchInput.className).toContain('placeholder:text-[var(--text-disabled)]');
-    expect(searchInput.parentElement?.className).toContain('bg-[var(--surface-elevated-soft)]');
+    expect(searchInput.className).toContain('opacity-60');
 
     fireEvent.click(opusRow);
     fireEvent.pointerEnter(opusRow);
